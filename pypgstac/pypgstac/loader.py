@@ -22,12 +22,12 @@ async def load_ndjson(file: str, table: str, dsn: str = None):
 
 
 @app.command()
-def load_collections(file: str, dsn: str = None):
+def collections(file: str, dsn: str = None):
     typer.echo(asyncio.run(load_ndjson(file, "collections_staging", dsn)))
 
 
 @app.command()
-def load_items(file: str, dsn: str = None):
+def items(file: str, dsn: str = None):
     typer.echo(asyncio.run(load_ndjson(file, "items_staging", dsn)))
 
 

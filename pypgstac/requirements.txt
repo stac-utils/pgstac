@@ -1,4 +1,0 @@
-asyncio
-asyncpg
-smart-open
-typer

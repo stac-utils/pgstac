@@ -7,6 +7,7 @@ FROMDB=$1
 cd /workspaces
 
 TODBURL=postgresql://postgres@localhost:5432/migra_to
+FROMDBURL=postgresql://postgres@localhost:5432/migra_from
 GITURL=https://github.com/stac-utils/pgstac.git
 
 # wait for pg_isready
@@ -31,9 +32,9 @@ if [[ $FROMDB = postgresql* ]]
 then
     echo "Comparing schema to existing PG instance $FROMDB"
     FROMDBURL=$FROMDB
+    pg_dump --schema pgstac --schema-only $FROMDB | psql $FROMDBURL
 else
     echo "Comparing schema to $FROMDB branch on github"
-    FROMDBURL=postgresql://postgres@localhost:5432/migra_from
     BRANCH=${1:-main}
     rm -fr /tmp/fromdb
     mkdir -p /tmp/fromdb
