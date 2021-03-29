@@ -1,4 +1,6 @@
 # PGStac
+*** work in progress, not feature complete or tested yet ***
+
 PGDatabase Schema and Functions for Storing and Accessing STAC collections and items in PostgreSQL
 
 PGStac requires Postgresql>=12 and PostGIS>=3
