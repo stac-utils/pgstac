@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS items (
     PRIMARY KEY (id)
 );
 
-
+/*
+Converts single feature into an items row
+*/
 CREATE OR REPLACE FUNCTION feature_to_items(value jsonb) RETURNS items AS $$
     SELECT
         DISTINCT ON (id)
@@ -39,6 +41,10 @@ CREATE OR REPLACE FUNCTION feature_to_items(value jsonb) RETURNS items AS $$
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
+/*
+Takes a single feature, an array of features, or a feature collection
+and returns a set up individual items rows
+*/
 CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF items AS $$
     WITH features AS (
         SELECT
@@ -53,9 +59,13 @@ CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF items AS
     ) SELECT feature_to_items(value) FROM features;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
+
+/*
+create an item from a json feature
+*/
 CREATE OR REPLACE FUNCTION create_item(content jsonb) RETURNS VOID AS $$
     DELETE FROM items WHERE id = content->>'id';
-    INSERT INTO items SELECT * FROM feature_to_items(content) ON CONFLICT DO NOTHING;
+    INSERT INTO items SELECT * FROM features_to_items(content) ON CONFLICT DO NOTHING;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 
@@ -72,6 +82,11 @@ LIMIT _limit
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
+
+/*
+Staging table and triggers allow ndjson to be upserted into the
+items table using the postgresql copy mechanism.
+*/
 CREATE UNLOGGED TABLE items_staging (data jsonb);
 ALTER TABLE items_staging SET (autovacuum_enabled = false);
 

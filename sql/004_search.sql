@@ -1,4 +1,9 @@
 SET SEARCH_PATH TO pgstac, public;
+/*
+
+WORK IN PROGRESS SEARCH NOT FUNCTIONAL YET
+
+*/
 
 /* Functions for searching items */
 CREATE OR REPLACE FUNCTION sort(_sort jsonb) RETURNS text AS $$

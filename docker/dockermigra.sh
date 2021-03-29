@@ -50,6 +50,14 @@ migra --schema pgstac --unsafe $FROMDBURL $TODBURL >/tmp/migration.sql
 echo "testing migration"
 psql $FROMDBURL -f /tmp/migration.sql
 
+cat test/testdata/collections.ndjson | psql -c "copy pgstac.collections_staging FROM stdin" $FROMDBURL
+cat test/testdata/items.ndjson | psql -c "copy pgstac.items_staging FROM stdin" $FROMDBURL
+
+psql -X -f test/test.sql $FROMDBURL >/tmp/test.out
+
+cmp --silent /tmp/test.out test/test.out && echo '### SUCCESS: Files Tests Pass! ###' || echo '### WARNING: Tests did not pass! ###' && diff /tmp/test.out test/test.out
+
+# check that migrating from the now migrated starting database is the same as the target database
 echo "If there is anything between the ****************** there was a problem with the migration."
 echo "***************************"
 migra --schema pgstac --unsafe $FROMDBURL $TODBURL
