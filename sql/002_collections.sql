@@ -13,7 +13,13 @@ CREATE OR REPLACE FUNCTION create_collections(data jsonb) RETURNS VOID AS $$
         SET content=EXCLUDED.content;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION get_collections(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
+CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
+SELECT content FROM collections
+WHERE id=$1
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION all_collections(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
 SELECT content FROM collections
 WHERE
     CASE
@@ -25,6 +31,8 @@ OFFSET _offset
 LIMIT _limit
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+
 
 /* staging table and triggers that allows using copy directly from ndjson */
 CREATE UNLOGGED TABLE IF NOT EXISTS collections_staging (data jsonb);

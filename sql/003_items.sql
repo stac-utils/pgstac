@@ -68,19 +68,64 @@ CREATE OR REPLACE FUNCTION create_item(content jsonb) RETURNS VOID AS $$
     INSERT INTO items SELECT * FROM features_to_items(content) ON CONFLICT DO NOTHING;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
-
-CREATE  FUNCTION get_items(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
-SELECT to_jsonb(items) FROM items
+CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
+SELECT
+    jsonb_build_object(
+        'id', id,
+        'stac_version', stac_version,
+        'stac_extensions', stac_extensions,
+        'geometry', st_asgeojson(geometry)::jsonb,
+        'bbox', ARRAY[st_xmin(geometry), st_ymin(geometry), st_xmax(geometry), st_ymax(geometry)],
+        'properties', properties,
+        'assets', assets,
+        'collection_id', collection_id
+    ) AS item
+FROM items
 WHERE
-    CASE
-        WHEN _token is NULL THEN TRUE
-        ELSE id > _token
-    END
+    id=_id
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION get_items(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
+SELECT get_item(id) FROM items
+--WHERE
+    --CASE
+    --    WHEN _token is NULL THEN TRUE
+    --    ELSE id > _token
+    --END
 ORDER BY id ASC
 OFFSET _offset
 LIMIT _limit
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION item_collection(_id text, _limit int = 10, _token text = NULL) RETURNS SETOF jsonb AS $$
+DECLARE
+tok_val text := substr(_token,9);
+BEGIN
+raise notice 'token value %', tok_val;
+IF _token is null THEN
+    RETURN QUERY
+    SELECT get_item(id) as item FROM items
+    WHERE collection_id=_id
+    ORDER BY id ASC LIMIT _limit;
+ELSIF starts_with(_token, 'minitem:') THEN
+    RETURN QUERY
+    SELECT get_item(id) as item FROM items
+    WHERE collection_id=_id AND id < tok_val
+    ORDER BY id DESC LIMIT _limit;
+ELSE
+    RETURN QUERY
+    SELECT get_item(id) as item FROM items
+    WHERE collection_id=_id AND id > tok_val
+    ORDER BY id ASC LIMIT _limit;
+END IF;
+
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
 
 
 /*
