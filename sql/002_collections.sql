@@ -5,13 +5,22 @@ CREATE TABLE IF NOT EXISTS collections (
     content JSONB
 );
 
-CREATE OR REPLACE FUNCTION create_collections(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content)
-    SELECT value FROM jsonb_array_elements('[]'::jsonb || data)
-    ON CONFLICT (id) DO
-    UPDATE
-        SET content=EXCLUDED.content;
+CREATE OR REPLACE FUNCTION create_collections(data jsonb) RETURNS jsonb AS $$
+    WITH newcollections AS (
+        SELECT value FROM jsonb_array_elements('[]'::jsonb || data)
+    )
+        INSERT INTO collections (content)
+        SELECT value FROM newcollections
+        ON CONFLICT (id) DO
+        UPDATE
+            SET content=EXCLUDED.content
+    ;
+    WITH newcollections AS (
+        SELECT data->>'id' as id FROM jsonb_array_elements('[]'::jsonb || data)
+    )
+    SELECT jsonb_agg(content) FROM collections WHERE id IN (SELECT id FROM newcollections);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
 
 CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
 SELECT content FROM collections

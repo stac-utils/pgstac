@@ -1,21 +1,48 @@
 SET SEARCH_PATH TO pgstac, public;
 
+CREATE OR REPLACE FUNCTION properties_idx(_in jsonb) RETURNS jsonb AS $$
+WITH kv AS (
+    SELECT key, value FROM jsonb_each(_in) WHERE key = 'datetime' OR jsonb_typeof(value) IN ('object','array')
+) SELECT lower((_in - array_agg(key))::text)::jsonb FROM kv;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 CREATE TABLE IF NOT EXISTS items (
-    id VARCHAR,
-    stac_version VARCHAR,
-    stac_extensions VARCHAR[],
+    id text,
+    stac_version text,
+    stac_extensions text[],
     geometry geometry NOT NULL,
     properties JSONB,
     assets JSONB,
-    collection_id VARCHAR NOT NULL,
+    collection_id text NOT NULL,
     datetime timestamptz NOT NULL,
+    links jsonb,
+    extra_fields jsonb,
     PRIMARY KEY (id)
 );
+
+CREATE INDEX "datetime_idx" ON items (datetime);
+CREATE INDEX "properties_idx" ON items USING GIN ((properties_idx(properties)));
+
+
+CREATE TYPE item AS (
+    id text,
+    stac_version text,
+    stac_extensions text[],
+    geometry geometry,
+    properties JSONB,
+    assets JSONB,
+    collection_id text,
+    datetime timestamptz,
+    links jsonb,
+    extra_fields jsonb
+);
+
+
 
 /*
 Converts single feature into an items row
 */
-CREATE OR REPLACE FUNCTION feature_to_items(value jsonb) RETURNS items AS $$
+CREATE OR REPLACE FUNCTION feature_to_item(value jsonb) RETURNS item AS $$
     SELECT
         DISTINCT ON (id)
         value->>'id' as id,
@@ -37,7 +64,9 @@ CREATE OR REPLACE FUNCTION feature_to_items(value jsonb) RETURNS items AS $$
         value ->'properties' as properties,
         value->'assets' AS assets,
         value->>'collection' as collection_id,
-        (value->'properties'->>'datetime')::timestamptz as datetime
+        (value->'properties'->>'datetime')::timestamptz as datetime,
+        (value->'links') - '{self, item, parent, collection, root}'::text[] as links,
+        value-'{id, stac_version, stac_extensions, type, geometry, bbox, properties, assets, collection, links}'::text[] as exta_fields
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
@@ -45,7 +74,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 Takes a single feature, an array of features, or a feature collection
 and returns a set up individual items rows
 */
-CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF items AS $$
+CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF item AS $$
     WITH features AS (
         SELECT
         jsonb_array_elements(
@@ -56,36 +85,46 @@ CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF items AS
                 ELSE NULL
             END
         ) as value
-    ) SELECT feature_to_items(value) FROM features;
+    )
+    SELECT feature_to_item(value) FROM features
+    ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
 /*
 create an item from a json feature
 */
-CREATE OR REPLACE FUNCTION create_item(content jsonb) RETURNS VOID AS $$
-    DELETE FROM items WHERE id = content->>'id';
-    INSERT INTO items SELECT * FROM features_to_items(content) ON CONFLICT DO NOTHING;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION format_item(_item record) RETURNS jsonb AS $$
+DECLARE
+BEGIN
+return jsonb_build_object(
+        'type', 'Feature',
+        'id', _item.id,
+        'stac_version', _item.stac_version,
+        'stac_extensions', _item.stac_extensions,
+        'geometry', st_asgeojson(_item.geometry)::jsonb,
+        'bbox', ARRAY[st_xmin(_item.geometry), st_ymin(_item.geometry), st_xmax(_item.geometry), st_ymax(_item.geometry)],
+        'properties', _item.properties,
+        'assets', _item.assets,
+        'collection', _item.collection_id,
+        'links', coalesce(_item.links, '[]'::jsonb)
+    ) || coalesce(_item.extra_fields, '{}'::jsonb)
+;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
-SELECT
-    jsonb_build_object(
-        'id', id,
-        'stac_version', stac_version,
-        'stac_extensions', stac_extensions,
-        'geometry', st_asgeojson(geometry)::jsonb,
-        'bbox', ARRAY[st_xmin(geometry), st_ymin(geometry), st_xmax(geometry), st_ymax(geometry)],
-        'properties', properties,
-        'assets', assets,
-        'collection_id', collection_id
-    ) AS item
-FROM items
-WHERE
-    id=_id
-;
+SELECT format_item(items) FROM items WHERE id=_id;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
+CREATE OR REPLACE FUNCTION create_item(content jsonb) RETURNS jsonb AS $$
+    DELETE FROM items WHERE id = content->>'id';
+    INSERT INTO items SELECT * FROM feature_to_item(content)
+    ON CONFLICT DO NOTHING;
+    SELECT format_item(items) FROM items WHERE id = content->>'id';
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION get_items(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
 SELECT get_item(id) FROM items
