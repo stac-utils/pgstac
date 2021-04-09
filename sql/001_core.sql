@@ -33,3 +33,20 @@ INSERT INTO configuration VALUES
 CREATE OR REPLACE FUNCTION get_config(_config text) RETURNS JSONB AS $$
 SELECT val FROM configuration WHERE key=_config;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+
+CREATE OR REPLACE FUNCTION link(rel text, href text, type text = 'application/json', baseurl text = '', title text = null) RETURNS jsonb AS $$
+SELECT jsonb_strip_nulls(jsonb_build_object(
+  'href', concat(baseurl,href),
+  'rel', rel,
+  'type', type,
+  'title', title
+));
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION jsonb_value_as_tstz(val jsonb)
+RETURNS timestamptz AS $$
+SELECT * FROM jsonb_to_record(jsonb_build_object('a', val)) AS x(a timestamptz);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE CAST (jsonb AS timestamptz) WITH FUNCTION jsonb_value_as_tstz(jsonb) AS assignment;

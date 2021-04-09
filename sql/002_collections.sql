@@ -5,38 +5,40 @@ CREATE TABLE IF NOT EXISTS collections (
     content JSONB
 );
 
-CREATE OR REPLACE FUNCTION create_collections(data jsonb) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
     INSERT INTO collections (content)
-    SELECT value FROM jsonb_array_elements('[]'::jsonb || data)
+    VALUES (data)
     ON CONFLICT (id) DO
     UPDATE
-        SET content=EXCLUDED.content;
+        SET content=EXCLUDED.content
+    ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION get_collections(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
+
+CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
 SELECT content FROM collections
-WHERE
-    CASE
-        WHEN _token is NULL THEN TRUE
-        ELSE id > _token
-    END
-ORDER BY id ASC
-OFFSET _offset
-LIMIT _limit
+WHERE id=$1
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
-/* staging table and triggers that allows using copy directly from ndjson */
-CREATE UNLOGGED TABLE IF NOT EXISTS collections_staging (data jsonb);
+CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
+SELECT jsonb_agg(content) FROM collections;
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION collections_staging_trigger_func()
+
+
+CREATE OR REPLACE FUNCTION collections_trigger_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    PERFORM create_collections(NEW.data);
-    RETURN NULL;
+    IF pg_trigger_depth() = 1 THEN
+        PERFORM create_collection(NEW.content);
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 
-CREATE TRIGGER collections_staging_trigger
-BEFORE INSERT ON collections_staging
-FOR EACH ROW EXECUTE PROCEDURE collections_staging_trigger_func();
+CREATE TRIGGER collections_trigger
+BEFORE INSERT ON collections
+FOR EACH ROW EXECUTE PROCEDURE collections_trigger_func();

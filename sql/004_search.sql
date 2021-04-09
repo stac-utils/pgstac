@@ -4,31 +4,95 @@ SET SEARCH_PATH TO pgstac, public;
 WORK IN PROGRESS SEARCH NOT FUNCTIONAL YET
 
 */
+CREATE OR REPLACE FUNCTION split_stac_path(IN path text, OUT col text, OUT dotpath text, OUT jspath text, OUT jspathtext text) AS $$
+WITH col AS (
+    SELECT
+        CASE WHEN
+            split_part(path, '.', 1) IN ('id', 'stac_version', 'stac_extensions','geometry','properties','assets','collection_id','datetime','links', 'extra_fields') THEN split_part(path, '.', 1)
+        ELSE 'properties'
+        END AS col
+),
+dp AS (
+    SELECT
+        col, ltrim(replace(path, col , ''),'.') as dotpath
+    FROM col
+),
+paths AS (
+SELECT
+    col, dotpath,
+    regexp_split_to_table(dotpath,E'\\.') as path FROM dp
+) SELECT
+    col,
+    btrim(concat(col,'.',dotpath),'.'),
+    CASE WHEN btrim(concat(col,'.',dotpath),'.') != col THEN concat(col,'->',string_agg(concat('''',path,''''),'->')) ELSE col END,
+    regexp_replace(
+        CASE WHEN btrim(concat(col,'.',dotpath),'.') != col THEN concat(col,'->',string_agg(concat('''',path,''''),'->')) ELSE col END,
+        E'>([^>]*)$','>>\1'
+    )
+FROM paths group by col, dotpath;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 
 /* Functions for searching items */
-CREATE OR REPLACE FUNCTION sort(_sort jsonb) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION sort_base(
+    IN _sort jsonb DEFAULT '[{"field":"datetime","direction":"desc"}]',
+    OUT key text,
+    OUT col text,
+    OUT dir text,
+    OUT rdir text,
+    OUT sort text,
+    OUT rsort text
+) RETURNS SETOF RECORD AS $$
 WITH cols AS (
-    SELECT * FROM jsonb_each(get_config('sort_columns'))
+    SELECT key as name, value as col  FROM jsonb_each_text(get_config('sort_columns'))
 ),
-sort_statements AS (
-    SELECT key, cols.value::text as sortstr, sort.value->>'direction' as direction FROM
-        jsonb_array_elements(_sort) sort JOIN cols ON (cols.key=sort.value->>'field')
-    UNION
-    SELECT 'id', 'id', 'asc'
+sorts AS (
+    SELECT
+        value->>'field' as key,
+        (split_stac_path(value->>'field')).jspathtext as col,
+        coalesce(upper(value->>'direction'),'ASC') as dir
+    FROM jsonb_array_elements('[]'::jsonb || coalesce(_sort,'[{"field":"datetime","direction":"desc"}]') )
+),
+joined AS (
+    SELECT
+        key,
+        col,
+        dir
+    FROM sorts LEFT JOIN cols using (col)
 )
-SELECT CASE WHEN _sort IS NULL THEN 'datetime desc' ELSE string_agg(concat(sortstr, ' ', direction),', ') END FROM sort_statements;
+SELECT
+    key,
+    col,
+    dir,
+    CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END as rdir,
+    concat(col, ' ', dir, ' NULLS LAST ') AS sort,
+    concat(col,' ', CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END, ' NULLS LAST ') AS rsort
+FROM joined
+UNION ALL
+SELECT 'id', 'id', 'DESC', 'ASC', 'id DESC', 'id ASC'
 ;
+$$ LANGUAGE SQL;
+
+
+CREATE OR REPLACE FUNCTION sort(_sort jsonb) RETURNS text AS $$
+SELECT string_agg(sort,', ') FROM sort_base(_sort);
 $$ LANGUAGE SQL PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION rsort(_sort jsonb) RETURNS text AS $$
+SELECT string_agg(rsort,', ') FROM sort_base(_sort);
+$$ LANGUAGE SQL PARALLEL SAFE;
+
 
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS box3d AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN
-        ST_MakeEnvelope(
+        ST_SetSRID(ST_MakeEnvelope(
             (_bbox->>0)::float,
             (_bbox->>1)::float,
             (_bbox->>2)::float,
             (_bbox->>3)::float
-        )
+        ),4326)
     WHEN 6 THEN
     ST_SetSRID(ST_3DMakeBox(
         ST_MakePoint(
@@ -47,53 +111,204 @@ SELECT CASE jsonb_array_length(_bbox)
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION in_array_q(col text, arr jsonb) RETURNS text AS $$
-SELECT format('%I = ANY(textarr(%L::jsonb))', col, arr);
+SELECT CASE jsonb_typeof(arr) WHEN 'array' THEN format('%I = ANY(textarr(%L))', col, arr) ELSE format('%I = %L', col, arr) END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION geom_q(in_geom jsonb = NULL, in_box jsonb = NULL) RETURNS text AS $$
-SELECT CASE
-    WHEN in_geom IS NULL THEN
-        format('ST_Intersects(geometry, ST_GeomFromGeoJSON(%L))', in_geom::text)
-    WHEN in_box IS NULL THEN
-        format('ST_Intersects(geometry, ST_GeomFromGeoJSON(%L))', in_geom::text)
-END;
+CREATE OR REPLACE FUNCTION count_by_delim(text, text) RETURNS int AS $$
+SELECT count(*) FROM regexp_split_to_table($1,$2);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+
+CREATE OR REPLACE FUNCTION stac_query_op(att text, _op text, val jsonb) RETURNS text AS $$
+DECLARE
+ret text := '';
+idx text;
+idx_func text;
+idx_typ text;
+op text;
+jp text;
+att_parts RECORD;
+BEGIN
+val := lower(val::text)::jsonb;
+
+att_parts := split_stac_path(att);
+
+op := CASE _op
+    WHEN 'eq' THEN '='
+    WHEN 'ge' THEN '>='
+    WHEN 'gt' THEN '>'
+    WHEN 'le' THEN '<='
+    WHEN 'lt' THEN '<'
+    WHEN 'ne' THEN '!='
+    ELSE _op
+END;
+RAISE NOTICE 'att_parts: % %', att_parts, count_by_delim(att_parts.dotpath,'\.');
+IF
+    op = '='
+    AND att_parts.col = 'properties'
+    AND count_by_delim(att_parts.dotpath,'\.') = 2
+THEN
+    -- use jsonpath query to leverage index for eqaulity tests on single level deep properties
+    jp := btrim(format($jp$ $.%I[*] ? ( @ == %s ) $jp$, replace(att_parts.dotpath, 'properties.',''), val));
+    raise notice 'jp: %', jp;
+    ret := format($q$ properties @? %L $q$, jp);
+ELSIF jsonb_typeof(val) = 'number' THEN
+    ret := format('(%s)::numeric %s %s', att_parts.jspathtext, op, val);
+ELSE
+    ret := format('lower(%s) %s %L', att_parts.jspathtext, op, val);
+END IF;
+RAISE NOTICE 'Op Query: %', ret;
+
+return ret;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION stac_query(_query jsonb) RETURNS TEXT[] AS $$
+DECLARE
+qa text[];
+att text;
+ops jsonb;
+op text;
+val jsonb;
+BEGIN
+FOR att, ops IN SELECT key, value FROM jsonb_each(_query)
+LOOP
+    FOR op, val IN SELECT key, value FROM jsonb_each(ops)
+    LOOP
+        qa := array_append(qa, stac_query_op(att,op, val));
+        RAISE NOTICE '% % %', att, op, val;
+    END LOOP;
+END LOOP;
+RETURN qa;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION filter_by_order(item_id text, _sort jsonb, _type text) RETURNS text AS $$
+DECLARE
+sorts RECORD;
+item items_search%ROWTYPE;
+filts text[];
+itemval text;
+op text;
+idop text;
+ret text;
+BEGIN
+
+SELECT * INTO item FROM items_search WHERE id=item_id;
+FOR sorts IN SELECT * FROM sort_base(_sort) LOOP
+
+    op := CASE
+        WHEN _type='prev' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '<'
+        WHEN _type='next' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '>'
+        WHEN _type='prev' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '>'
+        WHEN _type='next' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '<'
+        WHEN _type in ('prev','first') AND sorts.dir = 'ASC' THEN '<='
+        WHEN _type in ('last','next') AND sorts.dir = 'ASC' THEN '>='
+        WHEN _type in ('prev','first') AND sorts.dir = 'DESC' THEN '>='
+        WHEN _type in ('last','next') AND sorts.dir = 'DESC' THEN '<='
+    END;
+    EXECUTE format($q$ SELECT ($1.%s)::text; $q$, sorts.col) INTO itemval USING (item);
+    IF itemval IS NOT NULL THEN
+        filts = array_append(filts, format('%s %s %L', sorts.col, op, itemval));
+    END IF;
+END LOOP;
+ret := coalesce(array_to_string(filts,' AND '), 'TRUE');
+RETURN ret;
+END;
+$$ LANGUAGE PLPGSQL;
 
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS SETOF jsonb AS $$
 DECLARE
 _sort text := '';
-_limit int := 100;
+_limit int := 10;
 _geom geometry;
 qa text[];
 pq text[];
 query text;
 pq_prop record;
 pq_op record;
+prev_id text := NULL;
+next_id text := NULL;
+whereq text := 'TRUE';
+links jsonb := '[]'::jsonb;
+token text;
+tok_val text;
+tok_q text := 'TRUE';
+minid text;
+maxid text;
+sort text;
+rsort text;
+dt text[];
+startdt timestamptz;
+enddt timestamptz;
+item items_search%ROWTYPE;
+counter int := 0;
+batchcount int;
+month timestamptz;
+m record;
 BEGIN
-IF _search ? 'intersects' THEN
-    _geom := ST_GeomFromGeoJSON(_search->>'intersects');
-ELSIF _search ? 'bbox' THEN
-    _geom := bbox_geom(_search->'bbox');
+sort := sort(_search->'sortby');
+rsort := rsort(_search->'sortby');
+IF _search ? 'token' THEN
+    token := _search->>'token';
+    tok_val := substr(token,6);
+    IF starts_with(token, 'prev:') THEN
+        tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
+        sort := rsort(_search->'sortby');
+        rsort := sort(_search->'sortby');
+    ELSIF starts_with(token, 'next:') THEN
+       tok_q := filter_by_order(tok_val,  _search->'sortby', 'last');
+    END IF;
 END IF;
+RAISE NOTICE 'tok_q: %', tok_q;
 
-IF _geom IS NOT NULL THEN
-    qa := array_append(qa, format('st_intersects(geometry, %L::geometry)',_geom));
-END IF;
+IF _search ? 'ids' THEN
+    RAISE NOTICE 'searching solely based on ids... %',_search;
+    qa := array_append(qa, in_array_q('id', _search->'ids'));
+ELSE
+    IF _search ? 'intersects' THEN
+        _geom := ST_SetSRID(ST_GeomFromGeoJSON(_search->>'intersects'), 4326);
+    ELSIF _search ? 'bbox' THEN
+        _geom := bbox_geom(_search->'bbox');
+    END IF;
 
-IF _search ? 'collections' THEN
-    qa := array_append(qa, format('collections_id = ANY(textarr(%L::jsonb))',_search->'collections'));
-END IF;
+    IF _geom IS NOT NULL THEN
+        qa := array_append(qa, format('st_intersects(geometry, %L::geometry)',_geom));
+    END IF;
 
-IF _search ? 'items' THEN
-    qa := array_append(qa, format('id = ANY(textarr(%L::jsonb))',_search->'items'));
-END IF;
+    IF _search ? 'collections' THEN
+        qa := array_append(qa, in_array_q('collection_id', _search->'collections'));
+    END IF;
 
+    IF _search ? 'collections' THEN
+        qa := array_append(qa, in_array_q('collection_id', _search->'collections'));
+    END IF;
 
-IF _search ? 'query' THEN
-    qa := array_append(qa,
-        stac_query(_search->'query')
-    );
+    IF _search ? 'datetime' THEN
+        IF jsonb_typeof(_search->'datetime') = 'array' THEN
+            dt := textarr(_search->'datetime');
+        ELSE
+            dt := regexp_split_to_array(_search->>'datetime','/');
+        END IF;
+        IF array_upper(dt,1) = 1 THEN
+            qa := array_append(qa, format('datetime = %L::timestamptz', dt[1]));
+        ELSE
+            IF dt[1] != '..' THEN
+                qa := array_append(qa, format('datetime >= %L::timestamptz', dt[1]));
+            END IF;
+            IF dt[2] != '..' THEN
+                qa := array_append(qa, format('datetime <= %L::timestamptz', dt[2]));
+            END IF;
+        END IF;
+    END IF;
+
+    IF _search ? 'query' THEN
+        qa := array_cat(qa,
+            stac_query(_search->'query')
+        );
+    END IF;
 END IF;
 
 IF _search ? 'limit' THEN
@@ -101,25 +316,119 @@ IF _search ? 'limit' THEN
 END IF;
 
 
+whereq := COALESCE(array_to_string(qa,' AND '),' TRUE ');
 
-
-
-query := format('
-    WITH t AS (
-    SELECT %s
-    FROM _items
+query := format($q$
+    CREATE TEMP VIEW results_temp_view
+    AS
+    SELECT *
+    FROM items_search
     WHERE %s
     ORDER BY %s
-    LIMIT $1
-    ) SELECT to_jsonb(t) FROM t;
-    ',
-    CASE WHEN _search ? 'fields' THEN array_idents(_search->'fields') ELSE '*' END,
-    COALESCE(array_to_string(qa,' AND '),' TRUE '),
-    sort(_search->'sortby')
+    $q$,
+    whereq,
+    sort
 );
-RAISE NOTICE 'query: %', query;
+RAISE NOTICE 'QUERY: %', query;
+EXECUTE query;
 
-RETURN QUERY EXECUTE query USING _limit;
+
+
+
+IF sort = 'datetime DESC NULLS LAST , id DESC' AND tok_q='TRUE' THEN
+    CREATE TEMP TABLE results_page
+    ON COMMIT DROP AS
+    SELECT id
+    FROM results_temp_view
+    LIMIT 0;
+
+    FOR m IN SELECT
+        generate_series(
+            date_trunc('month', max(datetime)) + '1 month'::interval,
+            date_trunc('month', min(datetime)),
+            '-1 month'::interval
+        ) as month
+    FROM items_search LOOP
+        month := m.month;
+        query := format($q$
+            INSERT INTO results_page
+            SELECT id
+            FROM results_temp_view
+            WHERE %s AND datetime < %L AND datetime >= %L
+            LIMIT %s
+            $q$,
+            tok_q,month, month - '1 month'::interval,
+            _limit - counter
+        );
+        RAISE NOTICE 'QUERY: %', query;
+        EXECUTE query;
+        GET DIAGNOSTICS batchcount = ROW_COUNT;
+        counter := counter + batchcount;
+        IF counter >= _limit THEN
+            EXIT;
+        END IF;
+        RAISE NOTICE 'ADDED % FOR A TOTAL OF %', batchcount, counter;
+    END LOOP;
+ELSE
+    query := format($q$
+        CREATE TEMP TABLE results_page
+        ON COMMIT DROP AS
+        SELECT id
+        FROM results_temp_view
+        WHERE %s
+        LIMIT %s
+        $q$,
+        tok_q,
+        _limit
+    );
+    RAISE NOTICE 'QUERY: %', query;
+    EXECUTE query;
+END IF;
+
+SELECT INTO minid, maxid first_value(id) OVER (), last_value(id) OVER () FROM results_page;
+RAISE NOTICE 'firstid: %, lastid %', minid, maxid;
+
+query := format($q$
+    SELECT id
+    FROM results_temp_view
+    WHERE %s
+    LIMIT 1
+    $q$,
+    filter_by_order(maxid,  _search->'sortby', 'next')
+);
+RAISE NOTICE 'next query: %', query;
+EXECUTE query into next_id;
+RAISE NOTICE 'next_id: %', next_id;
+
+query := format($q$
+    SELECT id
+    FROM results_temp_view
+    WHERE %s
+    LIMIT 1
+    $q$,
+    filter_by_order(minid, _search->'sortby', 'prev')
+);
+RAISE NOTICE 'prev query: %', query;
+EXECUTE query into prev_id;
+RAISE NOTICE 'prev_id: %', prev_id;
+
+DROP VIEW results_temp_view;
+
+RETURN QUERY
+WITH features AS (
+    SELECT jsonb_agg(content) features
+    FROM items WHERE id IN (SELECT id FROM results_page)
+)
+SELECT jsonb_build_object(
+    'type', 'FeatureCollection',
+    'features', coalesce(features,'[]'::jsonb),
+    'links', links,
+    'timeStamp', now(),
+    'next', next_id,
+    'prev', prev_id
+)
+FROM features
+;
 
 
 END;
