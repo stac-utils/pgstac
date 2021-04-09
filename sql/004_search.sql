@@ -35,7 +35,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 /* Functions for searching items */
 CREATE OR REPLACE FUNCTION sort_base(
-    IN _sort jsonb = '[{"field":"datetime","direction":"asc"}]',
+    IN _sort jsonb DEFAULT '[{"field":"datetime","direction":"desc"}]',
     OUT key text,
     OUT col text,
     OUT dir text,
@@ -50,8 +50,8 @@ sorts AS (
     SELECT
         value->>'field' as key,
         (split_stac_path(value->>'field')).jspathtext as col,
-        upper(value->>'direction') as dir
-    FROM jsonb_array_elements('[]'::jsonb || _sort)
+        coalesce(upper(value->>'direction'),'ASC') as dir
+    FROM jsonb_array_elements('[]'::jsonb || coalesce(_sort,'[{"field":"datetime","direction":"desc"}]') )
 ),
 joined AS (
     SELECT
@@ -69,7 +69,7 @@ SELECT
     concat(col,' ', CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END, ' NULLS LAST ') AS rsort
 FROM joined
 UNION ALL
-SELECT 'id', 'id', 'ASC', 'DESC', 'id ASC', 'id DESC'
+SELECT 'id', 'id', 'DESC', 'ASC', 'id DESC', 'id ASC'
 ;
 $$ LANGUAGE SQL;
 
@@ -226,14 +226,14 @@ SELECT * INTO item FROM items WHERE id=item_id;
 FOR sorts IN SELECT * FROM sort_base(_sort) LOOP
 
     op := CASE
-        WHEN _type='prev' AND sorts.col='id' THEN '<'
-        WHEN _type='first' AND sorts.col='id' THEN '<='
-        WHEN _type='last' AND sorts.col='id' THEN '>='
-        WHEN _type='next' AND sorts.col='id' THEN '>'
-        WHEN _type in ('prev','first') AND sorts.dir = 'ASC' THEN '>='
-        WHEN _type in ('last','next') AND sorts.dir = 'ASC' THEN '<='
-        WHEN _type in ('prev','first') AND sorts.dir = 'DESC' THEN '<='
-        WHEN _type in ('last','next') AND sorts.dir = 'DESC' THEN '>='
+        WHEN _type='prev' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '<'
+        WHEN _type='next' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '>'
+        WHEN _type='prev' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '>'
+        WHEN _type='next' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '<'
+        WHEN _type in ('prev','first') AND sorts.dir = 'ASC' THEN '<='
+        WHEN _type in ('last','next') AND sorts.dir = 'ASC' THEN '>='
+        WHEN _type in ('prev','first') AND sorts.dir = 'DESC' THEN '>='
+        WHEN _type in ('last','next') AND sorts.dir = 'DESC' THEN '<='
     END;
     EXECUTE format($q$ SELECT ($1.%s)::text; $q$, sorts.col) INTO itemval USING (item);
     IF itemval IS NOT NULL THEN
@@ -271,6 +271,10 @@ dt text[];
 startdt timestamptz;
 enddt timestamptz;
 item items%ROWTYPE;
+counter int := 0;
+batchcount int;
+month timestamptz;
+m record;
 BEGIN
 sort := sort(_search->'sortby');
 rsort := reverse_sort(_search->'sortby');
@@ -356,22 +360,61 @@ query := format($q$
 RAISE NOTICE 'QUERY: %', query;
 EXECUTE query;
 
-query := format($q$
+
+
+
+IF sort = 'datetime DESC NULLS LAST , id DESC' AND tok_q='TRUE' THEN
     CREATE TEMP TABLE results_page
     ON COMMIT DROP AS
     SELECT format_item(results_temp_view) as item, id
     FROM results_temp_view
-    WHERE %s
-    LIMIT %s
-    $q$,
-    tok_q,
-    _limit
-);
-RAISE NOTICE 'QUERY: %', query;
-EXECUTE query;
+    LIMIT 0;
+
+    FOR m IN SELECT
+        generate_series(
+            date_trunc('month', max(datetime)) + '1 month'::interval,
+            date_trunc('month', min(datetime)),
+            '-1 month'::interval
+        ) as month
+    FROM items LOOP
+        month := m.month;
+        query := format($q$
+            INSERT INTO results_page
+            SELECT format_item(results_temp_view) as item, id
+            FROM results_temp_view
+            WHERE %s AND datetime < %L AND datetime >= %L
+            LIMIT %s
+            $q$,
+            tok_q,month, month - '1 month'::interval,
+            _limit - counter
+        );
+        RAISE NOTICE 'QUERY: %', query;
+        EXECUTE query;
+        GET DIAGNOSTICS batchcount = ROW_COUNT;
+        counter := counter + batchcount;
+        IF counter >= _limit THEN
+            EXIT;
+        END IF;
+        RAISE NOTICE 'ADDED % FOR A TOTAL OF %', batchcount, counter;
+    END LOOP;
+ELSE
+    query := format($q$
+        CREATE TEMP TABLE results_page
+        ON COMMIT DROP AS
+        SELECT format_item(results_temp_view) as item, id
+        FROM results_temp_view
+        WHERE %s
+        LIMIT %s
+        $q$,
+        tok_q,
+        _limit
+    );
+    RAISE NOTICE 'QUERY: %', query;
+    EXECUTE query;
+END IF;
 
 SELECT INTO minid, maxid first_value(id) OVER (), last_value(id) OVER () FROM results_page;
-RAISE NOTICE 'minid: %, maxid %', minid, maxid;
+RAISE NOTICE 'firstid: %, lastid %', minid, maxid;
 
 query := format($q$
     SELECT id
