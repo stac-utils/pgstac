@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS items_search (
 
 CREATE INDEX "datetime_idx" ON items_search (datetime);
 CREATE INDEX "properties_idx" ON items_search USING GIN (properties);
+CREATE INDEX "collection_idx" ON items_search (collection_id);
+CREATE INDEX "geometry_idx" ON items_search USING GIST (geometry);
 
 
 CREATE TYPE item AS (
