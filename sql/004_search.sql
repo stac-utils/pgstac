@@ -152,41 +152,14 @@ THEN
     -- use jsonpath query to leverage index for eqaulity tests on single level deep properties
     jp := btrim(format($jp$ $.%I[*] ? ( @ == %s ) $jp$, replace(att_parts.dotpath, 'properties.',''), val));
     raise notice 'jp: %', jp;
-    ret := format($q$ properties_idx(properties) @? %L $q$, jp);
+    ret := format($q$ properties @? %L $q$, jp);
 ELSIF jsonb_typeof(val) = 'number' THEN
     ret := format('(%s)::numeric %s %s', att_parts.jspathtext, op, val);
 ELSE
     ret := format('lower(%s) %s %L', att_parts.jspathtext, op, val);
 END IF;
 RAISE NOTICE 'Op Query: %', ret;
-/*
-IF op
-SELECT
-    indexdef,
-    (regexp_match(indexdef, E'btree \\((.*)\\)$'))[1],
-    (regexp_match(indexdef, E'::([\\w ]*)\\)*$'))[1]
-INTO idx, idx_func, idx_typ FROM pg_indexes
-WHERE
-    schemaname='pgstac'
-    AND tablename='items'
-    AND indexdef ~* format(E'properties ->>? %L', att)
-    AND indexdef ilike format('%%btree%%', att)
-;
 
-IF FOUND THEN
-    RAISE NOTICE 'Found index: % % %', idx, idx_func, idx_typ;
-    -- USE queries that use the BTREE INDEX
-    IF op = '==' THEN
-        op := '=';
-    END IF;
-
-    ret := format('%s %s %L::%s', idx_func, op, val, idx_typ);
-ELSE
-    jp := format($jp$ $.%I[*] ? ( @ %s %s ) $jp$, att, op, val);
-    raise notice 'jp: %', jp;
-    ret := format($q$ properties_idx(properties) @? %L  $q$, jp);
-END IF;
-*/
 return ret;
 END;
 $$ LANGUAGE PLPGSQL;
@@ -214,7 +187,7 @@ $$ LANGUAGE PLPGSQL;
 CREATE OR REPLACE FUNCTION filter_by_order(item_id text, _sort jsonb, _type text) RETURNS text AS $$
 DECLARE
 sorts RECORD;
-item items%ROWTYPE;
+item items_search%ROWTYPE;
 filts text[];
 itemval text;
 op text;
@@ -222,7 +195,7 @@ idop text;
 ret text;
 BEGIN
 
-SELECT * INTO item FROM items WHERE id=item_id;
+SELECT * INTO item FROM items_search WHERE id=item_id;
 FOR sorts IN SELECT * FROM sort_base(_sort) LOOP
 
     op := CASE
@@ -270,24 +243,23 @@ rsort text;
 dt text[];
 startdt timestamptz;
 enddt timestamptz;
-item items%ROWTYPE;
+item items_search%ROWTYPE;
 counter int := 0;
 batchcount int;
 month timestamptz;
 m record;
 BEGIN
 sort := sort(_search->'sortby');
-rsort := reverse_sort(_search->'sortby');
+rsort := rsort(_search->'sortby');
 IF _search ? 'token' THEN
     token := _search->>'token';
     tok_val := substr(token,6);
     IF starts_with(token, 'prev:') THEN
-        tok_q := filter_by_order(tok_val,  _search->'sortby', 'last');
-
-        sort := reverse_sort(_search->'sortby');
+        tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
+        sort := rsort(_search->'sortby');
         rsort := sort(_search->'sortby');
     ELSIF starts_with(token, 'next:') THEN
-       tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
+       tok_q := filter_by_order(tok_val,  _search->'sortby', 'last');
     END IF;
 END IF;
 RAISE NOTICE 'tok_q: %', tok_q;
@@ -350,7 +322,7 @@ query := format($q$
     CREATE TEMP VIEW results_temp_view
     AS
     SELECT *
-    FROM items
+    FROM items_search
     WHERE %s
     ORDER BY %s
     $q$,
@@ -366,7 +338,7 @@ EXECUTE query;
 IF sort = 'datetime DESC NULLS LAST , id DESC' AND tok_q='TRUE' THEN
     CREATE TEMP TABLE results_page
     ON COMMIT DROP AS
-    SELECT format_item(results_temp_view) as item, id
+    SELECT id
     FROM results_temp_view
     LIMIT 0;
 
@@ -376,11 +348,11 @@ IF sort = 'datetime DESC NULLS LAST , id DESC' AND tok_q='TRUE' THEN
             date_trunc('month', min(datetime)),
             '-1 month'::interval
         ) as month
-    FROM items LOOP
+    FROM items_search LOOP
         month := m.month;
         query := format($q$
             INSERT INTO results_page
-            SELECT format_item(results_temp_view) as item, id
+            SELECT id
             FROM results_temp_view
             WHERE %s AND datetime < %L AND datetime >= %L
             LIMIT %s
@@ -401,7 +373,7 @@ ELSE
     query := format($q$
         CREATE TEMP TABLE results_page
         ON COMMIT DROP AS
-        SELECT format_item(results_temp_view) as item, id
+        SELECT id
         FROM results_temp_view
         WHERE %s
         LIMIT %s
@@ -443,11 +415,9 @@ RAISE NOTICE 'prev_id: %', prev_id;
 DROP VIEW results_temp_view;
 
 RETURN QUERY
-WITH i AS (
-SELECT r.item FROM results_page r LIMIT _limit
-),
-features AS (
-    SELECT jsonb_agg(i.item) features FROM i
+WITH features AS (
+    SELECT jsonb_agg(content) features
+    FROM items WHERE id IN (SELECT id FROM results_page)
 )
 SELECT jsonb_build_object(
     'type', 'FeatureCollection',

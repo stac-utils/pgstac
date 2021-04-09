@@ -7,34 +7,28 @@ WITH kv AS (
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE TABLE IF NOT EXISTS items (
-    id text,
-    stac_version text,
-    stac_extensions text[],
-    geometry geometry NOT NULL,
-    properties JSONB,
-    assets JSONB,
-    collection_id text NOT NULL,
-    datetime timestamptz NOT NULL,
-    links jsonb,
-    extra_fields jsonb,
-    PRIMARY KEY (id)
+    id VARCHAR GENERATED ALWAYS AS (content->>'id') STORED PRIMARY KEY,
+    content JSONB
 );
 
-CREATE INDEX "datetime_idx" ON items (datetime);
-CREATE INDEX "properties_idx" ON items USING GIN ((properties_idx(properties)));
+CREATE TABLE IF NOT EXISTS items_search (
+    id text PRIMARY KEY,
+    geometry geometry NOT NULL,
+    properties jsonb,
+    collection_id text NOT NULL,
+    datetime timestamptz NOT NULL
+);
+
+CREATE INDEX "datetime_idx" ON items_search (datetime);
+CREATE INDEX "properties_idx" ON items_search USING GIN (properties);
 
 
 CREATE TYPE item AS (
     id text,
-    stac_version text,
-    stac_extensions text[],
     geometry geometry,
     properties JSONB,
-    assets JSONB,
     collection_id text,
-    datetime timestamptz,
-    links jsonb,
-    extra_fields jsonb
+    datetime timestamptz
 );
 
 
@@ -44,10 +38,7 @@ Converts single feature into an items row
 */
 CREATE OR REPLACE FUNCTION feature_to_item(value jsonb) RETURNS item AS $$
     SELECT
-        DISTINCT ON (id)
         value->>'id' as id,
-        value->>'stac_version' as stac_version,
-        textarr(value->'stac_extensions') as stac_extensions,
         CASE
             WHEN value->>'geometry' IS NOT NULL THEN
                 ST_GeomFromGeoJSON(value->>'geometry')
@@ -61,12 +52,9 @@ CREATE OR REPLACE FUNCTION feature_to_item(value jsonb) RETURNS item AS $$
                 )
             ELSE NULL
         END as geometry,
-        value ->'properties' as properties,
-        value->'assets' AS assets,
+        properties_idx(value ->'properties') as properties,
         value->>'collection' as collection_id,
-        (value->'properties'->>'datetime')::timestamptz as datetime,
-        (value->'links') - '{self, item, parent, collection, root}'::text[] as links,
-        value-'{id, stac_version, stac_extensions, type, geometry, bbox, properties, assets, collection, links}'::text[] as exta_fields
+        (value->'properties'->>'datetime')::timestamptz as datetime
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
@@ -91,86 +79,53 @@ CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF item AS 
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
-/*
-create an item from a json feature
-*/
-
-
-CREATE OR REPLACE FUNCTION format_item(_item record) RETURNS jsonb AS $$
-DECLARE
-BEGIN
-return jsonb_build_object(
-        'type', 'Feature',
-        'id', _item.id,
-        'stac_version', _item.stac_version,
-        'stac_extensions', _item.stac_extensions,
-        'geometry', st_asgeojson(_item.geometry)::jsonb,
-        'bbox', ARRAY[st_xmin(_item.geometry), st_ymin(_item.geometry), st_xmax(_item.geometry), st_ymax(_item.geometry)],
-        'properties', _item.properties,
-        'assets', _item.assets,
-        'collection', _item.collection_id,
-        'links', coalesce(_item.links, '[]'::jsonb)
-    ) || coalesce(_item.extra_fields, '{}'::jsonb)
-;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-
 CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
-SELECT format_item(items) FROM items WHERE id=_id;
+SELECT content FROM items WHERE id=_id;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
-CREATE OR REPLACE FUNCTION create_item(content jsonb) RETURNS jsonb AS $$
-    DELETE FROM items WHERE id = content->>'id';
-    INSERT INTO items SELECT * FROM feature_to_item(content)
-    ON CONFLICT DO NOTHING;
-    SELECT format_item(items) FROM items WHERE id = content->>'id';
+CREATE OR REPLACE FUNCTION delete_item(_id text) RETURNS VOID AS $$
+    DELETE FROM items WHERE id = _id;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
-CREATE OR REPLACE FUNCTION get_items(_limit int = 10, _offset int = 0, _token varchar = NULL) RETURNS SETOF jsonb AS $$
-SELECT get_item(id) FROM items
---WHERE
-    --CASE
-    --    WHEN _token is NULL THEN TRUE
-    --    ELSE id > _token
-    --END
-ORDER BY id ASC
-OFFSET _offset
-LIMIT _limit
-;
+CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
+    DELETE FROM items WHERE id=data->>'id';
+    INSERT INTO items (content) VALUES (data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
-CREATE OR REPLACE FUNCTION item_collection(_id text, _limit int = 10, _token text = NULL) RETURNS SETOF jsonb AS $$
+/* Trigger Function to cascade inserts/updates/deletes
+from items table to items_search table */
+CREATE OR REPLACE FUNCTION items_trigger_func()
+RETURNS TRIGGER AS $$
 DECLARE
-tok_val text := substr(_token,9);
 BEGIN
-raise notice 'token value %', tok_val;
-IF _token is null THEN
-    RETURN QUERY
-    SELECT get_item(id) as item FROM items
-    WHERE collection_id=_id
-    ORDER BY id ASC LIMIT _limit;
-ELSIF starts_with(_token, 'minitem:') THEN
-    RETURN QUERY
-    SELECT get_item(id) as item FROM items
-    WHERE collection_id=_id AND id < tok_val
-    ORDER BY id DESC LIMIT _limit;
-ELSE
-    RETURN QUERY
-    SELECT get_item(id) as item FROM items
-    WHERE collection_id=_id AND id > tok_val
-    ORDER BY id ASC LIMIT _limit;
-END IF;
-
+    DELETE FROM items_search WHERE id = NEW.id;
+    IF TG_OP IN ('INSERT', 'UPDATE') AND pg_trigger_depth() = 1 THEN
+        INSERT INTO items (content) VALUES (NEW.content)
+        ON CONFLICT (id) DO UPDATE
+            SET content=EXCLUDED.content;
+        INSERT INTO items_search SELECT * FROM feature_to_item(NEW.content)
+        ON CONFLICT (id) DO UPDATE
+            SET
+                geometry=EXCLUDED.geometry,
+                properties=EXCLUDED.properties,
+                collection_id=EXCLUDED.collection_id,
+                datetime=EXCLUDED.datetime
+        ;
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
-
-
+CREATE TRIGGER items_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON items
+FOR EACH ROW EXECUTE PROCEDURE items_trigger_func();
 
 /*
 Staging table and triggers allow ndjson to be upserted into the
 items table using the postgresql copy mechanism.
 */
+/*
 CREATE UNLOGGED TABLE items_staging (data jsonb);
 ALTER TABLE items_staging SET (autovacuum_enabled = false);
 
@@ -181,6 +136,8 @@ cnt integer;
 t timestamptz := clock_timestamp();
 inc timestamptz := clock_timestamp();
 BEGIN
+
+
     RAISE NOTICE 'loading raw data %', clock_timestamp()-t;
     CREATE TEMP TABLE items_staging_preload ON COMMIT DROP
     AS
@@ -200,6 +157,8 @@ BEGIN
 
     DELETE FROM items USING items_staging_preload
         WHERE items.id=items_staging_preload.id;
+    DELETE FROM items_search USING items_staging_preload
+        WHERE items.id=items_staging_preload.id;
     GET DIAGNOSTICS cnt= ROW_COUNT;
 
     RAISE NOTICE 'Deleted % rows with existing ids in destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
@@ -213,6 +172,7 @@ BEGIN
     RAISE NOTICE 'Inserted % rows into destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
     inc := clock_timestamp();
     RETURN NULL;
+
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
@@ -220,3 +180,4 @@ CREATE TRIGGER items_staging_trigger
 AFTER INSERT ON items_staging
 REFERENCING NEW TABLE as newdata
 FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_trigger_func();
+*/
