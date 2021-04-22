@@ -1,25 +1,38 @@
 SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION properties_idx(_in jsonb) RETURNS jsonb AS $$
-WITH kv AS (
-    SELECT key, value FROM jsonb_each(_in) WHERE key = 'datetime' OR jsonb_typeof(value) IN ('object','array')
-) SELECT lower((_in - array_agg(key))::text)::jsonb FROM kv;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE TABLE IF NOT EXISTS items (
     id VARCHAR GENERATED ALWAYS AS (content->>'id') STORED PRIMARY KEY,
     content JSONB
 );
 
 CREATE TABLE IF NOT EXISTS items_search (
-    id text PRIMARY KEY,
+    id text NOT NULL,
     geometry geometry NOT NULL,
     properties jsonb,
     collection_id text NOT NULL,
     datetime timestamptz NOT NULL
+)
+PARTITION BY RANGE (datetime)
+;
+
+CREATE TABLE IF NOT EXISTS items_search_template (
+    LIKE items_search
+)
+;
+ALTER TABLE items_search_template ADD PRIMARY KEY (id);
+
+SELECT partman.create_parent(
+    'pgstac.items_search',
+    'datetime',
+    'native',
+    'weekly',
+    p_template_table := 'pgstac.items_search_template',
+    p_start_partition := '2000-01-01',
+    p_premake := 52
 );
 
-CREATE INDEX "datetime_idx" ON items_search (datetime);
+
+CREATE INDEX "datetime_id_idx" ON items_search (datetime, id);
 CREATE INDEX "properties_idx" ON items_search USING GIN (properties);
 CREATE INDEX "collection_idx" ON items_search (collection_id);
 CREATE INDEX "geometry_idx" ON items_search USING GIST (geometry);
@@ -32,8 +45,6 @@ CREATE TYPE item AS (
     collection_id text,
     datetime timestamptz
 );
-
-
 
 /*
 Converts single feature into an items row
@@ -106,12 +117,7 @@ BEGIN
         ON CONFLICT (id) DO UPDATE
             SET content=EXCLUDED.content;
         INSERT INTO items_search SELECT * FROM feature_to_item(NEW.content)
-        ON CONFLICT (id) DO UPDATE
-            SET
-                geometry=EXCLUDED.geometry,
-                properties=EXCLUDED.properties,
-                collection_id=EXCLUDED.collection_id,
-                datetime=EXCLUDED.datetime
+        ON CONFLICT DO NOTHING
         ;
         RETURN NULL;
     END IF;
@@ -124,62 +130,54 @@ BEFORE INSERT OR UPDATE OR DELETE ON items
 FOR EACH ROW EXECUTE PROCEDURE items_trigger_func();
 
 /*
-Staging table and triggers allow ndjson to be upserted into the
-items table using the postgresql copy mechanism.
+View to get a table of available items partitions
+with date ranges
 */
-/*
-CREATE UNLOGGED TABLE items_staging (data jsonb);
-ALTER TABLE items_staging SET (autovacuum_enabled = false);
+DROP VIEW IF EXISTS items_search_partitions;
+CREATE VIEW items_search_partitions AS
+WITH base AS
+(SELECT
+    c.oid::pg_catalog.regclass::text as partition,
+    pg_catalog.pg_get_expr(c.relpartbound, c.oid) as _constraint,
+    regexp_matches(
+        pg_catalog.pg_get_expr(c.relpartbound, c.oid),
+        E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
+    ) as t,
+    reltuples::bigint as est_cnt
+FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
+WHERE c.oid = i.inhrelid AND i.inhparent = 'items_search'::regclass)
+SELECT partition, tstzrange(
+    t[1]::timestamptz,
+    t[2]::timestamptz
+), est_cnt
+FROM base
+WHERE est_cnt >0
+ORDER BY 2 desc;
 
-CREATE  OR REPLACE FUNCTION items_staging_trigger_func()
-RETURNS TRIGGER AS $$
-DECLARE
-cnt integer;
-t timestamptz := clock_timestamp();
-inc timestamptz := clock_timestamp();
-BEGIN
+CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
+SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb
+FROM items_search WHERE collection_id=$1;
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
+CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS $$
+SELECT to_jsonb(array[array[min(datetime)::text, max(datetime)::text]])
+FROM items_search WHERE collection_id=$1;
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
-    RAISE NOTICE 'loading raw data %', clock_timestamp()-t;
-    CREATE TEMP TABLE items_staging_preload ON COMMIT DROP
-    AS
-    WITH features AS (
-        SELECT features_to_items(data) d FROM newdata
-    ) SELECT (d).* FROM features;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Loaded % rows into raw table time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    CREATE INDEX ON items_staging_preload (id);
-    ANALYZE items_staging_preload(id);
-
-    RAISE NOTICE 'Created index on id on raw table time: % total_time %', clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    DELETE FROM items USING items_staging_preload
-        WHERE items.id=items_staging_preload.id;
-    DELETE FROM items_search USING items_staging_preload
-        WHERE items.id=items_staging_preload.id;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Deleted % rows with existing ids in destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    INSERT INTO items
-    SELECT DISTINCT ON (id) * FROM items_staging_preload
-    ON CONFLICT DO NOTHING;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Inserted % rows into destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-    RETURN NULL;
-
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-
-CREATE TRIGGER items_staging_trigger
-AFTER INSERT ON items_staging
-REFERENCING NEW TABLE as newdata
-FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_trigger_func();
-*/
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections SET
+    content = content ||
+    jsonb_build_object(
+        'extent', jsonb_build_object(
+            'spatial', jsonb_build_object(
+                'bbox', collection_bbox(collections.id)
+            ),
+            'temporal', jsonb_build_object(
+                'interval', collection_temporal_extent(collections.id)
+            )
+        )
+    )
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;

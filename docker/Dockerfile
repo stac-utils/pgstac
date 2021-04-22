@@ -20,6 +20,7 @@ RUN \
         # postgresql-$PG_MAJOR-pldebugger \
         # postgresql-$PG_MAJOR-jsquery \
         postgresql-$PG_MAJOR-pgtap \
+        postgresql-$PG_MAJOR-partman \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         # postgresql-server-dev-$PG_MAJOR \

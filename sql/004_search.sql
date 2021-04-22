@@ -1,9 +1,98 @@
 SET SEARCH_PATH TO pgstac, public;
+
 /*
-
-WORK IN PROGRESS SEARCH NOT FUNCTIONAL YET
-
+View to get a table of available items partitions
+with date ranges
 */
+DROP VIEW IF EXISTS items_search_partitions;
+CREATE VIEW items_search_partitions AS
+WITH base AS
+(SELECT
+    c.oid::pg_catalog.regclass::text as partition,
+    pg_catalog.pg_get_expr(c.relpartbound, c.oid) as _constraint,
+    regexp_matches(
+        pg_catalog.pg_get_expr(c.relpartbound, c.oid),
+        E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
+    ) as t,
+    reltuples::bigint as est_cnt
+FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
+WHERE c.oid = i.inhrelid AND i.inhparent = 'items_search'::regclass)
+SELECT partition, tstzrange(
+    t[1]::timestamptz,
+    t[2]::timestamptz
+), est_cnt
+FROM base
+WHERE est_cnt >0
+ORDER BY 2 desc;
+
+
+CREATE OR REPLACE FUNCTION items_by_partition(
+    IN _where text DEFAULT 'TRUE',
+    IN _dtrange tstzrange DEFAULT tstzrange('-infinity','infinity'),
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _limit int DEFAULT 10
+) RETURNS SETOF text AS $$
+DECLARE
+partition_query text;
+main_query text;
+batchcount int;
+counter int := 0;
+p record;
+BEGIN
+IF _orderby ILIKE 'datetime d%' THEN
+    partition_query := format($q$
+        SELECT partition
+        FROM items_search_partitions
+        WHERE tstzrange && $1
+        ORDER BY tstzrange DESC;
+    $q$);
+ELSIF _orderby ILIKE 'datetime a%' THEN
+    partition_query := format($q$
+        SELECT partition
+        FROM items_search_partitions
+        WHERE tstzrange && $1
+        ORDER BY tstzrange ASC;
+    $q$);
+ELSE
+    partition_query := format($q$
+        SELECT 'items_search' as partition WHERE $1 IS NOT NULL;
+    $q$);
+END IF;
+
+FOR p IN
+    EXECUTE partition_query USING (_dtrange)
+LOOP
+    IF lower(_dtrange)::timestamptz > '-infinity' THEN
+        _where := concat(_where,format(' AND datetime >= %L',lower(_dtrange)::timestamptz::text));
+    END IF;
+    IF upper(_dtrange)::timestamptz < 'infinity' THEN
+        _where := concat(_where,format(' AND datetime <= %L',upper(_dtrange)::timestamptz::text));
+    END IF;
+
+    main_query := format($q$
+        SELECT id FROM %I
+        WHERE %s
+        ORDER BY %s
+        LIMIT %s - $1
+    $q$, p.partition::text, _where, _orderby, _limit
+    );
+    RAISE NOTICE 'Partition Query %', main_query;
+    RAISE NOTICE '%', counter;
+    RETURN QUERY EXECUTE main_query USING counter;
+
+    GET DIAGNOSTICS batchcount = ROW_COUNT;
+    counter := counter + batchcount;
+    RAISE NOTICE 'FOUND %', batchcount;
+    IF counter >= _limit THEN
+        EXIT;
+    END IF;
+    RAISE NOTICE 'ADDED % FOR A TOTAL OF %', batchcount, counter;
+END LOOP;
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
 CREATE OR REPLACE FUNCTION split_stac_path(IN path text, OUT col text, OUT dotpath text, OUT jspath text, OUT jspathtext text) AS $$
 WITH col AS (
     SELECT
@@ -43,22 +132,12 @@ CREATE OR REPLACE FUNCTION sort_base(
     OUT sort text,
     OUT rsort text
 ) RETURNS SETOF RECORD AS $$
-WITH cols AS (
-    SELECT key as name, value as col  FROM jsonb_each_text(get_config('sort_columns'))
-),
-sorts AS (
+WITH sorts AS (
     SELECT
         value->>'field' as key,
         (split_stac_path(value->>'field')).jspathtext as col,
         coalesce(upper(value->>'direction'),'ASC') as dir
     FROM jsonb_array_elements('[]'::jsonb || coalesce(_sort,'[{"field":"datetime","direction":"desc"}]') )
-),
-joined AS (
-    SELECT
-        key,
-        col,
-        dir
-    FROM sorts LEFT JOIN cols using (col)
 )
 SELECT
     key,
@@ -67,7 +146,7 @@ SELECT
     CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END as rdir,
     concat(col, ' ', dir, ' NULLS LAST ') AS sort,
     concat(col,' ', CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END, ' NULLS LAST ') AS rsort
-FROM joined
+FROM sorts
 UNION ALL
 SELECT 'id', 'id', 'DESC', 'ASC', 'id DESC', 'id ASC'
 ;
@@ -76,12 +155,12 @@ $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION sort(_sort jsonb) RETURNS text AS $$
 SELECT string_agg(sort,', ') FROM sort_base(_sort);
-$$ LANGUAGE SQL PARALLEL SAFE;
+$$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION rsort(_sort jsonb) RETURNS text AS $$
 SELECT string_agg(rsort,', ') FROM sort_base(_sort);
-$$ LANGUAGE SQL PARALLEL SAFE;
+$$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS box3d AS $$
@@ -186,42 +265,97 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION filter_by_order(item_id text, _sort jsonb, _type text) RETURNS text AS $$
 DECLARE
+item item;
+BEGIN
+SELECT * INTO item FROM items_search WHERE id=item_id;
+RETURN filter_by_order(item, _sort, _type);
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+-- Used to create filters used for paging using the items id from the token
+CREATE OR REPLACE FUNCTION filter_by_order(_item item, _sort jsonb, _type text) RETURNS text AS $$
+DECLARE
 sorts RECORD;
-item items_search%ROWTYPE;
 filts text[];
 itemval text;
 op text;
 idop text;
 ret text;
+eq_flag text;
+_item_j jsonb := to_jsonb(_item);
 BEGIN
-
-SELECT * INTO item FROM items_search WHERE id=item_id;
 FOR sorts IN SELECT * FROM sort_base(_sort) LOOP
+    IF sorts.col = 'datetime' THEN
+        CONTINUE;
+    END IF;
+    IF sorts.col='id' AND _type IN ('prev','next') THEN
+        eq_flag := '';
+    ELSE
+        eq_flag := '=';
+    END IF;
 
-    op := CASE
-        WHEN _type='prev' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '<'
-        WHEN _type='next' AND sorts.dir = 'ASC' AND sorts.col='id' THEN '>'
-        WHEN _type='prev' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '>'
-        WHEN _type='next' AND sorts.dir = 'DESC' AND sorts.col='id' THEN '<'
-        WHEN _type in ('prev','first') AND sorts.dir = 'ASC' THEN '<='
-        WHEN _type in ('last','next') AND sorts.dir = 'ASC' THEN '>='
-        WHEN _type in ('prev','first') AND sorts.dir = 'DESC' THEN '>='
-        WHEN _type in ('last','next') AND sorts.dir = 'DESC' THEN '<='
-    END;
-    EXECUTE format($q$ SELECT ($1.%s)::text; $q$, sorts.col) INTO itemval USING (item);
-    IF itemval IS NOT NULL THEN
-        filts = array_append(filts, format('%s %s %L', sorts.col, op, itemval));
+    op := concat(
+        CASE
+            WHEN _type in ('prev','first') AND sorts.dir = 'ASC' THEN '<'
+            WHEN _type in ('last','next') AND sorts.dir = 'ASC' THEN '>'
+            WHEN _type in ('prev','first') AND sorts.dir = 'DESC' THEN '>'
+            WHEN _type in ('last','next') AND sorts.dir = 'DESC' THEN '<'
+        END,
+        eq_flag
+    );
+
+    IF _item_j ? sorts.col THEN
+        filts = array_append(filts, format('%s %s %L', sorts.col, op, _item_j->>sorts.col));
     END IF;
 END LOOP;
 ret := coalesce(array_to_string(filts,' AND '), 'TRUE');
+RAISE NOTICE 'Order Filter %', ret;
 RETURN ret;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION search_dtrange(IN _indate jsonb, OUT _tstzrange tstzrange) AS
+$$
+WITH t AS (
+    SELECT CASE
+        WHEN jsonb_typeof(_indate) = 'array' THEN
+            textarr(_indate)
+        ELSE
+            regexp_split_to_array(
+                btrim(_indate::text,'"'),
+                '/'
+            )
+        END AS arr
+)
+, t1 AS (
+    SELECT
+        CASE
+            WHEN arr[1] = '..' THEN '-infinity'::timestamptz
+            ELSE arr[1]::timestamptz
+        END AS st,
+        CASE
+            WHEN array_upper(arr,1) = 1 THEN null
+            WHEN arr[2] = '..' THEN 'infinity'::timestamptz
+            ELSE arr[2]::timestamptz
+        END AS et
+    FROM t
+)
+SELECT
+    CASE
+        WHEN et IS NULL
+            THEN tstzrange(st, st, '()')
+        ELSE
+            tstzrange(st, et)
+    END AS _tstzrange
+FROM t1;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS SETOF jsonb AS $$
 DECLARE
+qstart timestamptz := clock_timestamp();
 _sort text := '';
+_rsort text := '';
 _limit int := 10;
 _geom geometry;
 qa text[];
@@ -236,11 +370,16 @@ links jsonb := '[]'::jsonb;
 token text;
 tok_val text;
 tok_q text := 'TRUE';
-minid text;
-maxid text;
+tok_sort text;
+first_id text;
+first_dt timestamptz;
+last_id text;
 sort text;
 rsort text;
 dt text[];
+dqa text[];
+dq text;
+mq_where text;
 startdt timestamptz;
 enddt timestamptz;
 item items_search%ROWTYPE;
@@ -248,21 +387,58 @@ counter int := 0;
 batchcount int;
 month timestamptz;
 m record;
+_dtrange tstzrange := tstzrange('-infinity','infinity');
+_dtsort text;
+_token_dtrange tstzrange := tstzrange('-infinity','infinity');
+_token_record items_search%ROWTYPE;
+is_prev boolean := false;
 BEGIN
-sort := sort(_search->'sortby');
-rsort := rsort(_search->'sortby');
+-- Create table from sort query of items to sort
+CREATE TEMP TABLE pgstac_tmp_sorts ON COMMIT DROP AS SELECT * FROM sort_base(_search->'sortby');
+
+-- Get the datetime sort direction, necessary for efficient cycling through partitions
+SELECT INTO _dtsort dir FROM pgstac_tmp_sorts WHERE key='datetime';
+RAISE NOTICE '_dtsort: %',_dtsort;
+
+SELECT INTO _sort string_agg(s.sort,', ') FROM pgstac_tmp_sorts s;
+SELECT INTO _rsort string_agg(s.rsort,', ') FROM pgstac_tmp_sorts s;
+tok_sort := _sort;
+
+
+-- Get datetime from query as a tstzrange
+IF _search ? 'datetime' THEN
+    _dtrange := search_dtrange(_search->'datetime');
+    _token_dtrange := _dtrange;
+END IF;
+
+-- Get the paging token
 IF _search ? 'token' THEN
     token := _search->>'token';
     tok_val := substr(token,6);
     IF starts_with(token, 'prev:') THEN
+        is_prev := true;
+    END IF;
+    SELECT INTO _token_record * FROM items_search WHERE id=tok_val;
+    IF
+        (is_prev AND _dtsort = 'DESC')
+        OR
+        (not is_prev AND _dtsort = 'ASC')
+    THEN
+        _token_dtrange := tstzrange(_token_record.datetime, 'infinity');
+    ELSIF
+        _dtsort IS NOT NULL
+    THEN
+        _token_dtrange := tstzrange('-infinity',_token_record.datetime);
+    END IF;
+    IF is_prev THEN
         tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
-        sort := rsort(_search->'sortby');
-        rsort := sort(_search->'sortby');
+        _sort := _rsort;
     ELSIF starts_with(token, 'next:') THEN
        tok_q := filter_by_order(tok_val,  _search->'sortby', 'last');
     END IF;
 END IF;
-RAISE NOTICE 'tok_q: %', tok_q;
+RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
+RAISE NOTICE 'tok_q: % _token_dtrange: %', tok_q, _token_dtrange;
 
 IF _search ? 'ids' THEN
     RAISE NOTICE 'searching solely based on ids... %',_search;
@@ -282,28 +458,6 @@ ELSE
         qa := array_append(qa, in_array_q('collection_id', _search->'collections'));
     END IF;
 
-    IF _search ? 'collections' THEN
-        qa := array_append(qa, in_array_q('collection_id', _search->'collections'));
-    END IF;
-
-    IF _search ? 'datetime' THEN
-        IF jsonb_typeof(_search->'datetime') = 'array' THEN
-            dt := textarr(_search->'datetime');
-        ELSE
-            dt := regexp_split_to_array(_search->>'datetime','/');
-        END IF;
-        IF array_upper(dt,1) = 1 THEN
-            qa := array_append(qa, format('datetime = %L::timestamptz', dt[1]));
-        ELSE
-            IF dt[1] != '..' THEN
-                qa := array_append(qa, format('datetime >= %L::timestamptz', dt[1]));
-            END IF;
-            IF dt[2] != '..' THEN
-                qa := array_append(qa, format('datetime <= %L::timestamptz', dt[2]));
-            END IF;
-        END IF;
-    END IF;
-
     IF _search ? 'query' THEN
         qa := array_cat(qa,
             stac_query(_search->'query')
@@ -317,107 +471,71 @@ END IF;
 
 
 whereq := COALESCE(array_to_string(qa,' AND '),' TRUE ');
+dq := COALESCE(array_to_string(dqa,' AND '),' TRUE ');
+RAISE NOTICE 'timing before temp table: %', age(clock_timestamp(), qstart);
 
-query := format($q$
-    CREATE TEMP VIEW results_temp_view
-    AS
-    SELECT *
-    FROM items_search
-    WHERE %s
-    ORDER BY %s
-    $q$,
-    whereq,
-    sort
-);
-RAISE NOTICE 'QUERY: %', query;
-EXECUTE query;
+CREATE TEMP TABLE results_page ON COMMIT DROP AS
+SELECT items_by_partition(
+    concat(whereq, ' AND ', tok_q),
+    _token_dtrange,
+    _sort,
+    _limit + 1
+) as id;
+RAISE NOTICE 'timing after temp table: %', age(clock_timestamp(), qstart);
 
+RAISE NOTICE 'timing before min/max: %', age(clock_timestamp(), qstart);
 
-
-
-IF sort = 'datetime DESC NULLS LAST , id DESC' AND tok_q='TRUE' THEN
-    CREATE TEMP TABLE results_page
-    ON COMMIT DROP AS
-    SELECT id
-    FROM results_temp_view
-    LIMIT 0;
-
-    FOR m IN SELECT
-        generate_series(
-            date_trunc('month', max(datetime)) + '1 month'::interval,
-            date_trunc('month', min(datetime)),
-            '-1 month'::interval
-        ) as month
-    FROM items_search LOOP
-        month := m.month;
-        query := format($q$
-            INSERT INTO results_page
-            SELECT id
-            FROM results_temp_view
-            WHERE %s AND datetime < %L AND datetime >= %L
-            LIMIT %s
-            $q$,
-            tok_q,month, month - '1 month'::interval,
-            _limit - counter
-        );
-        RAISE NOTICE 'QUERY: %', query;
-        EXECUTE query;
-        GET DIAGNOSTICS batchcount = ROW_COUNT;
-        counter := counter + batchcount;
-        IF counter >= _limit THEN
-            EXIT;
-        END IF;
-        RAISE NOTICE 'ADDED % FOR A TOTAL OF %', batchcount, counter;
-    END LOOP;
+IF is_prev THEN
+    SELECT INTO last_id, first_id
+        first_value(id) OVER (),
+        last_value(id) OVER ()
+    FROM results_page;
 ELSE
-    query := format($q$
-        CREATE TEMP TABLE results_page
-        ON COMMIT DROP AS
-        SELECT id
-        FROM results_temp_view
-        WHERE %s
-        LIMIT %s
-        $q$,
-        tok_q,
-        _limit
-    );
-    RAISE NOTICE 'QUERY: %', query;
-    EXECUTE query;
+    SELECT INTO first_id, last_id
+        first_value(id) OVER (),
+        last_value(id) OVER ()
+    FROM results_page;
 END IF;
+RAISE NOTICE 'firstid: %, lastid %', first_id, last_id;
+RAISE NOTICE 'timing after min/max: %', age(clock_timestamp(), qstart);
 
-SELECT INTO minid, maxid first_value(id) OVER (), last_value(id) OVER () FROM results_page;
-RAISE NOTICE 'firstid: %, lastid %', minid, maxid;
 
-query := format($q$
-    SELECT id
-    FROM results_temp_view
-    WHERE %s
-    LIMIT 1
-    $q$,
-    filter_by_order(maxid,  _search->'sortby', 'next')
-);
-RAISE NOTICE 'next query: %', query;
-EXECUTE query into next_id;
+
+
+
+next_id := last_id;
 RAISE NOTICE 'next_id: %', next_id;
 
-query := format($q$
-    SELECT id
-    FROM results_temp_view
-    WHERE %s
-    LIMIT 1
-    $q$,
-    filter_by_order(minid, _search->'sortby', 'prev')
-);
-RAISE NOTICE 'prev query: %', query;
-EXECUTE query into prev_id;
-RAISE NOTICE 'prev_id: %', prev_id;
+IF tok_q = 'TRUE' THEN
+    RAISE NOTICE 'Not a paging query, no previous item';
+ELSE
+    RAISE NOTICE 'Getting previous item id';
+    RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
+    SELECT INTO _token_record * FROM items_search WHERE id=first_id;
+    IF
+        _dtsort = 'DESC'
+    THEN
+        _token_dtrange := _dtrange * tstzrange(_token_record.datetime, 'infinity');
+    ELSE
+        _token_dtrange := _dtrange * tstzrange('-infinity',_token_record.datetime);
+    END IF;
+    RAISE NOTICE '% %', _token_dtrange, _dtrange;
+    SELECT INTO prev_id items_by_partition(
+        concat(whereq, ' AND ', filter_by_order(first_id, _search->'sortby', 'prev')),
+        _token_dtrange,
+        _rsort,
+        1
+    ) as id;
+    RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
 
-DROP VIEW results_temp_view;
+    RAISE NOTICE 'prev_id: %', prev_id;
+END IF;
+
 
 RETURN QUERY
 WITH features AS (
     SELECT jsonb_agg(content) features
-    FROM items WHERE id IN (SELECT id FROM results_page)
+    FROM items WHERE id IN (SELECT id FROM results_page LIMIT _limit)
 )
 SELECT jsonb_build_object(
     'type', 'FeatureCollection',
@@ -432,4 +550,4 @@ FROM features
 
 
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
