@@ -90,7 +90,7 @@ LOOP
 END LOOP;
 RETURN;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION split_stac_path(IN path text, OUT col text, OUT dotpath text, OUT jspath text, OUT jspathtext text) AS $$
@@ -155,12 +155,12 @@ $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION sort(_sort jsonb) RETURNS text AS $$
 SELECT string_agg(sort,', ') FROM sort_base(_sort);
-$$ LANGUAGE SQL PARALLEL SAFE;
+$$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION rsort(_sort jsonb) RETURNS text AS $$
 SELECT string_agg(rsort,', ') FROM sort_base(_sort);
-$$ LANGUAGE SQL PARALLEL SAFE;
+$$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS box3d AS $$
@@ -270,7 +270,7 @@ BEGIN
 SELECT * INTO item FROM items_search WHERE id=item_id;
 RETURN filter_by_order(item, _sort, _type);
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 -- Used to create filters used for paging using the items id from the token
 CREATE OR REPLACE FUNCTION filter_by_order(_item item, _sort jsonb, _type text) RETURNS text AS $$
@@ -312,7 +312,7 @@ ret := coalesce(array_to_string(filts,' AND '), 'TRUE');
 RAISE NOTICE 'Order Filter %', ret;
 RETURN ret;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION search_dtrange(IN _indate jsonb, OUT _tstzrange tstzrange) AS
 $$
@@ -550,4 +550,4 @@ FROM features
 
 
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;

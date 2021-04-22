@@ -117,12 +117,7 @@ BEGIN
         ON CONFLICT (id) DO UPDATE
             SET content=EXCLUDED.content;
         INSERT INTO items_search SELECT * FROM feature_to_item(NEW.content)
-        ON CONFLICT (id) DO UPDATE
-            SET
-                geometry=EXCLUDED.geometry,
-                properties=EXCLUDED.properties,
-                collection_id=EXCLUDED.collection_id,
-                datetime=EXCLUDED.datetime
+        ON CONFLICT DO NOTHING
         ;
         RETURN NULL;
     END IF;
@@ -186,64 +181,3 @@ UPDATE collections SET
     )
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
-
-/*
-Staging table and triggers allow ndjson to be upserted into the
-items table using the postgresql copy mechanism.
-*/
-/*
-CREATE UNLOGGED TABLE items_staging (data jsonb);
-ALTER TABLE items_staging SET (autovacuum_enabled = false);
-
-CREATE  OR REPLACE FUNCTION items_staging_trigger_func()
-RETURNS TRIGGER AS $$
-DECLARE
-cnt integer;
-t timestamptz := clock_timestamp();
-inc timestamptz := clock_timestamp();
-BEGIN
-
-
-    RAISE NOTICE 'loading raw data %', clock_timestamp()-t;
-    CREATE TEMP TABLE items_staging_preload ON COMMIT DROP
-    AS
-    WITH features AS (
-        SELECT features_to_items(data) d FROM newdata
-    ) SELECT (d).* FROM features;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Loaded % rows into raw table time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    CREATE INDEX ON items_staging_preload (id);
-    ANALYZE items_staging_preload(id);
-
-    RAISE NOTICE 'Created index on id on raw table time: % total_time %', clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    DELETE FROM items USING items_staging_preload
-        WHERE items.id=items_staging_preload.id;
-    DELETE FROM items_search USING items_staging_preload
-        WHERE items.id=items_staging_preload.id;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Deleted % rows with existing ids in destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-
-    INSERT INTO items
-    SELECT DISTINCT ON (id) * FROM items_staging_preload
-    ON CONFLICT DO NOTHING;
-    GET DIAGNOSTICS cnt= ROW_COUNT;
-
-    RAISE NOTICE 'Inserted % rows into destination table. time: % total_time %', cnt, clock_timestamp()-inc, clock_timestamp()-t;
-    inc := clock_timestamp();
-    RETURN NULL;
-
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-
-CREATE TRIGGER items_staging_trigger
-AFTER INSERT ON items_staging
-REFERENCING NEW TABLE as newdata
-FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_trigger_func();
-*/
