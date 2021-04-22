@@ -132,22 +132,12 @@ CREATE OR REPLACE FUNCTION sort_base(
     OUT sort text,
     OUT rsort text
 ) RETURNS SETOF RECORD AS $$
-WITH cols AS (
-    SELECT key as name, value as col  FROM jsonb_each_text(get_config('sort_columns'))
-),
-sorts AS (
+WITH sorts AS (
     SELECT
         value->>'field' as key,
         (split_stac_path(value->>'field')).jspathtext as col,
         coalesce(upper(value->>'direction'),'ASC') as dir
     FROM jsonb_array_elements('[]'::jsonb || coalesce(_sort,'[{"field":"datetime","direction":"desc"}]') )
-),
-joined AS (
-    SELECT
-        key,
-        col,
-        dir
-    FROM sorts LEFT JOIN cols using (col)
 )
 SELECT
     key,
@@ -156,7 +146,7 @@ SELECT
     CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END as rdir,
     concat(col, ' ', dir, ' NULLS LAST ') AS sort,
     concat(col,' ', CASE dir WHEN 'DESC' THEN 'ASC' ELSE 'ASC' END, ' NULLS LAST ') AS rsort
-FROM joined
+FROM sorts
 UNION ALL
 SELECT 'id', 'id', 'DESC', 'ASC', 'id DESC', 'id ASC'
 ;

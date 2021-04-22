@@ -14,10 +14,11 @@
 -- Load the TAP functions.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
+SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
---SELECT plan(47);
-SELECT * FROM no_plan();
+SELECT plan(50);
+--SELECT * FROM no_plan();
 
 -- Run the tests.
 
@@ -55,8 +56,8 @@ SELECT has_function('pgstac'::name, 'collection_bbox', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'collection_temporal_extent', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'update_collection_extents', NULL);
 
-SELECT has_function('pgstac'::name, 'collections_trigger_func', NULL);
-SELECT has_trigger('pgstac'::name, 'collections', 'collections_trigger', NULL);
+SELECT has_function('pgstac'::name, 'collections_trigger_func', 'collections trigger function exists');
+SELECT has_trigger('pgstac'::name, 'collections', 'collections_trigger', 'trigger exists on collections table');
 
 
 
@@ -68,12 +69,12 @@ SELECT col_is_pk('pgstac'::name, 'items', 'id', NULL);
 
 SELECT has_table('pgstac'::name, 'items_search'::name);
 --SELECT col_is_pk('pgstac'::name, 'items_search'::name, 'id', 'id should be primary key');
-SELECT is_indexed('pgstac'::name, 'items_search'::name, 'datetime');
+SELECT is_indexed('pgstac'::name, 'items_search'::name, ARRAY['datetime','id']);
 SELECT is_indexed('pgstac'::name, 'items_search'::name, 'properties');
 SELECT is_indexed('pgstac'::name, 'items_search'::name, 'geometry');
-SELECT is_indexed('pgstac'::name, 'items_search'::name, 'collection');
+SELECT is_indexed('pgstac'::name, 'items_search'::name, 'collection_id');
 
-SELECT has_type('pgstac'::name, 'item');
+SELECT has_type('pgstac'::name, 'item'::name);
 SELECT is_partitioned('pgstac'::name,'items_search'::name);
 
 
@@ -83,10 +84,10 @@ SELECT has_function('pgstac'::name, 'get_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'delete_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'create_item', ARRAY['jsonb']);
 
-SELECT has_function('pgstac'::name, 'items_trigger_func', NULL);
-SELECT has_trigger('pgstac'::name, 'items'::name, 'items_trigger');
+SELECT has_function('pgstac'::name, 'items_trigger_func', 'items trigger function exists');
+SELECT has_trigger('pgstac'::name, 'items'::name, 'items_trigger', 'items table has trigger');
 
-SELECT has_view('pgstac'::name, 'items_search_partitions');
+SELECT has_view('pgstac'::name, 'items_search_partitions'::name, 'items_search_partitions view exists');
 
 
 -- Search
