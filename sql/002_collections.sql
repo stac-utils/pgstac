@@ -28,6 +28,9 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
 
 
+
+
+
 CREATE OR REPLACE FUNCTION collections_trigger_func()
 RETURNS TRIGGER AS $$
 BEGIN
