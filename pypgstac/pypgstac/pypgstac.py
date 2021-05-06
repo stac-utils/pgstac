@@ -9,6 +9,9 @@ from pypgstac import __version__ as version
 
 app = typer.Typer()
 
+dirname = os.path.dirname(__file__)
+migrations_dir = os.path.join(dirname, 'migrations')
+
 
 def pglogger(conn, message):
     print(message)
@@ -27,12 +30,12 @@ async def run_migration(dsn: str = None):
         except asyncpg.exceptions.UndefinedTableError:
             oldversion = None
     if oldversion is None:
-        migration_file = f"migrations/pgstac.{version}.sql"
+        migration_file = os.path.join(migrations_dir, f"pgstac.{version}.sql")
     else:
-        migration_file = f"migrations/pgstac.{oldversion}-{version}.sql"
+        migration_file = os.path.join(migrations_dir, f"pgstac.{oldversion}-{version}.sql")
 
     if not os.path.exists(migration_file):
-        raise Exception(f"Please create migration {migration_file} first")
+        raise Exception(f"Pypgstac does not have a migration from {oldversion} to {version}")
 
     with open(migration_file) as f:
         migration_sql = f.read()
