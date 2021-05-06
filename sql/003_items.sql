@@ -28,7 +28,7 @@ SELECT partman.create_parent(
     'weekly',
     p_template_table := 'pgstac.items_search_template',
     p_start_partition := '2000-01-01',
-    p_premake := 52
+    p_premake := 156
 );
 
 
