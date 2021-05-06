@@ -6,6 +6,11 @@ CREATE SCHEMA IF NOT EXISTS pgstac;
 
 SET SEARCH_PATH TO pgstac, public;
 
+CREATE TABLE versions (
+  version text PRIMARY KEY,
+  datetime timestamptz DEFAULT now() NOT NULL
+);
+
 /* converts a jsonb text array to a pg text[] array */
 CREATE OR REPLACE FUNCTION textarr(_js jsonb)
   RETURNS text[] AS $$

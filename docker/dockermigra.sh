@@ -33,6 +33,9 @@ then
     echo "Comparing schema to existing PG instance $FROMDB"
     FROMDBURL=$FROMDB
     pg_dump --schema pgstac --schema-only $FROMDB | psql $FROMDBURL
+elif [ -z "$FROMDB" ]
+then
+    echo "Creating initial migration"
 else
     echo "Comparing schema to $FROMDB branch on github"
     BRANCH=${1:-main}
@@ -45,21 +48,28 @@ else
     psql $FROMDBURL -f pgstac.sql
 fi
 mkdir -p /tmp
-migra --schema pgstac --unsafe $FROMDBURL $TODBURL >/tmp/migration.sql
+
+# Add necessary extensions using if exists to migration script
+cat <<EOF >/tmp/migration.sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE SCHEMA IF NOT EXISTS partman;
+CREATE EXTENSION IF NOT EXISTS pg_partman SCHEMA partman;
+EOF
+migra --schema pgstac --unsafe $FROMDBURL $TODBURL >>/tmp/migration.sql
 
 # Test migration
 echo "testing migration"
 psql $FROMDBURL -f /tmp/migration.sql
 
-cat test/testdata/collections.ndjson | psql -c "copy pgstac.collections_staging FROM stdin" $FROMDBURL
-cat test/testdata/items.ndjson | psql -c "copy pgstac.items_staging FROM stdin" $FROMDBURL
+# cat test/testdata/collections.ndjson | psql -c "copy pgstac.collections_staging FROM stdin" $FROMDBURL
+# cat test/testdata/items.ndjson | psql -c "copy pgstac.items_staging FROM stdin" $FROMDBURL
 
-psql -X -f test/test.sql $FROMDBURL >/tmp/test.out
+# psql -X -f test/test.sql $FROMDBURL >/tmp/test.out
 
-cmp --silent /tmp/test.out test/test.out && echo '### SUCCESS: Files Tests Pass! ###' || echo '### WARNING: Tests did not pass! ###' && diff /tmp/test.out test/test.out
+# cmp --silent /tmp/test.out test/test.out && echo '### SUCCESS: Files Tests Pass! ###' || echo '### WARNING: Tests did not pass! ###' && diff /tmp/test.out test/test.out
 
 # check that migrating from the now migrated starting database is the same as the target database
-echo "If there is anything between the ****************** there was a problem with the migration."
-echo "***************************"
-migra --schema pgstac --unsafe $FROMDBURL $TODBURL
-echo "***************************"
+# echo "If there is anything between the ****************** there was a problem with the migration."
+# echo "***************************"
+# migra --schema pgstac --unsafe $FROMDBURL $TODBURL
+# echo "***************************"

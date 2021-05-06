@@ -2,6 +2,7 @@
 function usage(){
       echo "Usage:"
       echo "    $0 -h                           Display this help message."
+      echo "    $0                              Create initial migration."
       echo "    $0 [ postgresql://<dburl> ]     Create migration from existing database"
       echo "    $0 [ gitbranch ]                Create migration from a git branch"
       exit 0
@@ -23,7 +24,6 @@ done
 shift $((OPTIND -1))
 FROMDB=$1
 {
-  [ -z $FROMDB ] && usage
   DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
   MIGRA_IMAGE=$(docker build -q docker/)
   echo $MIGRA_IMAGE
