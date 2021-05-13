@@ -4,8 +4,8 @@ SET SEARCH_PATH TO pgstac, public;
 View to get a table of available items partitions
 with date ranges
 */
-DROP VIEW IF EXISTS items_search_partitions;
-CREATE VIEW items_search_partitions AS
+DROP VIEW IF EXISTS items_partitions;
+CREATE VIEW items_partitions AS
 WITH base AS
 (SELECT
     c.oid::pg_catalog.regclass::text as partition,
@@ -16,7 +16,7 @@ WITH base AS
     ) as t,
     reltuples::bigint as est_cnt
 FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
-WHERE c.oid = i.inhrelid AND i.inhparent = 'items_search'::regclass)
+WHERE c.oid = i.inhrelid AND i.inhparent = 'items'::regclass)
 SELECT partition, tstzrange(
     t[1]::timestamptz,
     t[2]::timestamptz
@@ -31,7 +31,7 @@ CREATE OR REPLACE FUNCTION items_by_partition(
     IN _dtrange tstzrange DEFAULT tstzrange('-infinity','infinity'),
     IN _orderby text DEFAULT 'datetime DESC, id DESC',
     IN _limit int DEFAULT 10
-) RETURNS SETOF text AS $$
+) RETURNS SETOF items AS $$
 DECLARE
 partition_query text;
 main_query text;
@@ -42,23 +42,24 @@ BEGIN
 IF _orderby ILIKE 'datetime d%' THEN
     partition_query := format($q$
         SELECT partition
-        FROM items_search_partitions
+        FROM items_partitions
         WHERE tstzrange && $1
         ORDER BY tstzrange DESC;
     $q$);
 ELSIF _orderby ILIKE 'datetime a%' THEN
     partition_query := format($q$
         SELECT partition
-        FROM items_search_partitions
+        FROM items_partitions
         WHERE tstzrange && $1
-        ORDER BY tstzrange ASC;
+        ORDER BY tstzrange ASC
+        ;
     $q$);
 ELSE
     partition_query := format($q$
-        SELECT 'items_search' as partition WHERE $1 IS NOT NULL;
+        SELECT 'items' as partition WHERE $1 IS NOT NULL;
     $q$);
 END IF;
-
+RAISE NOTICE 'Partition Query: %', partition_query;
 FOR p IN
     EXECUTE partition_query USING (_dtrange)
 LOOP
@@ -70,7 +71,7 @@ LOOP
     END IF;
 
     main_query := format($q$
-        SELECT id FROM %I
+        SELECT * FROM %I
         WHERE %s
         ORDER BY %s
         LIMIT %s - $1
@@ -202,14 +203,13 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION stac_query_op(att text, _op text, val jsonb) RETURNS text AS $$
 DECLARE
 ret text := '';
-idx text;
-idx_func text;
-idx_typ text;
 op text;
 jp text;
 att_parts RECORD;
+val_str text;
 BEGIN
-val := lower(val::text)::jsonb;
+val_str := lower(jsonb_build_object('a',val)->>'a');
+RAISE NOTICE 'val_str %', val_str;
 
 att_parts := split_stac_path(att);
 
@@ -220,22 +220,35 @@ op := CASE _op
     WHEN 'le' THEN '<='
     WHEN 'lt' THEN '<'
     WHEN 'ne' THEN '!='
+    WHEN 'neq' THEN '!='
+    WHEN 'startsWith' THEN 'LIKE'
+    WHEN 'endsWith' THEN 'LIKE'
+    WHEN 'contains' THEN 'LIKE'
     ELSE _op
 END;
+
+val_str := CASE _op
+    WHEN 'startsWith' THEN concat(val_str, '%')
+    WHEN 'endsWith' THEN concat('%', val_str)
+    WHEN 'contains' THEN concat('%',val_str,'%')
+    ELSE val_str
+END;
+
+
 RAISE NOTICE 'att_parts: % %', att_parts, count_by_delim(att_parts.dotpath,'\.');
 IF
     op = '='
     AND att_parts.col = 'properties'
-    AND count_by_delim(att_parts.dotpath,'\.') = 2
+    --AND count_by_delim(att_parts.dotpath,'\.') = 2
 THEN
     -- use jsonpath query to leverage index for eqaulity tests on single level deep properties
-    jp := btrim(format($jp$ $.%I[*] ? ( @ == %s ) $jp$, replace(att_parts.dotpath, 'properties.',''), val));
+    jp := btrim(format($jp$ $.%I[*] ? ( @ == %s ) $jp$, replace(att_parts.dotpath, 'properties.',''), lower(val::text)::jsonb));
     raise notice 'jp: %', jp;
     ret := format($q$ properties @? %L $q$, jp);
 ELSIF jsonb_typeof(val) = 'number' THEN
     ret := format('(%s)::numeric %s %s', att_parts.jspathtext, op, val);
 ELSE
-    ret := format('lower(%s) %s %L', att_parts.jspathtext, op, val);
+    ret := format('%s %s %L', att_parts.jspathtext, op, val_str);
 END IF;
 RAISE NOTICE 'Op Query: %', ret;
 
@@ -267,7 +280,7 @@ CREATE OR REPLACE FUNCTION filter_by_order(item_id text, _sort jsonb, _type text
 DECLARE
 item item;
 BEGIN
-SELECT * INTO item FROM items_search WHERE id=item_id;
+SELECT * INTO item FROM items WHERE id=item_id;
 RETURN filter_by_order(item, _sort, _type);
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
@@ -330,24 +343,29 @@ WITH t AS (
 , t1 AS (
     SELECT
         CASE
-            WHEN arr[1] = '..' THEN '-infinity'::timestamptz
+            WHEN array_upper(arr,1) = 1 OR arr[1] = '..' OR arr[1] IS NULL THEN '-infinity'::timestamptz
             ELSE arr[1]::timestamptz
         END AS st,
         CASE
-            WHEN array_upper(arr,1) = 1 THEN null
-            WHEN arr[2] = '..' THEN 'infinity'::timestamptz
+            WHEN array_upper(arr,1) = 1 THEN arr[1]::timestamptz
+            WHEN arr[2] = '..' OR arr[2] IS NULL THEN 'infinity'::timestamptz
             ELSE arr[2]::timestamptz
         END AS et
     FROM t
 )
 SELECT
-    CASE
-        WHEN et IS NULL
-            THEN tstzrange(st, st, '()')
-        ELSE
-            tstzrange(st, et)
-    END AS _tstzrange
+    tstzrange(st,et)
 FROM t1;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION flip_jsonb_array(j jsonb) RETURNS jsonb AS $$
+WITH t AS (
+    SELECT i, row_number() over () as r FROM jsonb_array_elements(j) i
+), o AS (
+    SELECT i FROM t ORDER BY r DESC
+)
+SELECT jsonb_agg(i) from o
+;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
@@ -382,7 +400,7 @@ dq text;
 mq_where text;
 startdt timestamptz;
 enddt timestamptz;
-item items_search%ROWTYPE;
+item items%ROWTYPE;
 counter int := 0;
 batchcount int;
 month timestamptz;
@@ -390,8 +408,10 @@ m record;
 _dtrange tstzrange := tstzrange('-infinity','infinity');
 _dtsort text;
 _token_dtrange tstzrange := tstzrange('-infinity','infinity');
-_token_record items_search%ROWTYPE;
+_token_record items%ROWTYPE;
 is_prev boolean := false;
+includes text[];
+excludes text[];
 BEGIN
 -- Create table from sort query of items to sort
 CREATE TEMP TABLE pgstac_tmp_sorts ON COMMIT DROP AS SELECT * FROM sort_base(_search->'sortby');
@@ -418,7 +438,7 @@ IF _search ? 'token' THEN
     IF starts_with(token, 'prev:') THEN
         is_prev := true;
     END IF;
-    SELECT INTO _token_record * FROM items_search WHERE id=tok_val;
+    SELECT INTO _token_record * FROM items WHERE id=tok_val;
     IF
         (is_prev AND _dtsort = 'DESC')
         OR
@@ -469,31 +489,45 @@ IF _search ? 'limit' THEN
     _limit := (_search->>'limit')::int;
 END IF;
 
+IF _search ? 'fields' THEN
+    IF _search->'fields' ? 'exclude' THEN
+        excludes=textarr(_search->'fields'->'exclude');
+    END IF;
+    IF _search->'fields' ? 'include' THEN
+        includes=textarr(_search->'fields'->'include');
+        IF array_length(includes, 1)>0 AND NOT 'id' = ANY (includes) THEN
+            includes = includes || '{id}';
+        END IF;
+    END IF;
+    RAISE NOTICE 'Includes: %, Excludes: %', includes, excludes;
+END IF;
 
 whereq := COALESCE(array_to_string(qa,' AND '),' TRUE ');
 dq := COALESCE(array_to_string(dqa,' AND '),' TRUE ');
 RAISE NOTICE 'timing before temp table: %', age(clock_timestamp(), qstart);
 
 CREATE TEMP TABLE results_page ON COMMIT DROP AS
-SELECT items_by_partition(
+SELECT * FROM items_by_partition(
     concat(whereq, ' AND ', tok_q),
     _token_dtrange,
     _sort,
     _limit + 1
-) as id;
+);
 RAISE NOTICE 'timing after temp table: %', age(clock_timestamp(), qstart);
 
 RAISE NOTICE 'timing before min/max: %', age(clock_timestamp(), qstart);
 
 IF is_prev THEN
-    SELECT INTO last_id, first_id
+    SELECT INTO last_id, first_id, counter
         first_value(id) OVER (),
-        last_value(id) OVER ()
+        last_value(id) OVER (),
+        count(*) OVER ()
     FROM results_page;
 ELSE
-    SELECT INTO first_id, last_id
+    SELECT INTO first_id, last_id, counter
         first_value(id) OVER (),
-        last_value(id) OVER ()
+        last_value(id) OVER (),
+        count(*) OVER ()
     FROM results_page;
 END IF;
 RAISE NOTICE 'firstid: %, lastid %', first_id, last_id;
@@ -502,16 +536,19 @@ RAISE NOTICE 'timing after min/max: %', age(clock_timestamp(), qstart);
 
 
 
-
-next_id := last_id;
-RAISE NOTICE 'next_id: %', next_id;
+IF counter > _limit THEN
+    next_id := last_id;
+    RAISE NOTICE 'next_id: %', next_id;
+ELSE
+    RAISE NOTICE 'No more next';
+END IF;
 
 IF tok_q = 'TRUE' THEN
     RAISE NOTICE 'Not a paging query, no previous item';
 ELSE
     RAISE NOTICE 'Getting previous item id';
     RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
-    SELECT INTO _token_record * FROM items_search WHERE id=first_id;
+    SELECT INTO _token_record * FROM items WHERE id=first_id;
     IF
         _dtsort = 'DESC'
     THEN
@@ -520,12 +557,12 @@ ELSE
         _token_dtrange := _dtrange * tstzrange('-infinity',_token_record.datetime);
     END IF;
     RAISE NOTICE '% %', _token_dtrange, _dtrange;
-    SELECT INTO prev_id items_by_partition(
+    SELECT id INTO prev_id FROM items_by_partition(
         concat(whereq, ' AND ', filter_by_order(first_id, _search->'sortby', 'prev')),
         _token_dtrange,
         _rsort,
         1
-    ) as id;
+    );
     RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
 
     RAISE NOTICE 'prev_id: %', prev_id;
@@ -534,18 +571,21 @@ END IF;
 
 RETURN QUERY
 WITH features AS (
-    SELECT jsonb_agg(content) features
-    FROM items WHERE id IN (SELECT id FROM results_page LIMIT _limit)
-)
+    SELECT filter_jsonb(content, includes, excludes) as content
+    FROM results_page LIMIT _limit
+),
+j AS (SELECT jsonb_agg(content) as feature_arr FROM features)
 SELECT jsonb_build_object(
     'type', 'FeatureCollection',
-    'features', coalesce(features,'[]'::jsonb),
+    'features', coalesce (
+        CASE WHEN is_prev THEN flip_jsonb_array(feature_arr) ELSE feature_arr END
+        ,'[]'::jsonb),
     'links', links,
     'timeStamp', now(),
     'next', next_id,
     'prev', prev_id
 )
-FROM features
+FROM j
 ;
 
 

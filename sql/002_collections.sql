@@ -8,11 +8,33 @@ CREATE TABLE IF NOT EXISTS collections (
 CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
     INSERT INTO collections (content)
     VALUES (data)
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
+DECLARE
+out collections%ROWTYPE;
+BEGIN
+    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
+    INSERT INTO collections (content)
+    VALUES (data)
     ON CONFLICT (id) DO
     UPDATE
         SET content=EXCLUDED.content
     ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
+DECLARE
+out collections%ROWTYPE;
+BEGIN
+    DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
@@ -31,7 +53,7 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
 
 
-CREATE OR REPLACE FUNCTION collections_trigger_func()
+/* CREATE OR REPLACE FUNCTION collections_trigger_func()
 RETURNS TRIGGER AS $$
 BEGIN
     IF pg_trigger_depth() = 1 THEN
@@ -45,3 +67,4 @@ $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 CREATE TRIGGER collections_trigger
 BEFORE INSERT ON collections
 FOR EACH ROW EXECUTE PROCEDURE collections_trigger_func();
+ */

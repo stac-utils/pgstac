@@ -29,13 +29,13 @@ async def run_migration(dsn: str = None):
             )
         except asyncpg.exceptions.UndefinedTableError:
             oldversion = None
-    if oldversion is None:
+    if oldversion is None or oldversion == {version}:
         migration_file = os.path.join(migrations_dir, f"pgstac.{version}.sql")
     else:
         migration_file = os.path.join(migrations_dir, f"pgstac.{oldversion}-{version}.sql")
 
     if not os.path.exists(migration_file):
-        raise Exception(f"Pypgstac does not have a migration from {oldversion} to {version}")
+        raise Exception(f"Pypgstac does not have a migration from {oldversion} to {version} ({migration_file})")
 
     with open(migration_file) as f:
         migration_sql = f.read()
