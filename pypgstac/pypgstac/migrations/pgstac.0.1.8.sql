@@ -7,7 +7,7 @@ CREATE SCHEMA IF NOT EXISTS pgstac;
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE versions (
-  version text PRIMARY KEY,
+  version text,
   datetime timestamptz DEFAULT now() NOT NULL
 );
 
@@ -1166,4 +1166,4 @@ FROM j
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
-INSERT INTO pgstac.versions (version) VALUES ('0.1.7');
+INSERT INTO pgstac.versions (version) VALUES ('0.1.8');

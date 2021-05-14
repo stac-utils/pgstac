@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "pypgstac"
-version = "0.1.7"
+version = "0.1.8"
 description = ""
 authors = ["David Bitner <bitner@dbspatial.com>"]
 keywords = ["stac", "asyncpg"]
 readme = "README"
 homepage = "https://github.com/stac-utils/pgstac"
 repository = "https://github.com/stac-utils/pgstac"
-include = ["migrations/*.sql"]
+include = ["pypgstac/migrations/*.sql"]
 
 [tool.poetry.dependencies]
 python = "^3.8"

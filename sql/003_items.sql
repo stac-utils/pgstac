@@ -55,8 +55,9 @@ WITH t AS (
             date_trunc('week', coalesce(et, st)),
             '1 week'::interval
         ) w
-)
-SELECT partman.create_partition_time('pgstac.items', array_agg(w)) FROM t;
+),
+w AS (SELECT array_agg(w) as w FROM t)
+SELECT CASE WHEN w IS NULL THEN NULL ELSE partman.create_partition_time('pgstac.items', w) END FROM w;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION get_partition(timestamptz) RETURNS text AS $$

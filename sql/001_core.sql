@@ -7,7 +7,7 @@ CREATE SCHEMA IF NOT EXISTS pgstac;
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE versions (
-  version text PRIMARY KEY,
+  version text,
   datetime timestamptz DEFAULT now() NOT NULL
 );
 
