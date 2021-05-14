@@ -47,9 +47,19 @@ makemigration.sh postgresql://myuser:mypassword@myhost:myport/mydatabase
 ```
 
 # Bulk Data Loading
-A python utility is included which allows to load data from any source openable by smart-open using python in a memory efficient streaming manner using PostgreSQL copy. There are options for collections and items usin
+A python utility is included which allows to load data from any source openable by smart-open using python in a memory efficient streaming manner using PostgreSQL copy. There are options for collections and items and can be used either as a command line or a library.
 
+To load an ndjson of items directly using copy (will fail on any duplicate ids but is the fastest option to load new data you know will not conflict)
 ```
-from pypgstac import loader
-loader.items(file='path/to/file', dsn='postgresql://myuser:mypassword@myhost:myport/mydatabase')
+pypgstac load items
+```
+
+To load skipping any records that conflict with existing data
+```
+pypgstac load items --method insert_ignore
+```
+
+To upsert any records, adding anything new and replacing anything with the same id
+```
+pypgstac load items --method upsert
 ```
