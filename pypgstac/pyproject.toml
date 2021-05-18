@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pypgstac"
-version = "0.1.8"
+version = "0.1.9"
 description = ""
 authors = ["David Bitner <bitner@dbspatial.com>"]
 keywords = ["stac", "asyncpg"]

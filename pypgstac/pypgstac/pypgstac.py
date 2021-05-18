@@ -83,9 +83,14 @@ async def run_migration(dsn: str = None):
     logging.debug(
         f"Old Version: {oldversion} Migrations Dir: {migrations_dir}"
     )
-    if oldversion is None or oldversion == {version}:
+    if oldversion == version:
+        logging.debug(f"Target database already at version: {version}")
+        return version
+    if oldversion is None:
+        logging.debug(f"No pgstac version set, installing {version} from scratch")
         migration_file = os.path.join(migrations_dir, f"pgstac.{version}.sql")
     else:
+        logging.debug(f"Migrating from {oldversion} to {version}.")
         migration_file = os.path.join(
             migrations_dir, f"pgstac.{oldversion}-{version}.sql"
         )
