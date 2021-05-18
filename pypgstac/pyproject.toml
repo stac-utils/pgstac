@@ -7,7 +7,8 @@ keywords = ["stac", "asyncpg"]
 readme = "README"
 homepage = "https://github.com/stac-utils/pgstac"
 repository = "https://github.com/stac-utils/pgstac"
-include = ["pypgstac/migrations/*.sql"]
+exclude = ["pypgstac/migrations/*.sql"]
+include = ["pypgstac/migrations/pgstac*0.1.9.sql"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
