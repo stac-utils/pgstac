@@ -57,7 +57,7 @@ WITH t AS (
         ) w
 ),
 w AS (SELECT array_agg(w) as w FROM t)
-SELECT CASE WHEN w IS NULL THEN NULL ELSE partman.create_partition_time('pgstac.items', w) END FROM w;
+SELECT CASE WHEN w IS NULL THEN NULL ELSE partman.create_partition_time('pgstac.items', w, true) END FROM w;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION get_partition(timestamptz) RETURNS text AS $$
@@ -158,19 +158,33 @@ CREATE OR REPLACE FUNCTION upsert_item(data jsonb) RETURNS VOID AS $$
 DECLARE
 partition text;
 q text;
+newcontent jsonb;
 BEGIN
     PERFORM make_partitions(stac_datetime(data));
     partition := get_partition(stac_datetime(data));
     q := format($q$
-        INSERT INTO %I (content) VALUES (data)
+        INSERT INTO %I (content) VALUES ($1)
         ON CONFLICT (id) DO
         UPDATE SET content = EXCLUDED.content
-        WHERE items.content IS DISTINCT FROM EXCLUDED.content;
-        $q$, partition);
-    PERFORM q;
+        WHERE %I.content IS DISTINCT FROM EXCLUDED.content RETURNING content;
+        $q$, partition, partition);
+    EXECUTE q INTO newcontent USING (data);
+    RAISE NOTICE 'newcontent: %', newcontent;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION analyze_empty_partitions() RETURNS VOID AS $$
+DECLARE
+p text;
+BEGIN
+FOR p IN SELECT partition FROM all_items_partitions WHERE est_cnt = 0 LOOP
+    RAISE NOTICE 'Analyzing %', p;
+    EXECUTE format('ANALYZE %I;', p);
+END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
 
 /* Trigger Function to cascade inserts/updates/deletes
 from items table to items_search table */
@@ -247,7 +261,7 @@ CREATE OR REPLACE FUNCTION items_trigger_stmt_func()
 RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-    ANALYZE items;
+    PERFORM analyze_empty_partitions();
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
@@ -262,8 +276,8 @@ FOR EACH STATEMENT EXECUTE PROCEDURE items_trigger_stmt_func();
 View to get a table of available items partitions
 with date ranges
 */
-DROP VIEW IF EXISTS items_partitions;
-CREATE VIEW items_partitions AS
+--DROP VIEW IF EXISTS all_items_partitions CASCADE;
+CREATE OR REPLACE VIEW all_items_partitions AS
 WITH base AS
 (SELECT
     c.oid::pg_catalog.regclass::text as partition,
@@ -280,8 +294,11 @@ SELECT partition, tstzrange(
     t[2]::timestamptz
 ), est_cnt
 FROM base
-WHERE est_cnt >0
 ORDER BY 2 desc;
+
+--DROP VIEW IF EXISTS items_partitions;
+CREATE OR REPLACE VIEW items_partitions AS
+SELECT * FROM all_items_partitions WHERE est_cnt>0;
 
 CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
 SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb
