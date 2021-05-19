@@ -81,7 +81,7 @@ async def run_migration(dsn: str = None):
         except asyncpg.exceptions.UndefinedTableError:
             oldversion = None
     logging.debug(
-        f"Old Version: {oldversion} Migrations Dir: {migrations_dir}"
+        f"Old Version: {oldversion} New Version: {version} Migrations Dir: {migrations_dir}"
     )
     if oldversion == version:
         logging.debug(f"Target database already at version: {version}")
