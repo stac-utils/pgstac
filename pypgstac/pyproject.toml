@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pypgstac"
-version = "0.1.9"
+version = "0.2.3"
 description = ""
 authors = ["David Bitner <bitner@dbspatial.com>"]
 keywords = ["stac", "asyncpg"]
@@ -8,7 +8,7 @@ readme = "README"
 homepage = "https://github.com/stac-utils/pgstac"
 repository = "https://github.com/stac-utils/pgstac"
 exclude = ["pypgstac/migrations/*.sql"]
-include = ["pypgstac/migrations/pgstac*0.1.9.sql"]
+include = ["pypgstac/migrations/pgstac*0.2.3.sql"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -16,6 +16,7 @@ asyncpg = "^0.22.0"
 smart-open = "^4.2.0"
 typer = "^0.3.2"
 asyncio = "^3.4.3"
+orjson = "^3.5.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

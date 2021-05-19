@@ -87,7 +87,9 @@ async def run_migration(dsn: str = None):
         logging.debug(f"Target database already at version: {version}")
         return version
     if oldversion is None:
-        logging.debug(f"No pgstac version set, installing {version} from scratch")
+        logging.debug(
+            f"No pgstac version set, installing {version} from scratch"
+        )
         migration_file = os.path.join(migrations_dir, f"pgstac.{version}.sql")
     else:
         logging.debug(f"Migrating from {oldversion} to {version}.")
@@ -108,7 +110,7 @@ async def run_migration(dsn: str = None):
             await conn.execute(migration_sql)
             await conn.execute(
                 """
-                INSERT INTO pgstac.versions (version)
+                INSERT INTO pgstac.migrations (version)
                 VALUES ($1);
                 """,
                 version,
@@ -136,18 +138,35 @@ class tables(str, Enum):
 
 async def aiter(list: List):
     for i in list:
-        logger.debug(orjson.dumps(i))
-        yield orjson.dumps(i) + b'\n'
+        if isinstance(i, bytes):
+            yield i.decode("utf-8").replace("\\n", "\\\\n").replace(
+                "\\t", "\\\\t"
+            ).encode("utf-8")
+        elif isinstance(i, str):
+            yield i.replace("\\n", "\\\\n").replace("\\t", "\\\\t").encode(
+                "utf-8"
+            )
+        else:
+            yield orjson.dumps(i, option=orjson.OPT_APPEND_NEWLINE).decode(
+                "utf-8"
+            ).replace("\\n", "\\\\n").replace("\\t", "\\\\t").encode("utf-8")
 
 
 async def copy(iter, table: tables, conn: asyncpg.Connection):
-    logging.debug(f"copying to {table} directly")
+    logger.debug(f"copying to {table} directly")
     if isinstance(iter, List):
         logger.debug("Converting List into Async Iterator")
         iter = aiter(iter)
     async with conn.transaction():
         logger.debug("Copying data")
-        await conn.copy_to_table(table, source=iter, columns=["content"])
+        await conn.copy_to_table(
+            table,
+            source=iter,
+            columns=["content"],
+            format="csv",
+            quote="'",
+            delimiter=chr(31),
+        )
         logger.debug("Backfilling partitions")
         await conn.execute(
             f"""
@@ -160,7 +179,7 @@ async def copy(iter, table: tables, conn: asyncpg.Connection):
 async def copy_ignore_duplicates(
     iter, table: tables, conn: asyncpg.Connection
 ):
-    logging.debug(f"inserting to {table} ignoring duplicates")
+    logger.debug(f"inserting to {table} ignoring duplicates")
     if isinstance(iter, List):
         logger.debug("Converting List into Async Iterator")
         iter = aiter(iter)
@@ -172,7 +191,12 @@ async def copy_ignore_duplicates(
         """
         )
         await conn.copy_to_table(
-            "pgstactemp", source=iter, columns=["content"]
+            "pgstactemp",
+            source=iter,
+            columns=["content"],
+            format="csv",
+            quote="'",
+            delimiter=chr(31),
         )
         logger.debug("Data Copied")
         await conn.execute(
@@ -195,7 +219,7 @@ async def copy_ignore_duplicates(
 
 
 async def copy_upsert(iter, table: tables, conn: asyncpg.Connection):
-    logging.debug(f"upserting to {table}")
+    logger.debug(f"upserting to {table}")
     if isinstance(iter, List):
         logger.debug("Converting List into Async Iterator")
         iter = aiter(iter)
@@ -207,7 +231,12 @@ async def copy_upsert(iter, table: tables, conn: asyncpg.Connection):
         """
         )
         await conn.copy_to_table(
-            "pgstactemp", source=iter, columns=["content"]
+            "pgstactemp",
+            source=iter,
+            columns=["content"],
+            format="csv",
+            quote="'",
+            delimiter=chr(31),
         )
         logger.debug("Data Copied")
         if table == "collections":
@@ -233,10 +262,11 @@ async def copy_upsert(iter, table: tables, conn: asyncpg.Connection):
 async def load_iterator(
     iter, table: tables, conn: asyncpg.Connection, method: loadopt = "insert"
 ):
+    logger.debug(f"Load Iterator Connection: {conn}")
     if method == "insert":
-        await copy(iter, tables, conn)
+        await copy(iter, table, conn)
     elif method == "insert_ignore":
-        await copy_ignore_duplicates(iter, tables, conn)
+        await copy_ignore_duplicates(iter, table, conn)
     else:
         await copy_upsert(iter, table, conn)
 
@@ -244,9 +274,10 @@ async def load_iterator(
 async def load_ndjson(
     file: str, table: tables, method: loadopt = "insert", dsn: str = None
 ):
+    print(f"loading {file} into {table} using {method}")
     with open(file, "rb") as f:
         async with DB(dsn) as conn:
-            await load_iterator(f, tables, conn, method)
+            await load_iterator(f, table, conn, method)
 
 
 @app.command()

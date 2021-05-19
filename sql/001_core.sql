@@ -6,7 +6,7 @@ CREATE SCHEMA IF NOT EXISTS pgstac;
 
 SET SEARCH_PATH TO pgstac, public;
 
-CREATE TABLE versions (
+CREATE TABLE migrations (
   version text,
   datetime timestamptz DEFAULT now() NOT NULL
 );
