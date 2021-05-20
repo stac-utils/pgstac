@@ -139,17 +139,22 @@ class tables(str, Enum):
 async def aiter(list: List):
     for i in list:
         if isinstance(i, bytes):
-            yield i.decode("utf-8").replace("\\n", "\\\\n").replace(
-                "\\t", "\\\\t"
-            ).encode("utf-8")
-        elif isinstance(i, str):
-            yield i.replace("\\n", "\\\\n").replace("\\t", "\\\\t").encode(
-                "utf-8"
-            )
+            i = i.decode("utf-8")
+        elif isinstance(i, dict):
+            i = orjson.dumps(i).decode("utf-8")
+        if isinstance(i, str):
+            yield "\n".join(
+                [
+                    i.rstrip().replace(
+                        r"\n", r"\\n"
+                    ).replace(
+                        r"\t", r"\\t"
+                    ).replace(
+                        "'", "''"
+                    )
+                ]).encode("utf-8")
         else:
-            yield orjson.dumps(i, option=orjson.OPT_APPEND_NEWLINE).decode(
-                "utf-8"
-            ).replace("\\n", "\\\\n").replace("\\t", "\\\\t").encode("utf-8")
+            raise Exception(f"Could not parse {i}")
 
 
 async def copy(iter, table: tables, conn: asyncpg.Connection):
