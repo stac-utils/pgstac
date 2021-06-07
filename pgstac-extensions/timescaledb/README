@@ -1,1 +1,0 @@
-This extension enables timescaledb for the items table. The extension must be installed prior to loading any data.

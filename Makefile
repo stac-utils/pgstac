@@ -7,7 +7,7 @@ version:
 
 .PHONY: build-version-migration
 build-version-migration: version
-	cat sql/*.sql <(echo "INSERT INTO migrations (version) ('${VERSION}');") >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql
+	cat sql/*.sql <(echo "INSERT INTO migrations (version) VALUES ('${VERSION}');") >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql
 
 .PHONY: build-pypgstac
 build-pypgstac: version build-version-migration
