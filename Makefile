@@ -15,12 +15,13 @@ build-pypgstac: version build-version-migration
 	echo "__version__ = '${VERSION}'" >pypgstac/__init__.py; \
 	sed -i "/^version/c\version = \"${VERSION}\"" pyproject.toml; \
 	sed -i "/^include/c\include = [\"pypgstac/migrations/pgstac*${VERSION}.sql\"]" pyproject.toml; \
-	poetry build
+	poetry build; \
+	tar -xvf dist/pypgstac-${VERSION}.tar.gz --no-anchored 'setup.py' -O  > setup.py
 
 .PHONY: install-pypgstac
 install-pypgstac: build-pypgstac
 	cd pypgstac; \
-	pip install -U dist/pypgstac-${VERSION}-py3-none-any.whl
+	pip install -U dist/pypgstac-${VERSION}-py3-none-any.whl; \
 
 .PHONY: publish-pypgstac
 publish-pypgstac: build-pypgstac

@@ -207,11 +207,13 @@ op text;
 jp text;
 att_parts RECORD;
 val_str text;
+prop_path text;
 BEGIN
 val_str := lower(jsonb_build_object('a',val)->>'a');
 RAISE NOTICE 'val_str %', val_str;
 
 att_parts := split_stac_path(att);
+prop_path := replace(att_parts.dotpath, 'properties.', '');
 
 op := CASE _op
     WHEN 'eq' THEN '='
@@ -246,9 +248,9 @@ THEN
     raise notice 'jp: %', jp;
     ret := format($q$ properties @? %L $q$, jp);
 ELSIF jsonb_typeof(val) = 'number' THEN
-    ret := format('(%s)::numeric %s %s', att_parts.jspathtext, op, val);
+    ret := format('properties ? %L AND (%s)::numeric %s %s', prop_path, att_parts.jspathtext, op, val);
 ELSE
-    ret := format('%s %s %L', att_parts.jspathtext, op, val_str);
+    ret := format('properties ? %L AND %s %s %L', prop_path ,att_parts.jspathtext, op, val_str);
 END IF;
 RAISE NOTICE 'Op Query: %', ret;
 
