@@ -6,7 +6,7 @@ CREATE SCHEMA IF NOT EXISTS pgstac;
 
 SET SEARCH_PATH TO pgstac, public;
 
-CREATE TABLE versions (
+CREATE TABLE migrations (
   version text,
   datetime timestamptz DEFAULT now() NOT NULL
 );
@@ -109,14 +109,14 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION path_includes(IN path text[], IN includes text[]) RETURNS BOOLEAN AS $$
 WITH t AS (SELECT unnest(includes) i)
 SELECT EXISTS (
-    SELECT 1 FROM t WHERE path @> string_to_array(i, '.')
+    SELECT 1 FROM t WHERE path @> string_to_array(trim(i), '.')
 );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION path_excludes(IN path text[], IN excludes text[]) RETURNS BOOLEAN AS $$
 WITH t AS (SELECT unnest(excludes) e)
 SELECT NOT EXISTS (
-    SELECT 1 FROM t WHERE path @> string_to_array(e, '.')
+    SELECT 1 FROM t WHERE path @> string_to_array(trim(e), '.')
 );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
@@ -167,7 +167,6 @@ FOR rec in
 SELECT * FROM jsonb_obj_paths_filtered(jdata, includes, excludes)
 WHERE jsonb_typeof(value) != 'object'
 LOOP
-  RAISE NOTICE 'path % val %', rec.path, rec.value;
     IF array_length(rec.path,1)>1 THEN
         FOR i IN 1..(array_length(rec.path,1)-1) LOOP
           IF NOT array_to_string(rec.path[1:i],'.') = ANY (created_paths) THEN

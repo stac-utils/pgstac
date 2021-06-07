@@ -1183,4 +1183,4 @@ FROM j
 
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-INSERT INTO migrations (version) VALUES ('0.1.9');
+INSERT INTO migrations (version) VALUES ('0.2.4');

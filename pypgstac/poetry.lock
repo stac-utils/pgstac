@@ -29,17 +29,17 @@ python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 
 [[package]]
 name = "attrs"
-version = "20.3.0"
+version = "21.2.0"
 description = "Classes Without Boilerplate"
 category = "dev"
 optional = false
-python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 
 [package.extras]
-dev = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface", "furo", "sphinx", "pre-commit"]
-docs = ["furo", "sphinx", "zope.interface"]
-tests = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface"]
-tests_no_zope = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six"]
+dev = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "mypy", "pytest-mypy-plugins", "zope.interface", "furo", "sphinx", "sphinx-notfound-page", "pre-commit"]
+docs = ["furo", "sphinx", "zope.interface", "sphinx-notfound-page"]
+tests = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "mypy", "pytest-mypy-plugins", "zope.interface"]
+tests_no_zope = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "mypy", "pytest-mypy-plugins"]
 
 [[package]]
 name = "click"
@@ -64,6 +64,14 @@ description = "More routines for operating on iterables, beyond itertools"
 category = "dev"
 optional = false
 python-versions = ">=3.5"
+
+[[package]]
+name = "orjson"
+version = "3.5.2"
+description = "Fast, correct Python JSON library supporting dataclasses, datetimes, and numpy"
+category = "main"
+optional = false
+python-versions = ">=3.6"
 
 [[package]]
 name = "packaging"
@@ -170,7 +178,7 @@ python-versions = "*"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "bd9f34db4c645ef2584b13ac070ec58a8caf7efb723a668cd6b38ad6c831b3ec"
+content-hash = "acb225124a6957a9e6b5e173f21fad16893af0e35fe0cb6a89c9c657269dc1fd"
 
 [metadata.files]
 asyncio = [
@@ -201,8 +209,8 @@ atomicwrites = [
     {file = "atomicwrites-1.4.0.tar.gz", hash = "sha256:ae70396ad1a434f9c7046fd2dd196fc04b12f9e91ffb859164193be8b6168a7a"},
 ]
 attrs = [
-    {file = "attrs-20.3.0-py2.py3-none-any.whl", hash = "sha256:31b2eced602aa8423c2aea9c76a724617ed67cf9513173fd3a4f03e3a929c7e6"},
-    {file = "attrs-20.3.0.tar.gz", hash = "sha256:832aa3cde19744e49938b91fea06d69ecb9e649c93ba974535d08ad92164f700"},
+    {file = "attrs-21.2.0-py2.py3-none-any.whl", hash = "sha256:149e90d6d8ac20db7a955ad60cf0e6881a3f20d37096140088356da6c716b0b1"},
+    {file = "attrs-21.2.0.tar.gz", hash = "sha256:ef6aaac3ca6cd92904cdd0d83f629a15f18053ec84e6432106f7a4d04ae4f5fb"},
 ]
 click = [
     {file = "click-7.1.2-py2.py3-none-any.whl", hash = "sha256:dacca89f4bfadd5de3d7489b7c8a566eee0d3676333fbb50030263894c38c0dc"},
@@ -215,6 +223,31 @@ colorama = [
 more-itertools = [
     {file = "more-itertools-8.7.0.tar.gz", hash = "sha256:c5d6da9ca3ff65220c3bfd2a8db06d698f05d4d2b9be57e1deb2be5a45019713"},
     {file = "more_itertools-8.7.0-py3-none-any.whl", hash = "sha256:5652a9ac72209ed7df8d9c15daf4e1aa0e3d2ccd3c87f8265a0673cd9cbc9ced"},
+]
+orjson = [
+    {file = "orjson-3.5.2-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:2ba4165883fbef0985bce60bddbf91bc5cea77cc22b1c12fe7a716c6323ab1e7"},
+    {file = "orjson-3.5.2-cp310-cp310-manylinux2014_x86_64.whl", hash = "sha256:cee746d186ba9efa47b9d52a649ee0617456a9a4d7a2cbd3ec06330bb9cb372a"},
+    {file = "orjson-3.5.2-cp36-cp36m-macosx_10_7_x86_64.whl", hash = "sha256:8591a25a31a89cf2a33e30eb516ab028bad2c72fed04e323917114aaedc07c7d"},
+    {file = "orjson-3.5.2-cp36-cp36m-macosx_10_9_universal2.whl", hash = "sha256:38cb8cdbf43eafc6dcbfb10a9e63c80727bb916aee0f75caf5f90e5355b266e1"},
+    {file = "orjson-3.5.2-cp36-cp36m-manylinux2014_aarch64.whl", hash = "sha256:96b403796fc7e44bae843a2a83923925fe048f3a67c10a298fdfc0ff46163c14"},
+    {file = "orjson-3.5.2-cp36-cp36m-manylinux2014_x86_64.whl", hash = "sha256:5b66a62d4c0c44441b23fafcd3d0892296d9793361b14bcc5a5645c88b6a4a71"},
+    {file = "orjson-3.5.2-cp36-none-win_amd64.whl", hash = "sha256:609e93919268fadb871aafb7f550c3fe8d3e8c1305cadcc1610b414113b7034e"},
+    {file = "orjson-3.5.2-cp37-cp37m-macosx_10_7_x86_64.whl", hash = "sha256:200bd4491052d13696456a92d23f086b68b526c2464248733964e8165ac60888"},
+    {file = "orjson-3.5.2-cp37-cp37m-macosx_10_9_universal2.whl", hash = "sha256:cc614bf6bfe0181e51dd98a9c53669f08d4d8641efbf1a287113da3059773dea"},
+    {file = "orjson-3.5.2-cp37-cp37m-manylinux2014_aarch64.whl", hash = "sha256:43576bed3be300e9c02629a8d5fb3340fe6474765e6eee9610067def4b3ac19c"},
+    {file = "orjson-3.5.2-cp37-cp37m-manylinux2014_x86_64.whl", hash = "sha256:acd735718b531b78858a7e932c58424c5a3e39e04d61bba3d95ce8a8498ea9e9"},
+    {file = "orjson-3.5.2-cp37-none-win_amd64.whl", hash = "sha256:7503145ffd1ae90d487860b97e2867ec61c2c8f001209bb12700ba7833df8ddf"},
+    {file = "orjson-3.5.2-cp38-cp38-macosx_10_7_x86_64.whl", hash = "sha256:9c37cf3dbc9c81abed04ba4854454e9f0d8ac7c05fb6c4f36545733e90be6af2"},
+    {file = "orjson-3.5.2-cp38-cp38-macosx_10_9_universal2.whl", hash = "sha256:8e6ef00ddc637b7d13926aaccdabac363efdfd348c132410eb054c27e2eae6a7"},
+    {file = "orjson-3.5.2-cp38-cp38-manylinux2014_aarch64.whl", hash = "sha256:9d0834ca40c6e467fa1f1db3f83a8c3562c03eb2b7067ad09de5019592edb88f"},
+    {file = "orjson-3.5.2-cp38-cp38-manylinux2014_x86_64.whl", hash = "sha256:d4a2ddc6342a8280dafaa69827b387b95856ef0a6c5812fe91f5bd21ddd2ef36"},
+    {file = "orjson-3.5.2-cp38-none-win_amd64.whl", hash = "sha256:f54f8bcf24812a524e8904a80a365f7a287d82fc6ebdee528149616070abe5ab"},
+    {file = "orjson-3.5.2-cp39-cp39-macosx_10_7_x86_64.whl", hash = "sha256:8b429471398ea37d848fb53bca6a8c42fb776c278f4fcb6a1d651b8f1fb64947"},
+    {file = "orjson-3.5.2-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:13fd458110fbe019c2a67ee539678189444f73bc09b27983c9b42663c63e0445"},
+    {file = "orjson-3.5.2-cp39-cp39-manylinux2014_aarch64.whl", hash = "sha256:8bf1145a06e1245f0c8a8c32df6ffe52d214eb4eb88c3fb32e4ed14e3dc38e0e"},
+    {file = "orjson-3.5.2-cp39-cp39-manylinux2014_x86_64.whl", hash = "sha256:7e3434010e3f0680e92bb0a6094e4d5c939d0c4258c76397c6bd5263c7d62e86"},
+    {file = "orjson-3.5.2-cp39-none-win_amd64.whl", hash = "sha256:df9730cc8cd22b3f54aa55317257f3279e6300157fc0f4ed4424586cd7eb012d"},
+    {file = "orjson-3.5.2.tar.gz", hash = "sha256:f385253a6ddac37ea422ec2c0d35772b4f5bf0dc0803ce44543bf7e530423ef8"},
 ]
 packaging = [
     {file = "packaging-20.9-py2.py3-none-any.whl", hash = "sha256:67714da7f7bc052e064859c05c595155bd1ee9f69f76557e21f051443c20947a"},
