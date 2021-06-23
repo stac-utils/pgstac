@@ -40,12 +40,39 @@ ALTER TABLE items_search_template ADD PRIMARY KEY (id);
 DELETE from partman.part_config WHERE parent_table = 'pgstac.items';
 SELECT partman.create_parent(
     'pgstac.items',
-    'datetime',
+    'stac_datetime(content)',
     'native',
     'weekly',
     p_template_table := 'pgstac.items_template',
     p_premake := 4
 );
+
+CREATE OR REPLACE FUNCTION add_datetime_constraint(_partition_name text) RETURNS VOID AS $$
+DECLARE
+_constraint_name text := concat(_partition_name,'_datetime_constraint');
+st timestamptz;
+et timestamptz;
+BEGIN
+IF NOT EXISTS (
+    SELECT 1 FROM information_schema.constraint_column_usage
+    WHERE table_name = _partition_name AND constraint_name = _constraint_name
+) THEN
+    SELECT lower(tstzrange), upper(tstzrange) INTO st, et FROM all_items_partitions WHERE partition = _partition_name;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    EXECUTE format($q$
+        ALTER TABLE pgstac.%I ADD CONSTRAINT %I CHECK (datetime >= '%s'::timestamptz AND datetime < '%s'::timestamptz);
+        $q$,
+        _partition_name,
+        _constraint_name,
+        st::text,
+        et::text
+    );
+END IF;
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION make_partitions(st timestamptz, et timestamptz DEFAULT NULL) RETURNS BOOL AS $$
 WITH t AS (
@@ -180,9 +207,10 @@ DECLARE
 p text;
 BEGIN
 FOR p IN SELECT partition FROM all_items_partitions WHERE est_cnt = 0 LOOP
-    RAISE NOTICE 'Analyzing %', p;
+    --RAISE NOTICE 'Analyzing %', p;
     EXECUTE format('ANALYZE %I;', p);
 END LOOP;
+    PERFORM add_datetime_constraint(partition) from all_items_partitions;
 END;
 $$ LANGUAGE PLPGSQL;
 
