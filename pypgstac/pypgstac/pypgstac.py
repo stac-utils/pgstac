@@ -148,7 +148,6 @@ async def aiter(list: List):
                     i.rstrip()
                     .replace(r"\n", r"\\n")
                     .replace(r"\t", r"\\t")
-                    .replace("'", "'")
                 ]
             ).encode("utf-8")
             yield line
