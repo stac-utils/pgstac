@@ -23,12 +23,18 @@ install-pypgstac: build-pypgstac
 	cd pypgstac; \
 	pip install -U dist/pypgstac-${VERSION}-py3-none-any.whl; \
 
+.PHONY: push-git-tag
+push-git-tag:
+	git tag -a v${VERSION}; \
+	git push origin v${VERSION}
+
+
 .PHONY: publish-pypgstac
-publish-pypgstac: build-pypgstac
+publish-pypgstac: build-pypgstac push-git-tag
 	cd pypgstac; \
 	poetry publish
 
-.PHONY: docker-repo
+.PHONY: docker-repo push-git-tag
 docker-repo:
 	[ -z "${DOCKER_REPO}" ] &&  { echo "DOCKER_REPO variable must be set"; exit 1; } || echo "Setting verstion to ${DOCKER_REPO}"
 
