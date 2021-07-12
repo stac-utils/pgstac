@@ -1,5 +1,5 @@
 SET SEARCH_PATH TO pgstac, public;
-
+BEGIN;
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN
@@ -250,3 +250,5 @@ FROM j
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 INSERT INTO migrations (version) VALUES ('0.2.5');
+
+COMMIT;
