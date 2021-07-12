@@ -164,7 +164,7 @@ SELECT string_agg(rsort,', ') FROM sort_base(_sort);
 $$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
-CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS box3d AS $$
+CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN
         ST_SetSRID(ST_MakeEnvelope(
