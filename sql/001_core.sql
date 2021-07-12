@@ -14,16 +14,25 @@ CREATE TABLE versions (
 /* converts a jsonb text array to a pg text[] array */
 CREATE OR REPLACE FUNCTION textarr(_js jsonb)
   RETURNS text[] AS $$
-  SELECT ARRAY(SELECT jsonb_array_elements_text(_js));
+  SELECT
+    CASE jsonb_typeof(_js)
+    WHEN 'array' THEN ARRAY(SELECT jsonb_array_elements_text(_js))
+    ELSE ARRAY[jsonb_build_object('a',_js)->>'a']
+    END;
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /*
 converts a jsonb text array to comma delimited list of identifer quoted
 useful for constructing column lists for selects
 */
-CREATE OR REPLACE FUNCTION array_idents(_js jsonb)
+CREATE OR REPLACE FUNCTION array_idents(_js jsonb, delim text DEFAULT ',')
   RETURNS text AS $$
-  SELECT string_agg(quote_ident(v),',') FROM jsonb_array_elements_text(_js) v;
+  SELECT string_agg(quote_ident(v),delim) FROM jsonb_array_elements_text(_js) v;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_idents(_a text[], delim text DEFAULT ',')
+  RETURNS text AS $$
+  SELECT string_agg(quote_ident(v),delim) FROM unnest(_a) v;
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 

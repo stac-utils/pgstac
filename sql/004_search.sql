@@ -98,7 +98,7 @@ CREATE OR REPLACE FUNCTION split_stac_path(IN path text, OUT col text, OUT dotpa
 WITH col AS (
     SELECT
         CASE WHEN
-            split_part(path, '.', 1) IN ('id', 'stac_version', 'stac_extensions','geometry','properties','assets','collection_id','datetime','links', 'extra_fields') THEN split_part(path, '.', 1)
+            split_part(path, '.', 1) IN ('id', 'stac_version', 'stac_extensions','geometry','properties','assets','collection_id','datetime','links') THEN split_part(path, '.', 1)
         ELSE 'properties'
         END AS col
 ),
@@ -430,6 +430,7 @@ IF _search ? 'datetime' THEN
     _dtrange := search_dtrange(_search->'datetime');
     _token_dtrange := _dtrange;
 END IF;
+RAISE NOTICE '_dtrange: % _token_dtrange: %', _dtrange, _token_dtrange;
 
 -- Get the paging token
 IF _search ? 'token' THEN
@@ -444,11 +445,11 @@ IF _search ? 'token' THEN
         OR
         (not is_prev AND _dtsort = 'ASC')
     THEN
-        _token_dtrange := tstzrange(_token_record.datetime, 'infinity');
+        _token_dtrange := _dtrange * tstzrange(_token_record.datetime, 'infinity');
     ELSIF
         _dtsort IS NOT NULL
     THEN
-        _token_dtrange := tstzrange('-infinity',_token_record.datetime);
+        _token_dtrange := _dtrange * tstzrange('-infinity',_token_record.datetime);
     END IF;
     IF is_prev THEN
         tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
@@ -458,7 +459,8 @@ IF _search ? 'token' THEN
     END IF;
 END IF;
 RAISE NOTICE 'timing: %', age(clock_timestamp(), qstart);
-RAISE NOTICE 'tok_q: % _token_dtrange: %', tok_q, _token_dtrange;
+RAISE NOTICE 'tok_q: % _dtrange: % _token_dtrange: % tokendate: %', tok_q, _dtrange, _token_dtrange, _token_record.datetime;
+
 
 IF _search ? 'ids' THEN
     RAISE NOTICE 'searching solely based on ids... %',_search;
