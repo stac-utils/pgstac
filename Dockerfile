@@ -25,8 +25,10 @@ RUN \
         python3-pip \
         python3-setuptools \
         # git \
-    && pip3 install -U pip setuptools packaging migra[pg] \
-    && apt-get remove -y apt-transport-https software-properties-common build-essential python3-pip python3-setuptools \
+    && pip3 install -U pip setuptools packaging \
+    && pip3 install -U psycopg2-binary \
+    && pip3 install -U migra[pg] \
+    && apt-get remove -y apt-transport-https software-properties-common build-essential python3-pip python3-dev python3-setuptools \
     && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 

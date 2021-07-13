@@ -164,7 +164,7 @@ SELECT string_agg(rsort,', ') FROM sort_base(_sort);
 $$ LANGUAGE SQL PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
 
 
-CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS box3d AS $$
+CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN
         ST_SetSRID(ST_MakeEnvelope(
@@ -218,8 +218,8 @@ prop_path := replace(att_parts.dotpath, 'properties.', '');
 op := CASE _op
     WHEN 'eq' THEN '='
     WHEN 'ge' THEN '>='
-    WHEN 'gt' THEN '>'
-    WHEN 'le' THEN '<='
+    WHEN 'gte' THEN '>'
+    WHEN 'lte' THEN '<='
     WHEN 'lt' THEN '<'
     WHEN 'ne' THEN '!='
     WHEN 'neq' THEN '!='
@@ -446,11 +446,11 @@ IF _search ? 'token' THEN
         OR
         (not is_prev AND _dtsort = 'ASC')
     THEN
-        _token_dtrange := tstzrange(_token_record.datetime, 'infinity');
+        _token_dtrange := _dtrange * tstzrange(_token_record.datetime, 'infinity');
     ELSIF
         _dtsort IS NOT NULL
     THEN
-        _token_dtrange := tstzrange('-infinity',_token_record.datetime);
+        _token_dtrange := _dtrange * tstzrange('-infinity',_token_record.datetime);
     END IF;
     IF is_prev THEN
         tok_q := filter_by_order(tok_val,  _search->'sortby', 'first');
