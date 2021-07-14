@@ -30,11 +30,11 @@ push-git-tag:
 
 
 .PHONY: publish-pypgstac
-publish-pypgstac: build-pypgstac push-git-tag
+publish-pypgstac: build-pypgstac
 	cd pypgstac; \
 	poetry publish
 
-.PHONY: docker-repo push-git-tag
+.PHONY: docker-repo
 docker-repo:
 	[ -z "${DOCKER_REPO}" ] &&  { echo "DOCKER_REPO variable must be set"; exit 1; } || echo "Setting verstion to ${DOCKER_REPO}"
 

@@ -57,6 +57,6 @@ RAISE NOTICE 'Op Query: %', ret;
 return ret;
 END;
 $$ LANGUAGE PLPGSQL;
-INSERT INTO migrations (version) VALUES ('0.2.6');
+INSERT INTO migrations (version) VALUES ('0.2.7');
 
 COMMIT;
