@@ -143,22 +143,25 @@ async def aiter(list: List):
         elif isinstance(i, dict):
             i = orjson.dumps(i).decode("utf-8")
         if isinstance(i, str):
-            line = "\n".join(
+            yield "\n".join(
                 [
-                    i.rstrip()
-                    .replace(r"\n", r"\\n")
-                    .replace(r"\t", r"\\t")
-                ]
-            ).encode("utf-8")
-            yield line
+                    i.rstrip().replace(
+                        r"\n", r"\\n"
+                    ).replace(
+                        r"\t", r"\\t"
+                    ).replace(
+                        "'", "''"
+                    )
+                ]).encode("utf-8")
         else:
             raise Exception(f"Could not parse {i}")
 
 
 async def copy(iter, table: tables, conn: asyncpg.Connection):
     logger.debug(f"copying to {table} directly")
-    logger.debug(f"iter: {iter}")
-    iter = aiter(iter)
+    if isinstance(iter, List):
+        logger.debug("Converting List into Async Iterator")
+        iter = aiter(iter)
     async with conn.transaction():
         logger.debug("Copying data")
         await conn.copy_to_table(
@@ -166,7 +169,7 @@ async def copy(iter, table: tables, conn: asyncpg.Connection):
             source=iter,
             columns=["content"],
             format="csv",
-            quote=chr(27),
+            quote="'",
             delimiter=chr(31),
         )
         logger.debug("Backfilling partitions")
@@ -182,7 +185,9 @@ async def copy_ignore_duplicates(
     iter, table: tables, conn: asyncpg.Connection
 ):
     logger.debug(f"inserting to {table} ignoring duplicates")
-    iter = aiter(iter)
+    if isinstance(iter, List):
+        logger.debug("Converting List into Async Iterator")
+        iter = aiter(iter)
     async with conn.transaction():
         await conn.execute(
             """
@@ -195,7 +200,7 @@ async def copy_ignore_duplicates(
             source=iter,
             columns=["content"],
             format="csv",
-            quote=chr(27),
+            quote="'",
             delimiter=chr(31),
         )
         logger.debug("Data Copied")
@@ -220,7 +225,9 @@ async def copy_ignore_duplicates(
 
 async def copy_upsert(iter, table: tables, conn: asyncpg.Connection):
     logger.debug(f"upserting to {table}")
-    iter = aiter(iter)
+    if isinstance(iter, List):
+        logger.debug("Converting List into Async Iterator")
+        iter = aiter(iter)
     async with conn.transaction():
         await conn.execute(
             """
@@ -233,7 +240,7 @@ async def copy_upsert(iter, table: tables, conn: asyncpg.Connection):
             source=iter,
             columns=["content"],
             format="csv",
-            quote=chr(27),
+            quote="'",
             delimiter=chr(31),
         )
         logger.debug("Data Copied")
