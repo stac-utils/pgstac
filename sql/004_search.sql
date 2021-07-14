@@ -217,8 +217,8 @@ prop_path := replace(att_parts.dotpath, 'properties.', '');
 
 op := CASE _op
     WHEN 'eq' THEN '='
-    WHEN 'ge' THEN '>='
-    WHEN 'gte' THEN '>'
+    WHEN 'gte' THEN '>='
+    WHEN 'gt' THEN '>'
     WHEN 'lte' THEN '<='
     WHEN 'lt' THEN '<'
     WHEN 'ne' THEN '!='
