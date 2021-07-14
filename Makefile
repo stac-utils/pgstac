@@ -7,7 +7,8 @@ version:
 
 .PHONY: build-version-migration
 build-version-migration: version
-	cat sql/*.sql <(echo "INSERT INTO migrations (version) VALUES ('${VERSION}');") >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql
+	echo "INSERT INTO migrations (version) VALUES ('${VERSION}');" >sql/999_version.sql
+	cat sql/*.sql >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql
 
 .PHONY: build-pypgstac
 build-pypgstac: version build-version-migration
@@ -30,11 +31,11 @@ push-git-tag:
 
 
 .PHONY: publish-pypgstac
-publish-pypgstac: build-pypgstac push-git-tag
+publish-pypgstac: build-pypgstac
 	cd pypgstac; \
 	poetry publish
 
-.PHONY: docker-repo push-git-tag
+.PHONY: docker-repo
 docker-repo:
 	[ -z "${DOCKER_REPO}" ] &&  { echo "DOCKER_REPO variable must be set"; exit 1; } || echo "Setting verstion to ${DOCKER_REPO}"
 
