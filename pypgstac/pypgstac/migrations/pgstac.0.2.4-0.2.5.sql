@@ -1,5 +1,6 @@
 SET SEARCH_PATH TO pgstac, public;
 BEGIN;
+DROP FUNCTION IF EXISTS bbox_geom;
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN
