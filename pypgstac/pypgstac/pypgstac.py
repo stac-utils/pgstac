@@ -93,9 +93,7 @@ async def run_migration(dsn: Optional[str] = None) -> str:
         logging.debug(f"Target database already at version: {version}")
         return version
     if oldversion is None:
-        logging.debug(
-            f"No pgstac version set, installing {version} from scratch"
-        )
+        logging.debug(f"No pgstac version set, installing {version} from scratch")
         migration_file = os.path.join(migrations_dir, f"pgstac.{version}.sql")
     else:
         logging.debug(f"Migrating from {oldversion} to {version}.")
@@ -134,7 +132,7 @@ async def run_migration(dsn: Optional[str] = None) -> str:
 def migrate(dsn: Optional[str] = None) -> None:
     """Migrate a pgstac database"""
     version = asyncio.run(run_migration(dsn))
-    typer.echo(f'pgstac version {version}')
+    typer.echo(f"pgstac version {version}")
 
 
 class loadopt(str, Enum):
@@ -147,8 +145,9 @@ class tables(str, Enum):
     items = "items"
     collections = "collections"
 
+
 # Types of iterable that load_iterator can support
-T = TypeVar('T', Iterable[bytes], Iterable[Dict[str, Any]], Iterable[str])
+T = TypeVar("T", Iterable[bytes], Iterable[Dict[str, Any]], Iterable[str])
 
 
 async def aiter(list: T) -> AsyncGenerator[bytes, None]:
@@ -161,15 +160,12 @@ async def aiter(list: T) -> AsyncGenerator[bytes, None]:
         elif isinstance(item, str):
             item_str = item
         else:
-            raise ValueError(f"Cannot load iterator with values of type {type(item)} (value {item})")
-
+            raise ValueError(
+                f"Cannot load iterator with values of type {type(item)} (value {item})"
+            )
 
         line = "\n".join(
-            [
-                item_str.rstrip()
-                .replace(r"\n", r"\\n")
-                .replace(r"\t", r"\\t")
-            ]
+            [item_str.rstrip().replace(r"\n", r"\\n").replace(r"\t", r"\\t")]
         ).encode("utf-8")
         yield line
 
@@ -306,20 +302,16 @@ def load(
     table: tables,
     file: str,
     dsn: str = None,
-    method: loadopt = typer.Option(
-        "insert", prompt="How to deal conflicting ids"
-    ),
+    method: loadopt = typer.Option("insert", prompt="How to deal conflicting ids"),
 ) -> None:
     "Load STAC data into a pgstac database."
-    typer.echo(
-        asyncio.run(
-            load_ndjson(file=file, table=table, dsn=dsn, method=method)
-        )
-    )
+    typer.echo(asyncio.run(load_ndjson(file=file, table=table, dsn=dsn, method=method)))
+
 
 @app.command()
 def pgready(dsn: Optional[str] = None) -> None:
     """Wait for a pgstac database to accept connections"""
+
     async def wait_on_connection() -> bool:
         cnt = 0
 
@@ -337,7 +329,6 @@ def pgready(dsn: Optional[str] = None) -> None:
             except Exception:
                 time.sleep(0.1)
                 cnt += 1
-
 
     asyncio.run(wait_on_connection())
 
