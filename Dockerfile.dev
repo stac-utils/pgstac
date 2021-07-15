@@ -1,0 +1,15 @@
+FROM python:3.8-slim
+
+ENV CURL_CA_BUNDLE /etc/ssl/certs/ca-certificates.crt
+
+RUN mkdir -p /opt/src/pypgstac
+
+WORKDIR /opt/src/pypgstac
+
+COPY pypgstac/requirements-dev.txt /opt/src/pypgstac/requirements-dev.txt
+RUN pip install -r requirements-dev.txt
+
+COPY pypgstac /opt/src/pypgstac
+RUN pip install -e .
+
+WORKDIR /opt/src

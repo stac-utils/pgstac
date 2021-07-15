@@ -1,0 +1,33 @@
+services:
+  dev:
+    container_name: pgstac-dev
+    image: pgstac-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    depends_on:
+      - database
+    volumes:
+      - ./:/opt/src
+    environment:
+      - PGUSER=username
+      - PGPASSWORD=password
+      - PGHOST=database
+      - PGDATABASE=postgis
+  database:
+    container_name: pqgstac-db
+    image: pqstac-db
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - POSTGRES_USER=username
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=postgis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgstac-pgdata:/var/lib/postgresql/data
+      - ./:/opt/src
+volumes:
+  pgstac-pgdata:
