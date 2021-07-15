@@ -1,2 +1,6 @@
 .envrc
 pypgstac/dist
+*.pyc
+*.egg-info
+*.eggs
+venv
