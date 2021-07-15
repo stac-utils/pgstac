@@ -324,7 +324,7 @@ def pgready(dsn: Optional[str] = None) -> None:
                 raise Exception("Unable to connect to database")
             try:
                 print(".", end="", flush=True)
-                conn = await asyncpg.connect()
+                conn = await asyncpg.connect(dsn=dsn)
                 await conn.execute("SELECT 1")
                 await conn.close()
                 print("success!")
