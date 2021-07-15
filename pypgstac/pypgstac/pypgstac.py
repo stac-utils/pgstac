@@ -1,5 +1,5 @@
 import asyncio
-from io import TextIOWrapper
+from io import BufferedIOBase
 import os
 import time
 from typing import Any, AsyncGenerator, Dict, Iterable, Optional, TypeVar
@@ -110,7 +110,7 @@ async def run_migration(dsn: Optional[str] = None) -> str:
         )
 
     open_migration_file = open(migration_file)
-    if isinstance(open_migration_file, TextIOWrapper):
+    if isinstance(open_migration_file, BufferedIOBase):
         with open_migration_file as f:
             migration_sql = f.read()
             logging.debug(migration_sql)
@@ -170,6 +170,7 @@ async def aiter(list: T) -> AsyncGenerator[bytes, None]:
         line = "\n".join(
             [item_str.rstrip().replace(r"\n", r"\\n").replace(r"\t", r"\\t")]
         ).encode("utf-8")
+
         yield line
 
 
@@ -292,7 +293,7 @@ async def load_ndjson(
 ) -> None:
     print(f"loading {file} into {table} using {method}")
     open_file = open(file, "rb")
-    if isinstance(open_file, TextIOWrapper):
+    if isinstance(open_file, BufferedIOBase):
         with open_file as f:
             async with DB(dsn) as conn:
                 await load_iterator(f, table, conn, method)
