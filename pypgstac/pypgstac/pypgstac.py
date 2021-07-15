@@ -2,7 +2,7 @@ import asyncio
 from io import TextIOWrapper
 import os
 import time
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, TypeVar, Union
+from typing import Any, AsyncGenerator, Dict, Iterable, Optional, TypeVar
 
 import asyncpg
 from asyncpg.connection import Connection
@@ -87,7 +87,9 @@ async def run_migration(dsn: Optional[str] = None) -> str:
         except asyncpg.exceptions.UndefinedTableError:
             oldversion = None
     logging.debug(
-        f"Old Version: {oldversion} New Version: {version} Migrations Dir: {migrations_dir}"
+        f"Old Version: {oldversion} "
+        f"New Version: {version} "
+        f"Migrations Dir: {migrations_dir}"
     )
     if oldversion == version:
         logging.debug(f"Target database already at version: {version}")
@@ -103,7 +105,8 @@ async def run_migration(dsn: Optional[str] = None) -> str:
 
     if not os.path.exists(migration_file):
         raise Exception(
-            f"Pypgstac does not have a migration from {oldversion} to {version} ({migration_file})"
+            "Pypgstac does not have a migration "
+            f"from {oldversion} to {version} ({migration_file})"
         )
 
     open_migration_file = open(migration_file)
@@ -186,7 +189,7 @@ async def copy(iter: T, table: tables, conn: asyncpg.Connection) -> None:
         )
         logger.debug("Backfilling partitions")
         await conn.execute(
-            f"""
+            """
             SELECT backfill_partitions();
         """
         )
@@ -254,7 +257,7 @@ async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
         logger.debug("Data Copied")
         if table == "collections":
             await conn.execute(
-                f"""
+                """
                 INSERT INTO collections (content)
                 SELECT content FROM pgstactemp
                 ON CONFLICT (id) DO UPDATE
@@ -265,7 +268,7 @@ async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
         if table == "items":
             logger.debug("Upserting Data")
             await conn.execute(
-                f"""
+                """
                 SELECT upsert_item(content)
                 FROM pgstactemp;
             """
