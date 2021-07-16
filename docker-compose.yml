@@ -15,8 +15,8 @@ services:
       - PGHOST=database
       - PGDATABASE=postgis
   database:
-    container_name: pqgstac-db
-    image: pqstac-db
+    container_name: pgstac-db
+    image: pgstac-db
     build:
       context: .
       dockerfile: Dockerfile
