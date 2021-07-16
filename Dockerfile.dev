@@ -12,4 +12,6 @@ RUN pip install -r requirements-dev.txt
 COPY pypgstac /opt/src/pypgstac
 RUN pip install -e .
 
+ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
+
 WORKDIR /opt/src
