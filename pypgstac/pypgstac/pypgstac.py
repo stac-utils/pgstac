@@ -167,11 +167,12 @@ async def aiter(list: T) -> AsyncGenerator[bytes, None]:
                 f"Cannot load iterator with values of type {type(item)} (value {item})"
             )
 
-        line = "\n".join(
+        lines = "\n".join(
             [item_str.rstrip().replace(r"\n", r"\\n").replace(r"\t", r"\\t")]
-        ).encode("utf-8")
+        )
+        encoded_lines = (lines + "\n").encode("utf-8")
 
-        yield line
+        yield encoded_lines
 
 
 async def copy(iter: T, table: tables, conn: asyncpg.Connection) -> None:
