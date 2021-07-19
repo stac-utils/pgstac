@@ -6,6 +6,7 @@
 \pset format unaligned
 \pset tuples_only true
 \pset pager off
+\timing off
 
 -- Revert all changes on failure.
 \set ON_ERROR_ROLLBACK 1
@@ -133,7 +134,6 @@ SELECT has_function('pgstac'::name, 'filter_by_order', ARRAY['text','jsonb','tex
 SELECT has_function('pgstac'::name, 'filter_by_order', ARRAY['item','jsonb','text']);
 SELECT has_function('pgstac'::name, 'search_dtrange', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'search', ARRAY['jsonb']);
-
 
 -- Finish the tests and clean up.
 SELECT * FROM finish();
