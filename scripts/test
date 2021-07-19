@@ -1,0 +1,32 @@
+#!/bin/bash
+
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0") [--dev, --db, --migrations, --deploy]
+Runs tests for the project.
+
+"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    echo "Running database tests..."
+    # TODO: Fix these tests
+    # scripts/server --detach;
+    # docker-compose  \
+    #     run --rm \
+    #     -e PGUSER=username \
+    #     -e PGPASSWORD=password \
+    #     -e PGHOST=database \
+    #     database /opt/src/test/test.sh;
+
+    echo "Running pypgstac tests..."
+    docker-compose  \
+        run --rm \
+        dev scripts/bin/test;
+fi

@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0")
+Runs tests for the project.
+
+This scripts is meant to be run inside the dev container.
+
+"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+
+    echo "Running mypy..."
+    mypy pypgstac/pypgstac pypgstac/tests
+
+    echo "Running black..."
+    black --check pypgstac/pypgstac pypgstac/tests
+
+    echo "Running flake8..."
+    flake8 pypgstac/pypgstac pypgstac/tests
+
+    echo "Running unit tests..."
+    python -m unittest discover pypgstac/tests
+
+fi

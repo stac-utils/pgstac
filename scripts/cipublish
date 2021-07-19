@@ -1,0 +1,57 @@
+#!/bin/bash
+
+set -e
+
+if [[ -n "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0")
+Publish pypgstac
+
+Options:
+--test    Publish to test pypi
+"
+}
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+    key="$1"
+    case $key in
+
+        --help)
+        usage
+        exit 0
+        shift
+        ;;
+
+        --test)
+        TEST_PYPI="--repository testpypi"
+        shift
+        ;;
+
+        *)    # unknown option
+        POSITIONAL+=("$1") # save it in an array for later
+        shift # past argument
+        ;;
+    esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+# Fail if this isn't CI and we aren't publishing to test pypi
+if [ -z "${TEST_PYPI}" ] && [ -z "${CI}" ]; then
+    echo "Only CI can publish to pypi"
+    exit 1
+fi
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    pushd pypgstac
+    rm -rf dist
+    pip install build twine
+    python -m build --sdist --wheel
+    twine upload ${TEST_PYPI} dist/*
+    popd
+fi

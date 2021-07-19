@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo $1
+
+    echo -n \
+        "Usage: $(basename "$0") [--detach]
+Runs the development database.
+
+--detach: Run in detached mode.
+"
+}
+
+DETACH_ARG=""
+
+while [[ "$#" > 0 ]]; do case $1 in
+    --detach)
+        DETACH_ARG="--detach"
+        shift
+        ;;
+    --help)
+        usage
+        exit 0
+        shift
+        ;;
+    *) break ;;
+    esac; done
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    docker-compose \
+        -f docker-compose.yml \
+        up ${DETACH_ARG} $@
+fi
