@@ -47,24 +47,3 @@ CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
 SELECT jsonb_agg(content) FROM collections;
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
-
-
-
-
-
-
-/* CREATE OR REPLACE FUNCTION collections_trigger_func()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF pg_trigger_depth() = 1 THEN
-        PERFORM create_collection(NEW.content);
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
-
-CREATE TRIGGER collections_trigger
-BEFORE INSERT ON collections
-FOR EACH ROW EXECUTE PROCEDURE collections_trigger_func();
- */

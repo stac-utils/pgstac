@@ -17,15 +17,23 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
-SELECT plan(50);
+SELECT plan(62);
 --SELECT * FROM no_plan();
 
 -- Run the tests.
 
 -- Core
+
+-- Check that schema exists
 SELECT has_schema('pgstac'::name);
+
+-- Check that PostGIS and PG_Partman extensions are installed and available on the path
 SELECT has_extension('postgis');
 SELECT has_extension('pg_partman');
+
+SELECT has_table('pgstac'::name, 'migrations'::name);
+
+
 SELECT has_function('pgstac'::name, 'textarr', ARRAY['jsonb']);
 SELECT results_eq(
     $$ SELECT textarr('["a","b","c"]'::jsonb) $$,
@@ -46,18 +54,29 @@ SELECT results_eq(
     $$ SELECT '{"a":1,"b":"b"}'::jsonb $$,
     'properties_idx returns slimmed lower case jsonb'
 );
+
+SELECT has_function('pgstac'::name, 'stac_geom', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'stac_datetime', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'jsonb_paths', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'jsonb_obj_paths', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'jsonb_val_paths', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'path_includes', ARRAY['text[]','text[]']);
+SELECT has_function('pgstac'::name, 'path_excludes', ARRAY['text[]','text[]']);
+SELECT has_function('pgstac'::name, 'jsonb_obj_paths_filtered', ARRAY['jsonb','text[]','text[]']);
+SELECT has_function('pgstac'::name, 'empty_arr', ARRAY['anyarray']);
+SELECT has_function('pgstac'::name, 'filter_jsonb', ARRAY['jsonb','text[]','text[]']);
+
+
 -- Collections
 SELECT has_table('pgstac'::name, 'collections'::name);
 SELECT col_is_pk('pgstac'::name, 'collections'::name, 'id', 'collections has primary key');
-SELECT has_function('pgstac'::name, 'create_collection', ARRAY['jsonb']);
-SELECT has_function('pgstac'::name, 'get_collection', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'all_collections', NULL);
-SELECT has_function('pgstac'::name, 'collection_bbox', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'collection_temporal_extent', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'update_collection_extents', NULL);
 
-SELECT has_function('pgstac'::name, 'collections_trigger_func', 'collections trigger function exists');
-SELECT has_trigger('pgstac'::name, 'collections', 'collections_trigger', 'trigger exists on collections table');
+SELECT has_function('pgstac'::name, 'create_collection', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'update_collection', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'upsert_collection', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'get_collection', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'delete_collection', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'all_collections', NULL);
 
 
 
@@ -65,29 +84,37 @@ SELECT has_trigger('pgstac'::name, 'collections', 'collections_trigger', 'trigge
 
 -- Items
 SELECT has_table('pgstac'::name, 'items'::name);
-SELECT col_is_pk('pgstac'::name, 'items', 'id', NULL);
 
-SELECT has_table('pgstac'::name, 'items_search'::name);
---SELECT col_is_pk('pgstac'::name, 'items_search'::name, 'id', 'id should be primary key');
-SELECT is_indexed('pgstac'::name, 'items_search'::name, ARRAY['datetime','id']);
-SELECT is_indexed('pgstac'::name, 'items_search'::name, 'properties');
-SELECT is_indexed('pgstac'::name, 'items_search'::name, 'geometry');
-SELECT is_indexed('pgstac'::name, 'items_search'::name, 'collection_id');
+SELECT is_indexed('pgstac'::name, 'items'::name, ARRAY['datetime','id']);
+SELECT is_indexed('pgstac'::name, 'items'::name, 'properties');
+SELECT is_indexed('pgstac'::name, 'items'::name, 'geometry');
+SELECT is_indexed('pgstac'::name, 'items'::name, 'collection_id');
 
 SELECT has_type('pgstac'::name, 'item'::name);
-SELECT is_partitioned('pgstac'::name,'items_search'::name);
+SELECT is_partitioned('pgstac'::name,'items'::name);
 
 
-SELECT has_function('pgstac'::name, 'feature_to_item', ARRAY['jsonb']);
-SELECT has_function('pgstac'::name, 'features_to_items', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'get_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'delete_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'create_item', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'update_item', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'upsert_item', ARRAY['jsonb']);
 
-SELECT has_function('pgstac'::name, 'items_trigger_func', 'items trigger function exists');
-SELECT has_trigger('pgstac'::name, 'items'::name, 'items_trigger', 'items table has trigger');
 
-SELECT has_view('pgstac'::name, 'items_search_partitions'::name, 'items_search_partitions view exists');
+
+SELECT has_function('pgstac'::name, 'analyze_empty_partitions', NULL);
+SELECT has_function('pgstac'::name, 'backfill_partitions', NULL);
+SELECT has_function('pgstac'::name, 'items_trigger_stmt_func', NULL);
+
+
+SELECT has_view('pgstac'::name, 'all_items_partitions'::name, 'all_items_partitions view exists');
+SELECT has_view('pgstac'::name, 'items_partitions'::name, 'items_partitions view exists');
+
+-- tools to update collection extents based on extents in items
+SELECT has_function('pgstac'::name, 'collection_bbox', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'collection_temporal_extent', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'update_collection_extents', NULL);
+
 
 
 -- Search
