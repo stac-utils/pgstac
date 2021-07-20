@@ -18,7 +18,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Running database tests..."
     scripts/server --detach;
     docker-compose  \
-        exec \
+        exec -T \
         database /opt/src/test/test.sh;
 
     echo "Running pypgstac tests..."
