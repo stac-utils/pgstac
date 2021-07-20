@@ -16,14 +16,10 @@ Runs tests for the project.
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Running database tests..."
-    # TODO: Fix these tests
-    # scripts/server --detach;
-    # docker-compose  \
-    #     run --rm \
-    #     -e PGUSER=username \
-    #     -e PGPASSWORD=password \
-    #     -e PGHOST=database \
-    #     database /opt/src/test/test.sh;
+    scripts/server --detach;
+    docker-compose  \
+        exec -T \
+        database /opt/src/test/test.sh;
 
     echo "Running pypgstac tests..."
     docker-compose  \

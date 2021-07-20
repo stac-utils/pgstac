@@ -1,30 +1,5 @@
 SET SEARCH_PATH TO pgstac, public;
 
-/*
-View to get a table of available items partitions
-with date ranges
-*/
-DROP VIEW IF EXISTS items_partitions;
-CREATE VIEW items_partitions AS
-WITH base AS
-(SELECT
-    c.oid::pg_catalog.regclass::text as partition,
-    pg_catalog.pg_get_expr(c.relpartbound, c.oid) as _constraint,
-    regexp_matches(
-        pg_catalog.pg_get_expr(c.relpartbound, c.oid),
-        E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
-    ) as t,
-    reltuples::bigint as est_cnt
-FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
-WHERE c.oid = i.inhrelid AND i.inhparent = 'items'::regclass)
-SELECT partition, tstzrange(
-    t[1]::timestamptz,
-    t[2]::timestamptz
-), est_cnt
-FROM base
-WHERE est_cnt >0
-ORDER BY 2 desc;
-
 
 CREATE OR REPLACE FUNCTION items_by_partition(
     IN _where text DEFAULT 'TRUE',
