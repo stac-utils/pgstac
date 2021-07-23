@@ -27,7 +27,7 @@ PyPGStac will get the database connection settings from the standard PG environm
  - PGPASSWORD
 
 ## Making Changes to SQL
-All changes to SQL should only be made in the sql directory. pgstac.sql in the root directory dictates the order in which these files are loaded into the database.
+All changes to SQL should only be made in the sql directory. SQL Files will be run in alphabetical order.
 
 ## Adding Tests
 PGStac uses PGTap to test SQL. Tests can be found in tests/pgtap.sql and are run using `scripts/test`
@@ -121,3 +121,15 @@ To stage code and configurations and create template migrations for a version re
 ```bash
 scripts/stageversion
 ```
+
+## Release Process
+1) Make sure all your code is added and committed
+2) Create a PR against the main branch
+3) Once the PR has been merged, start the release process.
+4) Use `scripts/stagerelease` as documented in migrations section above making sure to rename any files ending in ".staged" in the migrations section
+5) Add details for release to the CHANGELOG
+6) Add/Commit any changes
+7) Run tests `scripts/test`
+8) Create a git tag `git tag v0.2.8` using new version number
+9) Push the git tag `git push origin v0.2.8`
+10) The CI process will push pypgstac to PyPi, create a docker image on ghcr.io, and create a release on github.
