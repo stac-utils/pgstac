@@ -143,9 +143,7 @@ async def run_migration(
         typer.echo(f"Target database already at version: {toversion}")
         return toversion
     if oldversion is None:
-        typer.echo(
-            f"No pgstac version set, installing {toversion} from scratch."
-        )
+        typer.echo(f"No pgstac version set, installing {toversion} from scratch.")
         files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
     else:
         typer.echo(f"Migrating from {oldversion} to {toversion}.")

@@ -57,9 +57,7 @@ class DB:
         assert self.connection is not None
         return self.connection
 
-    async def __aexit__(
-        self, exc_type: Any, exc_val: Any, exc_tb: Any
-    ) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Exit DB Connection."""
         if self.connection:
             await self.connection.close()
@@ -163,9 +161,7 @@ async def copy_ignore_duplicates(
         )
 
 
-async def copy_upsert(
-    iter: T, table: tables, conn: asyncpg.Connection
-) -> None:
+async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
     """Insert data into a temp table to be able merge data."""
     bytes_iter = aiter(iter)
     async with conn.transaction():
