@@ -1,5 +1,4 @@
 import asyncio
-from io import BufferedIOBase
 import os
 import time
 from typing import Any, AsyncGenerator, Dict, Iterable, Optional, TypeVar
@@ -109,25 +108,24 @@ async def run_migration(dsn: Optional[str] = None) -> str:
             f"from {oldversion} to {version} ({migration_file})"
         )
 
-    open_migration_file = open(migration_file)
-    if isinstance(open_migration_file, BufferedIOBase):
-        with open_migration_file as f:
-            migration_sql = f.read()
-            logging.debug(migration_sql)
-            async with conn.transaction():
-                conn.add_log_listener(pglogger)
-                await conn.execute(migration_sql)
-                await conn.execute(
-                    """
-                    INSERT INTO pgstac.migrations (version)
-                    VALUES ($1);
-                    """,
-                    version,
-                )
+    open_migration_file: Any = open(migration_file)
 
-        await conn.close()
-    else:
-        raise IOError(f"Unable to open {migration_file}")
+    with open_migration_file as f:
+        migration_sql = f.read()
+        logging.debug(migration_sql)
+        async with conn.transaction():
+            conn.add_log_listener(pglogger)
+            await conn.execute(migration_sql)
+            await conn.execute(
+                """
+                INSERT INTO pgstac.migrations (version)
+                VALUES ($1);
+                """,
+                version,
+            )
+
+    await conn.close()
+
     return version
 
 
@@ -293,13 +291,11 @@ async def load_ndjson(
     file: str, table: tables, method: loadopt = loadopt.insert, dsn: str = None
 ) -> None:
     print(f"loading {file} into {table} using {method}")
-    open_file = open(file, "rb")
-    if isinstance(open_file, BufferedIOBase):
-        with open_file as f:
-            async with DB(dsn) as conn:
-                await load_iterator(f, table, conn, method)
-    else:
-        raise IOError(f"Cannot read {file}")
+    open_file: Any = open(file, "rb")
+
+    with open_file as f:
+        async with DB(dsn) as conn:
+            await load_iterator(f, table, conn, method)
 
 
 @app.command()
