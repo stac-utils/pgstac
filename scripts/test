@@ -15,11 +15,13 @@ Runs tests for the project.
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "Running database tests..."
+    echo "Starting database..."
     scripts/server --detach;
-    docker-compose  \
+
+    echo "Running database tests..."
+    docker-compose \
         exec -T \
-        database /opt/src/test/test.sh;
+        database /opt/src/scripts/bin/testdb;
 
     echo "Running pypgstac tests..."
     docker-compose  \

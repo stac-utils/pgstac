@@ -1,0 +1,71 @@
+#!/bin/bash
+
+export BASEDIR=/opt/src
+export PYPGSTACDIR=$BASEDIR/pypgstac
+export MIGRATIONSDIR=$PYPGSTACDIR/pypgstac/migrations
+export TODBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_to"
+export FROMDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_from"
+
+function base_migrations(){
+    find $MIGRATIONSDIR -regex ".*\/pgstac\.[0-9]+\.[0-9]+\.[0-9]+\.sql"
+}
+export -f base_migrations
+
+function base_migration_versions(){
+    base_migrations | sed -En 's/.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql/\1/p' | sort -V
+}
+export -f base_migration_versions
+
+function create_migra_dbs(){
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    CREATE DATABASE migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+    CREATE DATABASE migra_to;
+EOSQL
+}
+export -f create_migra_dbs
+
+function drop_migra_dbs(){
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+EOSQL
+}
+export -f drop_migra_dbs
+
+function pgwait(){
+    RETRIES=10
+    until pg_isready >/dev/null 2>&1 || [ $RETRIES -eq 0 ]; do
+    sleep 1
+    done
+}
+export -f pgwait
+
+function pgtap(){
+    TESTOUTPUT=$(psql -X -f $BASEDIR/test/pgtap.sql $1)
+    echo "Checking if any tests are not ok on db $1"
+    if [ $(echo "$TESTOUTPUT" | grep '^not') ]; then
+        echo "PGTap tests failed."
+        echo "$TESTOUTPUT" | grep '^not'
+        exit 1
+    else
+        echo "All PGTap Tests Passed!"
+    fi
+}
+export -f pgtap
+
+function calc_migration(){
+    cd $MIGRATIONS_DIR
+    MIGRA_FROM_FILE=$1
+    MIGRA_TO_FILE=$2
+    pgwait
+    create_migra_dbs
+    trap drop_migra_dbs 0 2 3 15
+
+    psql -q -X -1 -v ON_ERROR_STOP -f $MIGRA_FROM_FILE $FROMDBURL >/dev/null 2>&1
+    psql -q -X -1 -v ON_ERROR_STOP -f $MIGRA_TO_FILE $TODBURL >/dev/null 2>&1
+
+    migra --schema pgstac --unsafe $FROMDBURL $TODBURL || echo ""
+}
+export -f calc_migration
