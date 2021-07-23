@@ -1,0 +1,7 @@
+.envrc*
+*/dist/*
+*.pyc
+*.egg-info
+*.eggs
+venv/*
+*/.direnv/*
