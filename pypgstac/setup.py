@@ -6,15 +6,8 @@ packages = \
 
 package_data = \
 {'': ['*'],
- 'pypgstac': ['migrations/pgstac.0.2.4-0.2.7.sql',
-              'migrations/pgstac.0.2.4-0.2.7.sql',
-              'migrations/pgstac.0.2.4-0.2.7.sql',
-              'migrations/pgstac.0.2.5-0.2.7.sql',
-              'migrations/pgstac.0.2.5-0.2.7.sql',
-              'migrations/pgstac.0.2.5-0.2.7.sql',
-              'migrations/pgstac.0.2.7.sql',
-              'migrations/pgstac.0.2.7.sql',
-              'migrations/pgstac.0.2.7.sql']}
+ 'pypgstac': ['migrations/pgstac.0.2.5-0.2.8.sql',
+              'migrations/pgstac.0.2.8.sql']}
 
 install_requires = \
 ['asyncio>=3.4.3,<4.0.0',
@@ -28,7 +21,7 @@ entry_points = \
 
 setup_kwargs = {
     'name': 'pypgstac',
-    'version': '0.2.7',
+    'version': '0.2.8',
     'description': '',
     'long_description': 'Python tools for working with PGStac\n',
     'author': 'David Bitner',
