@@ -6,8 +6,8 @@ on:
       - "*"
 
 env:
-￼  REGISTRY: ghcr.io
-￼  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   release:
