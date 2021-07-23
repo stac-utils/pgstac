@@ -30,6 +30,7 @@ do
 
         --test)
         TEST_PYPI="--repository testpypi"
+        poetry config repositories.testpypi https://test.pypi.org/legacy/
         shift
         ;;
 
@@ -50,8 +51,6 @@ fi
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     pushd pypgstac
     rm -rf dist
-    pip install build twine
-    python -m build --sdist --wheel
-    twine upload ${TEST_PYPI} dist/*
+    poetry publish --build $TEST_PYPI
     popd
 fi
