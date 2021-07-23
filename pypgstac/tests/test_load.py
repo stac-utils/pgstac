@@ -1,3 +1,4 @@
+"""Tests for pypgstac."""
 import asyncio
 from pathlib import Path
 import unittest
@@ -11,10 +12,15 @@ TEST_ITEMS = TEST_DATA_DIR / "items.ndjson"
 
 
 class LoadTest(unittest.TestCase):
+    """Tests pypgstac data loader."""
+
     def test_load_testdata_succeeds(self) -> None:
+        """Test pypgstac data loader."""
         asyncio.run(
             load_ndjson(
-                str(TEST_COLLECTIONS), table=tables.collections, method=loadopt.upsert
+                str(TEST_COLLECTIONS),
+                table=tables.collections,
+                method=loadopt.upsert,
             )
         )
         asyncio.run(
