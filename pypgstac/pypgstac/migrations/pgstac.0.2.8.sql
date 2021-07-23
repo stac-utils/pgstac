@@ -239,27 +239,6 @@ CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
 SELECT jsonb_agg(content) FROM collections;
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
-
-
-
-
-
-
-/* CREATE OR REPLACE FUNCTION collections_trigger_func()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF pg_trigger_depth() = 1 THEN
-        PERFORM create_collection(NEW.content);
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
-
-CREATE TRIGGER collections_trigger
-BEFORE INSERT ON collections
-FOR EACH ROW EXECUTE PROCEDURE collections_trigger_func();
- */
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE IF NOT EXISTS items (
@@ -281,23 +260,6 @@ CREATE TABLE items_template (
 
 ALTER TABLE items_template ADD PRIMARY KEY (id);
 
-/*
-CREATE TABLE IF NOT EXISTS items_search (
-    id text NOT NULL,
-    geometry geometry NOT NULL,
-    properties jsonb,
-    collection_id text NOT NULL,
-    datetime timestamptz NOT NULL
-)
-PARTITION BY RANGE (datetime)
-;
-
-CREATE TABLE IF NOT EXISTS items_search_template (
-    LIKE items_search
-)
-;
-ALTER TABLE items_search_template ADD PRIMARY KEY (id);
-*/
 
 DELETE from partman.part_config WHERE parent_table = 'pgstac.items';
 SELECT partman.create_parent(
@@ -340,55 +302,6 @@ CREATE TYPE item AS (
     datetime timestamptz
 );
 
-
-/*
-Converts single feature into an items row
-*/
-
-/*
-CREATE OR REPLACE FUNCTION feature_to_item(value jsonb) RETURNS item AS $$
-    SELECT
-        value->>'id' as id,
-        CASE
-            WHEN value->>'geometry' IS NOT NULL THEN
-                ST_GeomFromGeoJSON(value->>'geometry')
-            WHEN value->>'bbox' IS NOT NULL THEN
-                ST_MakeEnvelope(
-                    (value->'bbox'->>0)::float,
-                    (value->'bbox'->>1)::float,
-                    (value->'bbox'->>2)::float,
-                    (value->'bbox'->>3)::float,
-                    4326
-                )
-            ELSE NULL
-        END as geometry,
-        properties_idx(value ->'properties') as properties,
-        value->>'collection' as collection_id,
-        (value->'properties'->>'datetime')::timestamptz as datetime
-;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
-*/
-/*
-Takes a single feature, an array of features, or a feature collection
-and returns a set up individual items rows
-*/
-/*
-CREATE OR REPLACE FUNCTION features_to_items(value jsonb) RETURNS SETOF item AS $$
-    WITH features AS (
-        SELECT
-        jsonb_array_elements(
-            CASE
-                WHEN jsonb_typeof(value) = 'array' THEN value
-                WHEN value->>'type' = 'Feature' THEN '[]'::jsonb || value
-                WHEN value->>'type' = 'FeatureCollection' THEN value->'features'
-                ELSE NULL
-            END
-        ) as value
-    )
-    SELECT feature_to_item(value) FROM features
-    ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac,public;
-*/
 
 CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
     SELECT content FROM items WHERE id=_id;
@@ -448,62 +361,6 @@ END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
-/* Trigger Function to cascade inserts/updates/deletes
-from items table to items_search table */
-/*
-ALTER TABLE items_search ADD CONSTRAINT items_search_fk
-FOREIGN KEY (id) REFERENCES items(id)
-ON DELETE CASCADE DEFERRABLE;
-
-CREATE OR REPLACE FUNCTION items_trigger_func()
-RETURNS TRIGGER AS $$
-DECLARE
-BEGIN
-    IF TG_OP = 'UPDATE' THEN
-    RAISE NOTICE 'DELETING % BEFORE UPDATE', OLD;
-        DELETE FROM items_search WHERE id = OLD.id AND datetime = (OLD.content->'properties'->>'datetime')::timestamptz;
-    END IF;
-
-    INSERT INTO items_search SELECT * FROM feature_to_item(NEW.content);
-    RETURN NEW;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-
-DROP TRIGGER IF EXISTS items_insert_trigger ON items;
-CREATE TRIGGER items_insert_trigger
-AFTER INSERT ON items
-FOR EACH ROW EXECUTE PROCEDURE items_trigger_func();
-
-DROP TRIGGER IF EXISTS items_update_trigger ON items;
-CREATE TRIGGER items_update_trigger
-AFTER UPDATE ON items
-FOR EACH ROW
-WHEN (NEW.content IS DISTINCT FROM OLD.content)
-EXECUTE PROCEDURE items_trigger_func();
-*/
-
-/* Trigger Function to cascade inserts/updates/deletes
-from items table to items_search table */
-/*
-CREATE OR REPLACE FUNCTION items_search_trigger_delete_func()
-RETURNS TRIGGER AS $$
-DECLARE
-BEGIN
-    RAISE NOTICE 'Deleting from items_search: % Depth: %', OLD, pg_trigger_depth();
-    IF pg_trigger_depth()<3 THEN
-        RAISE NOTICE 'DELETING WITH datetime';
-        DELETE FROM items_search WHERE id=OLD.id AND datetime=OLD.datetime;
-        RETURN NULL;
-    END IF;
-    RETURN OLD;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-
-DROP TRIGGER IF EXISTS items_search_delete_trigger ON items_search;
-CREATE TRIGGER items_search_delete_trigger
-BEFORE DELETE ON items_search
-FOR EACH ROW EXECUTE PROCEDURE items_search_trigger_delete_func();
-*/
 CREATE OR REPLACE FUNCTION backfill_partitions()
 RETURNS VOID AS $$
 DECLARE
@@ -590,31 +447,6 @@ UPDATE collections SET
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 SET SEARCH_PATH TO pgstac, public;
-
-/*
-View to get a table of available items partitions
-with date ranges
-*/
-DROP VIEW IF EXISTS items_partitions;
-CREATE VIEW items_partitions AS
-WITH base AS
-(SELECT
-    c.oid::pg_catalog.regclass::text as partition,
-    pg_catalog.pg_get_expr(c.relpartbound, c.oid) as _constraint,
-    regexp_matches(
-        pg_catalog.pg_get_expr(c.relpartbound, c.oid),
-        E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
-    ) as t,
-    reltuples::bigint as est_cnt
-FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
-WHERE c.oid = i.inhrelid AND i.inhparent = 'items'::regclass)
-SELECT partition, tstzrange(
-    t[1]::timestamptz,
-    t[2]::timestamptz
-), est_cnt
-FROM base
-WHERE est_cnt >0
-ORDER BY 2 desc;
 
 
 CREATE OR REPLACE FUNCTION items_by_partition(
@@ -1184,4 +1016,4 @@ FROM j
 
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
-INSERT INTO migrations (version) VALUES ('0.2.8');
+INSERT INTO pgstac.migrations (version) VALUES ('0.2.8');
