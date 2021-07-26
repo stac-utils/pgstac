@@ -79,6 +79,11 @@ CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
     INSERT INTO items (content) VALUES (data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
+-- Bulk insert function which takes a sequence of items as input
+CREATE OR REPLACE FUNCTION create_items(datas jsonb) RETURNS VOID AS $$
+    INSERT INTO items (content) SELECT * FROM jsonb_array_elements(datas);
+    SELECT backfill_partitions();
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION update_item(data jsonb) RETURNS VOID AS $$
 DECLARE

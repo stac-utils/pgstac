@@ -98,6 +98,7 @@ SELECT is_partitioned('pgstac'::name,'items'::name);
 SELECT has_function('pgstac'::name, 'get_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'delete_item', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'create_item', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'create_items', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'update_item', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'upsert_item', ARRAY['jsonb']);
 
