@@ -1,16 +1,29 @@
-FROM python:3.8-slim
+FROM python:3.8-slim as python-base
 
-ENV CURL_CA_BUNDLE /etc/ssl/certs/ca-certificates.crt
+ENV \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PIP_DEFAULT_TIMEOUT=100 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+RUN pip install poetry==1.1.7
 
 RUN mkdir -p /opt/src/pypgstac
 
 WORKDIR /opt/src/pypgstac
 
-COPY pypgstac/requirements-dev.txt /opt/src/pypgstac/requirements-dev.txt
-RUN pip install -r requirements-dev.txt
+COPY pypgstac/poetry.lock pypgstac/pyproject.toml ./
+RUN poetry install
+
 
 COPY pypgstac /opt/src/pypgstac
-RUN pip install .
+RUN poetry install
 
 ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
 

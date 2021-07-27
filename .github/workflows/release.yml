@@ -5,6 +5,10 @@ on:
     tags:
       - "*"
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   release:
     name: release
@@ -20,11 +24,38 @@ jobs:
       - name: Install release dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+          pip install poetry==1.1.7
 
       - name: Build and publish package
         env:
-          TWINE_USERNAME: ${{ secrets.PYPI_STACUTILS_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_STACUTILS_PASSWORD }}
+          POETRY_HTTP_BASIC_PYPI_USERNAME: ${{ secrets.PYPI_STACUTILS_USERNAME }}
+          POETRY_HTTP_BASIC_PYPI_PASSWORD: ${{ secrets.PYPI_STACUTILS_PASSWORD }}
         run: |
           scripts/cipublish
+
+      - name: Tag Release
+        uses: "marvinpinto/action-automatic-releases@v1.2.1"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
