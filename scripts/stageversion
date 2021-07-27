@@ -1,0 +1,24 @@
+#!/bin/bash
+
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0") version string or rule(patch,minor,major)
+Create a new tag
+
+"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    echo "Updating Version..."
+    DIRTY=$(git status --porcelain=v1 2>/dev/null | wc -l)
+    [ $DIRTY -gt 0 ] && (echo "Git has dirty files, stash or commit before staging version."; exit 1)
+
+    docker-compose run --rm dev scripts/bin/stageversion $1
+    docker-compose exec -T database scripts/bin/stageversiondb
+fi
