@@ -25,6 +25,9 @@ RUN \
         software-properties-common \
         postgresql-$PG_MAJOR-pgtap \
         postgresql-$PG_MAJOR-partman \
+        postgresql-$PG_MAJOR-plpgsql-check \
+        postgresql-$PG_MAJOR-cron \
+        postgresql-$PG_MAJOR-hypopg \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         build-essential \

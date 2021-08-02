@@ -1,9 +1,9 @@
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE IF NOT EXISTS items (
-    id VARCHAR GENERATED ALWAYS AS (content->>'id') STORED NOT NULL,
+    id text GENERATED ALWAYS AS (content->>'id') STORED NOT NULL,
     geometry geometry GENERATED ALWAYS AS (stac_geom(content)) STORED NOT NULL,
-    properties jsonb GENERATED ALWAYS as (properties_idx(content->'properties')) STORED,
+    -- properties jsonb GENERATED ALWAYS as (properties_idx(content->'properties')) STORED,
     collection_id text GENERATED ALWAYS AS (content->>'collection') STORED NOT NULL,
     datetime timestamptz GENERATED ALWAYS AS (stac_datetime(content)) STORED NOT NULL,
     content JSONB NOT NULL
@@ -48,7 +48,7 @@ SELECT to_char($1, '"items_p"IYYY"w"IW');
 $$ LANGUAGE SQL;
 
 CREATE INDEX "datetime_id_idx" ON items (datetime, id);
-CREATE INDEX "properties_idx" ON items USING GIN (properties);
+CREATE INDEX "properties_idx" ON items USING GIN ((properties_idx(content->'properties')));
 CREATE INDEX "collection_idx" ON items (collection_id);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
