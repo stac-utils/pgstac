@@ -1,0 +1,32 @@
+-- Check that schema exists
+SELECT has_schema('pgstac'::name);
+
+-- Check that PostGIS and PG_Partman extensions are installed and available on the path
+SELECT has_extension('postgis');
+SELECT has_extension('pg_partman');
+
+SELECT has_table('pgstac'::name, 'migrations'::name);
+
+SELECT has_function('pgstac'::name, 'notice', ARRAY['text']);
+
+SELECT has_function('pgstac'::name, 'textarr', ARRAY['jsonb']);
+SELECT results_eq(
+    $$ SELECT textarr('["a","b","c"]'::jsonb) $$,
+    $$ SELECT '{a,b,c}'::text[] $$,
+    'textarr returns text[] from jsonb array'
+);
+
+
+
+-- SELECT has_function('pgstac'::name, 'array_map_ident', ARRAY['text[]']);
+
+-- SELECT results_eq(
+--     $$ SELECT array_map_ident('["a","b","c"]'::jsonb) $$,
+--     $$ SELECT 'a,b,c' $$,
+--     'array_idents returns csv double quoted from jsonb array'
+-- );
+
+
+-- SELECT has_function('pgstac'::name, 'array_map_literal', ARRAY['text[]']);
+
+SELECT has_function('pgstac'::name, 'estimated_count', ARRAY['text']);
