@@ -44,9 +44,9 @@ last_element := path_elements[cardinality(path_elements)];
 path_elements := path_elements[1:cardinality(path_elements)-1];
 jsonpath := concat(array_to_string('{$}'::text[] || array_map_ident(path_elements), '.'), '.', quote_ident(last_element));
 path_elements := array_map_literal(path_elements);
-path     := concat(array_to_string(ARRAY[field] || path_elements, '->'), '->', quote_literal(last_element));
-path_txt := concat(array_to_string(ARRAY[field] || path_elements, '->'), '->>', quote_literal(last_element));
-eq := format($F$ %s @? '%s[*] ? (@ == %%s) '$F$, field, jsonpath);
+path     := format($F$ items.properties->%s $F$, quote_literal(dotpath));
+path_txt := format($F$ items.properties->>%s $F$, quote_literal(dotpath));
+eq := format($F$ items.properties @? '$.%s[*] ? (@ == %%s) '$F$, quote_ident(dotpath));
 
 
 RETURN;
@@ -367,7 +367,7 @@ IF jtype = 'object' THEN
     RAISE NOTICE 'parsing object';
     IF j ? 'property' THEN
         -- Convert the property to be used as an identifier
-        return (items_path(j->>'property')).path;
+        return (items_path(j->>'property')).path_txt;
     ELSIF _op IS NULL THEN
         -- Iterate to convert elements in an object where the operator has not been set
         -- Combining with AND
@@ -391,9 +391,16 @@ END IF;
 -- Calculate the arguments that will be passed to functions/operators
 IF jtype = 'array' THEN
     RAISE NOTICE 'Parsing array into args. j: %', j;
-    SELECT INTO args
-        array_agg(cql_query_op(e))
-    FROM jsonb_array_elements(j) e;
+    -- If any argument is numeric, cast any text arguments to numeric
+    IF j @? '$[*] ? (@.type() == "number")' THEN
+        SELECT INTO args
+            array_agg(concat('(',cql_query_op(e),')::numeric'))
+        FROM jsonb_array_elements(j) e;
+    ELSE
+        SELECT INTO args
+            array_agg(cql_query_op(e))
+        FROM jsonb_array_elements(j) e;
+    END IF;
 END IF;
 RAISE NOTICE 'ARGS: %', args;
 
@@ -416,6 +423,7 @@ END IF;
 -- If the op is in the ops json then run using the template in the json
 IF ops ? op THEN
     RAISE NOTICE 'ARGS: % MAPPED: %',args, array_map_literal(args);
+
     RETURN format(concat('(',ops->>op,')'), VARIADIC args);
 END IF;
 
@@ -595,7 +603,7 @@ ELSE
     output := array_to_string(orfilters, ' OR ');
 END IF;
 DROP TABLE IF EXISTS sorts;
-RETURN output;
+RETURN concat('(',coalesce(output,'true'),')');
 END;
 $$ LANGUAGE PLPGSQL;
 
@@ -612,6 +620,7 @@ DECLARE
     exit_flag boolean := FALSE;
     estimated_count bigint;
     cntr int := 0;
+    iter_record items%ROWTYPE;
     first_record items%ROWTYPE;
     last_record items%ROWTYPE;
     out_records jsonb := '[]'::jsonb;
@@ -619,11 +628,15 @@ DECLARE
     prev_query text;
     next text;
     prev_id text;
+    has_next boolean := false;
+    has_prev boolean := false;
     prev text;
     total_query text;
     total_count bigint;
     context jsonb;
     collection jsonb;
+    includes text[];
+    excludes text[];
 BEGIN
 
 IF trim(_where) = '' THEN
@@ -654,16 +667,18 @@ LOOP
     partitions_scanned := partitions_scanned + 1;
     RAISE NOTICE 'Partitions Scanned: %', partitions_scanned;
     LOOP
-        FETCH curs into last_record;
+        FETCH curs into iter_record;
         EXIT WHEN NOT FOUND;
         cntr := cntr + 1;
+        last_record := iter_record;
         IF cntr = 1 THEN
             first_record := last_record;
         END IF;
         IF cntr <= _limit THEN
             out_records := out_records || last_record.content;
-            next := last_record.id;
-        ELSIF cntr > _limit + 1 THEN
+            --next := last_record.id;
+        ELSIF cntr > _limit THEN
+            has_next := true;
             exit_flag := TRUE;
             EXIT;
         END IF;
@@ -673,40 +688,56 @@ LOOP
     END IF;
 END LOOP;
 
--- If we did not find an "extra" row then we don't return a next link
-IF last_record IS NULL THEN
-    next := null;
-END IF;
 
-IF token_type = 'prev' THEN
-    next := prev;
+-- Flip things around if this was the result of a prev token query
+IF token_type='prev' THEN
+    out_records := flip_jsonb_array(out_records);
+    first_record := last_record;
 END IF;
 
 -- If this query has a token, see if there is data before the first record
 IF _search ? 'token' THEN
     prev_query := format(
-        'SELECT id FROM items WHERE %s ORDER BY %s LIMIT 1',
+        'SELECT 1 FROM items WHERE %s LIMIT 1',
         concat_ws(
             ' AND ',
             _where,
             trim(get_token_filter(_search, to_jsonb(first_record)))
-        ),
-        sort_sqlorderby(_search, TRUE)
+        )
     );
-    RAISE NOTICE 'Query to get previous record: %', prev_query;
-    EXECUTE prev_query INTO prev_id;
-    IF FOUND and prev_id is not null THEN
-        IF token_type = 'prev' THEN
-            next := prev_id;
-        ELSE
-            prev := prev_id;
-        END IF;
+    RAISE NOTICE 'Query to get previous record: % --- %', prev_query, first_record;
+    EXECUTE prev_query INTO has_prev;
+    IF FOUND and has_prev IS NOT NULL THEN
+        RAISE NOTICE 'Query results from prev query: %', has_prev;
+        has_prev := TRUE;
     END IF;
 END IF;
+has_prev := COALESCE(has_prev, FALSE);
 
--- Flip things around if this was the result of a prev token query
-IF token_type='prev' THEN
-    out_records := flip_jsonb_array(out_records);
+RAISE NOTICE 'token_type: %, has_next: %, has_prev: %', token_type, has_next, has_prev;
+IF has_prev THEN
+    prev := out_records->0->>'id';
+END IF;
+IF has_next OR token_type='prev' THEN
+    next := out_records->-1->>'id';
+END IF;
+
+
+
+-- include/exclude any fields following fields extension
+IF _search ? 'fields' THEN
+    IF _search->'fields' ? 'exclude' THEN
+        excludes=textarr(_search->'fields'->'exclude');
+    END IF;
+    IF _search->'fields' ? 'include' THEN
+        includes=textarr(_search->'fields'->'include');
+        IF array_length(includes, 1)>0 AND NOT 'id' = ANY (includes) THEN
+            includes = includes || '{id}';
+        END IF;
+    END IF;
+    --RAISE NOTICE 'Includes: %, Excludes: %', includes, excludes;
+    --RAISE NOTICE 'out_records: %', out_records;
+    SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
 -- context setting is the max number of rows to do a full count
@@ -729,7 +760,6 @@ END IF;
 context := jsonb_strip_nulls(jsonb_build_object(
     'limit', _limit,
     'matched', total_count,
-    'estimated_matched', estimated_count,
     'returned', jsonb_array_length(out_records)
 ));
 

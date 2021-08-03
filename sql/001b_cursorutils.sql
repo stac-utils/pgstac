@@ -53,7 +53,7 @@ LOOP
     END IF;
 
     main_query := format($q$
-        SELECT * FROM %I
+        SELECT * FROM %I items
         WHERE %s
         ORDER BY %s
     $q$, p.partition::text, _where, _orderby

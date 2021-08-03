@@ -1,7 +1,7 @@
 SELECT has_table('pgstac'::name, 'items'::name);
 
 SELECT is_indexed('pgstac'::name, 'items'::name, ARRAY['datetime','id']);
-SELECT is_indexed('pgstac'::name, 'items'::name, 'properties');
+-- SELECT is_indexed('pgstac'::name, 'items'::name, 'properties');
 SELECT is_indexed('pgstac'::name, 'items'::name, 'geometry');
 SELECT is_indexed('pgstac'::name, 'items'::name, 'collection_id');
 

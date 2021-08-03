@@ -1,3 +1,8 @@
+-- CREATE fixtures for testing search - as tests are run within a transaction, these will not persist
+\copy collections (content) FROM 'test/testdata/collections.ndjson'
+\copy items (content) FROM 'test/testdata/items.ndjson'
+
+
 SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb']);
 
 
@@ -65,6 +70,31 @@ SELECT results_eq($$
     $$,
     'Test creation of reverse sort sql'
 );
+
+SELECT results_eq($$
+    select s from search('{"fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0010", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0001", "properties": {"datetime": "2011-08-25T00:00:00Z", "eo:cloud_cover": 89}}, {"id": "pgstac-test-item-0002", "properties": {"datetime": "2011-08-25T00:00:00Z", "eo:cloud_cover": 33}}, {"id": "pgstac-test-item-0003", "properties": {"datetime": "2011-08-25T00:00:00Z", "eo:cloud_cover": 28}}, {"id": "pgstac-test-item-0004", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 23}}, {"id": "pgstac-test-item-0005", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0006", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 100}}, {"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}]}'::jsonb
+    $$,
+    'Test basic search with fields and sort extension'
+);
+
+SELECT results_eq($$
+    select s from search('{"token":"next:pgstac-test-item-0010", "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0020", "prev": "pgstac-test-item-0011", "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}, {"id": "pgstac-test-item-0017", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0018", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 29}}, {"id": "pgstac-test-item-0019", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 52}}, {"id": "pgstac-test-item-0020", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 39}}]}'::jsonb
+    $$,
+    'Test basic search with fields and sort extension and next token'
+);
+
+SELECT results_eq($$
+    select s from search('{"token":"prev:pgstac-test-item-0011", "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$ -- should be the same result as the first base query
+    select s from search('{"fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,
+    'Test basic search with fields and sort extension and prev token'
+);
+
 
 /* template
 SELECT results_eq($$
