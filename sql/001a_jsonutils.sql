@@ -134,5 +134,5 @@ END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION flip_jsonb_array(j jsonb) RETURNS jsonb AS $$
-SELECT jsonb_agg(value) FROM jsonb_array_elements(j) WITH ORDINALITY ORDER BY ordinality DESC;
+SELECT jsonb_agg(value) FROM (SELECT value FROM jsonb_array_elements(j) WITH ORDINALITY ORDER BY ordinality DESC) as t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
