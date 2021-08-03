@@ -352,7 +352,6 @@ SET SEARCH_PATH TO pgstac, public;
 CREATE TABLE IF NOT EXISTS items (
     id text GENERATED ALWAYS AS (content->>'id') STORED NOT NULL,
     geometry geometry GENERATED ALWAYS AS (stac_geom(content)) STORED NOT NULL,
-    -- properties jsonb GENERATED ALWAYS as (properties_idx(content->'properties')) STORED,
     collection_id text GENERATED ALWAYS AS (content->>'collection') STORED NOT NULL,
     datetime timestamptz GENERATED ALWAYS AS (stac_datetime(content)) STORED NOT NULL,
     content JSONB NOT NULL

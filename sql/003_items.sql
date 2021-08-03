@@ -45,7 +45,7 @@ WHERE
 ), grouped AS (
 SELECT path, jsonb_agg(distinct value) vals FROM paths group by path
 ) SELECT jsonb_object_agg(path, CASE WHEN jsonb_array_length(vals)=1 THEN vals->0 ELSE vals END) - '{datetime}'::text[] FROM grouped
-; --*/
+;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION properties(_item items) RETURNS jsonb AS $$
@@ -53,7 +53,7 @@ SELECT properties_idx(_item.content);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
-ALTER TABLE items ADD constraint items_collections_fk FOREIGN KEY (collection_id) REFERENCES collections(id) DEFERRABLE;
+ALTER TABLE items ADD constraint items_collections_fk FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
 CREATE TABLE items_template (
     LIKE items

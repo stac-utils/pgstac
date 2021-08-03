@@ -1,6 +1,8 @@
 -- CREATE fixtures for testing search - as tests are run within a transaction, these will not persist
+DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy collections (content) FROM 'test/testdata/collections.ndjson'
 \copy items (content) FROM 'test/testdata/items.ndjson'
+SELECT backfill_partitions();
 
 
 SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb']);
@@ -57,7 +59,7 @@ SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean'])
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sort":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, items.properties->''eo:cloudcover'' ASC, id DESC';
+    SELECT 'datetime DESC,  items.properties->''eo:cloudcover''  ASC, id DESC';
     $$,
     'Test creation of sort sql'
 );
@@ -66,7 +68,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sort":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, items.properties->''eo:cloudcover'' DESC, id ASC';
+    SELECT 'datetime ASC,  items.properties->''eo:cloudcover''  DESC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
@@ -95,6 +97,46 @@ SELECT results_eq($$
     'Test basic search with fields and sort extension and prev token'
 );
 
+SELECT results_eq($$
+    select s from search('{"datetime":"2011-08-16T00:00:00Z/2011-08-17T00:00:00Z", "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime search with datetime as / separated string'
+);
+
+
+SELECT results_eq($$
+    select s from search('{"datetime":["2011-08-16T00:00:00Z","2011-08-17T00:00:00Z"], "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime search with datetime as / separated string'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"anyinteracts":[{"property":"datetime"},["2011-08-16T00:00:00Z","2011-08-17T00:00:00Z"]]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime as an anyinteracts filter'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"eq":[{"property":"eo:cloud_cover"},36]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 2}, "features": [{"id": "pgstac-test-item-0087", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 36}}, {"id": "pgstac-test-item-0089", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 36}}]}'::jsonb
+    $$,
+    'Test equality as a filter on a numeric field'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"lt":[{"property":"eo:cloud_cover"},25]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sort":[{"field":"eo:cloud_cover","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0012", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 10}, "features": [{"id": "pgstac-test-item-0097", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 1}}, {"id": "pgstac-test-item-0063", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0085", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0073", "properties": {"datetime": "2011-08-15T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0041", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0034", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0005", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0048", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}]}'::jsonb
+    $$,
+    'Test lt as a filter on a numeric field with order by'
+);
 
 /* template
 SELECT results_eq($$
