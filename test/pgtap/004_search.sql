@@ -57,7 +57,7 @@ SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean'])
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sort":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, content->''properties''->''eo:cloudcover'' ASC, id DESC';
+    SELECT 'datetime DESC, items.properties->''eo:cloudcover'' ASC, id DESC';
     $$,
     'Test creation of sort sql'
 );
@@ -66,7 +66,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sort":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, content->''properties''->''eo:cloudcover'' DESC, id ASC';
+    SELECT 'datetime ASC, items.properties->''eo:cloudcover'' DESC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
