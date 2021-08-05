@@ -17,6 +17,7 @@ smart-open = "^4.2.0"
 typer = "^0.3.2"
 asyncio = "^3.4.3"
 orjson = "^3.5.2"
+python-dateutil = "^2.8.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

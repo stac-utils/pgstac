@@ -8,59 +8,103 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION partition_cursor(
+CREATE OR REPLACE FUNCTION partition_queries(
     IN _where text DEFAULT 'TRUE',
-    IN _orderby text DEFAULT 'datetime DESC, id DESC',
-    IN _dtrange tstzrange DEFAULT tstzrange('-infinity','infinity')
-) RETURNS SETOF refcursor AS $$
+    IN _orderby text DEFAULT 'datetime DESC, id DESC'
+) RETURNS SETOF text AS $$
 DECLARE
     partition_query text;
-    main_query text;
-    batchcount int;
-    counter int := 0;
+    query text;
     p record;
     cursors refcursor;
 BEGIN
 IF _orderby ILIKE 'datetime d%' THEN
     partition_query := format($q$
-        SELECT partition
+        SELECT partition, tstzrange
         FROM items_partitions
-        WHERE tstzrange && $1
         ORDER BY tstzrange DESC;
     $q$);
 ELSIF _orderby ILIKE 'datetime a%' THEN
     partition_query := format($q$
-        SELECT partition
+        SELECT partition, tstzrange
         FROM items_partitions
-        WHERE tstzrange && $1
         ORDER BY tstzrange ASC
         ;
     $q$);
 ELSE
-    partition_query := format($q$
-        SELECT 'items' as partition WHERE $1 IS NOT NULL;
-    $q$);
-END IF;
-RAISE NOTICE 'Partition Query: %', partition_query;
-FOR p IN
-    EXECUTE partition_query USING (_dtrange)
-LOOP
-    IF lower(_dtrange)::timestamptz > '-infinity' THEN
-        _where := concat(_where,format(' AND datetime >= %L',lower(_dtrange)::timestamptz::text));
-    END IF;
-    IF upper(_dtrange)::timestamptz < 'infinity' THEN
-        _where := concat(_where,format(' AND datetime <= %L',upper(_dtrange)::timestamptz::text));
-    END IF;
-
-    main_query := format($q$
-        SELECT * FROM %I items
+    query := format($q$
+        SELECT * FROM items
         WHERE %s
         ORDER BY %s
-    $q$, p.partition::text, _where, _orderby
+    $q$, _where, _orderby
     );
 
-    RETURN NEXT create_cursor(main_query);
+    RETURN NEXT query;
+    RETURN;
+END IF;
+--RAISE NOTICE 'Partition Query: %', partition_query;
+FOR p IN
+    EXECUTE partition_query
+LOOP
+    query := format($q$
+        SELECT * FROM items
+        WHERE datetime >= %L AND datetime < %L AND %s
+        ORDER BY %s
+    $q$, lower(p.tstzrange), upper(p.tstzrange), _where, _orderby
+    );
+    --RAISE NOTICE 'query: %', query;
+    RETURN NEXT query;
 END LOOP;
 RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION partition_cursor(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC'
+) RETURNS SETOF refcursor AS $$
+DECLARE
+    partition_query text;
+    query text;
+    p record;
+    cursors refcursor;
+BEGIN
+FOR query IN SELECT * FROM partion_queries(_where, _orderby) LOOP
+    RETURN NEXT create_cursor(query);
+END LOOP;
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION partition_count(
+    IN _where text DEFAULT 'TRUE'
+) RETURNS bigint AS $$
+DECLARE
+    partition_query text;
+    query text;
+    p record;
+    subtotal bigint;
+    total bigint := 0;
+BEGIN
+partition_query := format($q$
+    SELECT partition, tstzrange
+    FROM items_partitions
+    ORDER BY tstzrange DESC;
+$q$);
+RAISE NOTICE 'Partition Query: %', partition_query;
+FOR p IN
+    EXECUTE partition_query
+LOOP
+    query := format($q$
+        SELECT count(*) FROM items
+        WHERE datetime BETWEEN %L AND %L AND %s
+    $q$, lower(p.tstzrange), upper(p.tstzrange), _where
+    );
+    RAISE NOTICE 'Query %', query;
+    RAISE NOTICE 'Partition %, Count %, Total %',p.partition, subtotal, total;
+    EXECUTE query INTO subtotal;
+    total := subtotal + total;
+END LOOP;
+RETURN total;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;

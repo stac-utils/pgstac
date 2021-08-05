@@ -7,7 +7,6 @@ SELECT has_extension('pg_partman');
 
 SELECT has_table('pgstac'::name, 'migrations'::name);
 
-SELECT has_function('pgstac'::name, 'notice', ARRAY['text']);
 
 SELECT has_function('pgstac'::name, 'textarr', ARRAY['jsonb']);
 SELECT results_eq(
@@ -16,17 +15,5 @@ SELECT results_eq(
     'textarr returns text[] from jsonb array'
 );
 
-
-
--- SELECT has_function('pgstac'::name, 'array_map_ident', ARRAY['text[]']);
-
--- SELECT results_eq(
---     $$ SELECT array_map_ident('["a","b","c"]'::jsonb) $$,
---     $$ SELECT 'a,b,c' $$,
---     'array_idents returns csv double quoted from jsonb array'
--- );
-
-
--- SELECT has_function('pgstac'::name, 'array_map_literal', ARRAY['text[]']);
 
 SELECT has_function('pgstac'::name, 'estimated_count', ARRAY['text']);

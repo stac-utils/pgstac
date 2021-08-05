@@ -1,6 +1,8 @@
 SET SEARCH_PATH to pgstac, public;
 alter table "pgstac"."items" drop constraint "items_collections_fk";
 
+drop function if exists "pgstac"."search"(_js jsonb);
+
 drop function if exists "pgstac"."array_idents"(_js jsonb);
 
 drop function if exists "pgstac"."count_by_delim"(text, text);
@@ -31,14 +33,15 @@ drop function if exists "pgstac"."stac_query_op"(att text, _op text, val jsonb);
 
 drop index if exists "pgstac"."properties_idx";
 
-alter table "pgstac"."items" drop column "properties";
+alter table "pgstac"."items" drop column IF EXISTS "properties";
 
 alter table "pgstac"."items" alter column "id" set data type text using "id"::text;
 
-alter table "pgstac"."items_template" drop column "properties";
+alter table "pgstac"."items_template" drop column IF EXISTS "properties";
 
 alter table "pgstac"."items_template" alter column "id" set data type text using "id"::text;
-CREATE INDEX properties_idx ON ONLY pgstac.items USING gin (properties_idx(content));
+
+
 
 alter table "pgstac"."items" add constraint "items_collections_fk" FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 set check_function_bodies = off;
@@ -1052,6 +1055,6 @@ AS $function$
 $function$
 ;
 
-
+CREATE INDEX properties_idx ON pgstac.items USING gin (properties_idx(content) jsonb_path_ops);
 
 INSERT INTO migrations (version) VALUES ('0.3.0');

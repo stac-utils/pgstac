@@ -1,9 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE SCHEMA IF NOT EXISTS partman;
-CREATE EXTENSION IF NOT EXISTS pg_partman SCHEMA partman;
 CREATE SCHEMA IF NOT EXISTS pgstac;
-
-
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE migrations (
@@ -11,13 +7,15 @@ CREATE TABLE migrations (
   datetime timestamptz DEFAULT now() NOT NULL
 );
 
-CREATE OR REPLACE FUNCTION notice(text) RETURNS boolean AS $$
+CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
 DECLARE
+debug boolean := current_setting('pgstac.debug', true);
 BEGIN
-    --IF current_setting('pgstac.debug')::boolean THEN
-        RAISE NOTICE 'NOTICE FROM FUNC: % %', $1, clock_timestamp();
+    IF debug THEN
+        RAISE NOTICE 'NOTICE FROM FUNC: %  >>>>> %', concat_ws(' | ', $1), clock_timestamp();
         RETURN TRUE;
-    --END IF;
+    END IF;
+    RETURN FALSE;
 END;
 $$ LANGUAGE PLPGSQL;
 
