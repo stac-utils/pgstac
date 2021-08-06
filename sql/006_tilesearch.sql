@@ -1,4 +1,6 @@
-CREATE OR REPLACE FUNCTION xyzsearch(
+SET SEARCH_PATH to pgstac, public;
+
+CREATE OR REPLACE FUNCTION xyzsearchrecords(
     IN _x int,
     IN _y int,
     IN _z int,
@@ -55,8 +57,6 @@ BEGIN
 
             prev_area := unionedgeom_area;
 
-
-
             RAISE NOTICE '% % % %', st_area(unionedgeom)/tilearea, counter, scancounter, ftime();
             RETURN NEXT iter_record;
 
@@ -79,3 +79,17 @@ BEGIN
 RETURN;
 END;
 $$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION xyzsearch(
+    IN _x int,
+    IN _y int,
+    IN _z int,
+    IN queryhash text,
+    IN _scanlimit int DEFAULT 10000,
+    IN _limit int DEFAULT 100,
+    IN _timelimit interval DEFAULT '5 seconds'::interval,
+    IN skipcovered boolean DEFAULT TRUE
+) RETURNS jsonb AS $$
+SELECT jsonb_agg(to_jsonb(r)) FROM xyzsearchrecords (_x, _y, _z, queryhash, _scanlimit, _limit, _timelimit, skipcovered) r;
+$$ LANGUAGE SQL;
