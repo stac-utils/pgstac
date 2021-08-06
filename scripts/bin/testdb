@@ -65,7 +65,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
         echo "Using Migra to test for any differences between incrementally migrated DB and DB created with latest base migration."
         diffs=$(migra --schema pgstac --unsafe $FROMDBURL $TODBURL || echo "")
-        [ $(echo $diff | wc -l) -gt 1 ] && { echo "DIFFERENCES FOUND: $diff"; exit 1; }
+        [ $(echo $diffs | wc -l) -gt 1 ] && { echo "DIFFERENCES FOUND: \n$diffs"; exit 1; }
     fi
 
 

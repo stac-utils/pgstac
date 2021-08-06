@@ -1,5 +1,5 @@
 
-SET SEARCH_PATH TO pgstac_test, pgstac, public;
+SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION items_path(
     IN dotpath text,
@@ -38,7 +38,7 @@ IF cardinality(path_elements)<1 THEN
     path := field;
     path_txt := field;
     jsonpath := '$';
-    eq := format($F$ %s = %%s $F$, field);
+    eq := NULL; -- format($F$ %s = %%s $F$, field);
     RETURN;
 END IF;
 
@@ -342,7 +342,10 @@ END IF;
 -- Special Case when comparing a property in a jsonb field to a string or number using eq
 -- Allows to leverage GIN index on jsonb fields
 IF op = 'eq' THEN
-    IF j->0 ? 'property' AND jsonb_typeof(j->1) IN ('number','string') THEN
+    IF j->0 ? 'property'
+        AND jsonb_typeof(j->1) IN ('number','string')
+        AND (items_path(j->0->>'property')).eq IS NOT NULL
+    THEN
         RETURN format((items_path(j->0->>'property')).eq, j->1);
     END IF;
 END IF;
@@ -851,6 +854,3 @@ collection := jsonb_build_object(
 RETURN collection;
 END;
 $$ LANGUAGE PLPGSQL SET jit TO off;
-
---select * from search('{"filter":{"like":[{"property":"id"},"LC08"]}}');
---*/

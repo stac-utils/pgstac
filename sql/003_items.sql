@@ -1,6 +1,6 @@
 SET SEARCH_PATH TO pgstac, public;
 
-CREATE TABLE IF NOT EXISTS items (
+CREATE TABLE items (
     id text NOT NULL,
     geometry geometry NOT NULL,
     collection_id text NOT NULL,
@@ -45,17 +45,12 @@ CREATE OR REPLACE FUNCTION properties_idx (IN content jsonb) RETURNS jsonb AS $$
         jsonb_typeof(value) NOT IN ('array','object')
     ), grouped AS (
     SELECT path, jsonb_agg(distinct value) vals FROM paths group by path
-    ) SELECT jsonb_object_agg(path, CASE WHEN jsonb_array_length(vals)=1 THEN vals->0 ELSE vals END) - '{datetime}'::text[] FROM grouped
+    ) SELECT coalesce(jsonb_object_agg(path, CASE WHEN jsonb_array_length(vals)=1 THEN vals->0 ELSE vals END) - '{datetime}'::text[], '{}'::jsonb) FROM grouped
     ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET JIT TO OFF;
 
--- CREATE OR REPLACE FUNCTION properties(_item items) RETURNS jsonb AS $$
---     SELECT properties_idx(_item.content);
--- $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE INDEX "datetime_idx" ON items (datetime);
 CREATE INDEX "end_datetime_idx" ON items (end_datetime);
---CREATE INDEX "properties_idx" ON items USING GIN ((properties_idx(content)) jsonb_path_ops);
 CREATE INDEX "properties_idx" ON items USING GIN (properties jsonb_path_ops);
 CREATE INDEX "collection_idx" ON items (collection_id);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);

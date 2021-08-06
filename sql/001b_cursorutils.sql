@@ -42,7 +42,6 @@ ELSE
     RETURN NEXT query;
     RETURN;
 END IF;
---RAISE NOTICE 'Partition Query: %', partition_query;
 FOR p IN
     EXECUTE partition_query
 LOOP
@@ -52,7 +51,6 @@ LOOP
         ORDER BY %s
     $q$, lower(p.tstzrange), upper(p.tstzrange), _where, _orderby
     );
-    --RAISE NOTICE 'query: %', query;
     RETURN NEXT query;
 END LOOP;
 RETURN;
