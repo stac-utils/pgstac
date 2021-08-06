@@ -55,19 +55,22 @@ BEGIN
 
             prev_area := unionedgeom_area;
 
-            IF unionedgeom_area >= tilearea THEN
-                exit_flag := TRUE;
-                EXIT;
-            END IF;
+
 
             RAISE NOTICE '% % % %', st_area(unionedgeom)/tilearea, counter, scancounter, ftime();
             RETURN NEXT iter_record;
-            counter := counter + 1;
-            scancounter := scancounter + 1;
-            IF counter > _limit  OR scancounter > _scanlimit OR ftime() > _timelimit THEN
+
+
+            IF counter > _limit
+                OR scancounter > _scanlimit
+                OR ftime() > _timelimit
+                OR unionedgeom_area >= tilearea
+            THEN
                 exit_flag := TRUE;
                 EXIT;
             END IF;
+            counter := counter + 1;
+            scancounter := scancounter + 1;
 
         END LOOP;
         EXIT WHEN exit_flag;
