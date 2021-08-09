@@ -48,7 +48,7 @@ BEGIN
             END IF;
         END IF;
     END IF;
-    RAISE NOTICE 'fields: %s, includes: %s, excludes: %s', fields, includes, excludes;
+    RAISE NOTICE 'fields: %, includes: %, excludes: %', fields, includes, excludes;
 
     FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
         query := format('%s LIMIT %L', query, remaining_limit);
