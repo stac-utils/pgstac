@@ -109,19 +109,36 @@ async def copy(iter: T, table: tables, conn: asyncpg.Connection) -> None:
     """Directly use copy to load data."""
     bytes_iter = aiter(iter)
     async with conn.transaction():
-        await conn.copy_to_table(
-            table,
-            source=bytes_iter,
-            columns=["content"],
-            format="csv",
-            quote=chr(27),
-            delimiter=chr(31),
-        )
-        await conn.execute(
+        if table == "collections":
+            await conn.execute(
+                """
+                CREATE TEMP TABLE pgstactemp (content jsonb)
+                ON COMMIT DROP;
             """
-            SELECT backfill_partitions();
-        """
-        )
+            )
+            await conn.copy_to_table(
+                "pgstactemp",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
+            )
+            await conn.execute(
+                """
+                INSERT INTO collections (content)
+                SELECT content FROM pgstactemp;
+            """
+            )
+        if table == "items":
+            await conn.copy_to_table(
+                "items_staging",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
+            )
 
 
 async def copy_ignore_duplicates(
@@ -130,56 +147,58 @@ async def copy_ignore_duplicates(
     """Load data first into a temp table to ignore duplicates."""
     bytes_iter = aiter(iter)
     async with conn.transaction():
-        await conn.execute(
+        if table == "collections":
+            await conn.execute(
+                """
+                CREATE TEMP TABLE pgstactemp (content jsonb)
+                ON COMMIT DROP;
             """
-            CREATE TEMP TABLE pgstactemp (content jsonb)
-            ON COMMIT DROP;
-        """
-        )
-        await conn.copy_to_table(
-            "pgstactemp",
-            source=bytes_iter,
-            columns=["content"],
-            format="csv",
-            quote=chr(27),
-            delimiter=chr(31),
-        )
-        await conn.execute(
+            )
+            await conn.copy_to_table(
+                "pgstactemp",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
+            )
+            await conn.execute(
+                """
+                INSERT INTO collections (content)
+                SELECT content FROM pgstactemp
+                ON CONFLICT DO NOTHING;
             """
-            SELECT make_partitions(
-                min((content->>'datetime')::timestamptz),
-                max((content->>'datetime')::timestamptz)
-            ) FROM pgstactemp;
-        """
-        )
-        await conn.execute(
-            f"""
-            INSERT INTO {table} (content)
-            SELECT content FROM pgstactemp
-            ON CONFLICT DO NOTHING;
-        """
-        )
+            )
+        if table == "items":
+            await conn.copy_to_table(
+                "items_staging_ignore",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
+            )
 
 
 async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
     """Insert data into a temp table to be able merge data."""
     bytes_iter = aiter(iter)
     async with conn.transaction():
-        await conn.execute(
-            """
-            CREATE TEMP TABLE pgstactemp (content jsonb)
-            ON COMMIT DROP;
-        """
-        )
-        await conn.copy_to_table(
-            "pgstactemp",
-            source=bytes_iter,
-            columns=["content"],
-            format="csv",
-            quote=chr(27),
-            delimiter=chr(31),
-        )
         if table == "collections":
+            await conn.execute(
+                """
+                CREATE TEMP TABLE pgstactemp (content jsonb)
+                ON COMMIT DROP;
+            """
+            )
+            await conn.copy_to_table(
+                "pgstactemp",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
+            )
             await conn.execute(
                 """
                 INSERT INTO collections (content)
@@ -190,11 +209,13 @@ async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
             """
             )
         if table == "items":
-            await conn.execute(
-                """
-                SELECT upsert_item(content)
-                FROM pgstactemp;
-            """
+            await conn.copy_to_table(
+                "items_staging_upsert",
+                source=bytes_iter,
+                columns=["content"],
+                format="csv",
+                quote=chr(27),
+                delimiter=chr(31),
             )
 
 
