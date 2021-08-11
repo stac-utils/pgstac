@@ -45,7 +45,7 @@ export -f pgwait
 function pgtap(){
     TESTOUTPUT=$(psql -X -f $BASEDIR/test/pgtap.sql $1)
     echo "Checking if any tests are not ok on db $1"
-    if [ $(echo "$TESTOUTPUT" | grep '^not') ]; then
+    if [[ $(echo "$TESTOUTPUT" | grep '^not') == 0 ]]; then
         echo "PGTap tests failed."
         echo "$TESTOUTPUT" | grep '^not'
         exit 1

@@ -1,5 +1,732 @@
+SET SEARCH_PATH to pgstac, public;
+ALTER SCHEMA pgstac RENAME TO pgstac_bk;
 
+CREATE SCHEMA pgstac;
+
+ALTER TABLE pgstac_bk.migrations SET SCHEMA pgstac;
+ALTER TABLE pgstac_bk.collections SET SCHEMA pgstac;
+
+CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
+DECLARE
+debug boolean := current_setting('pgstac.debug', true);
+BEGIN
+    IF debug THEN
+        RAISE NOTICE 'NOTICE FROM FUNC: %  >>>>> %', concat_ws(' | ', $1), clock_timestamp();
+        RETURN TRUE;
+    END IF;
+    RETURN FALSE;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION empty_arr(ANYARRAY) RETURNS BOOLEAN AS $$
+SELECT CASE
+  WHEN $1 IS NULL THEN TRUE
+  WHEN cardinality($1)<1 THEN TRUE
+ELSE FALSE
+END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_map_ident(_a text[])
+  RETURNS text[] AS $$
+  SELECT array_agg(quote_ident(v)) FROM unnest(_a) v;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_map_literal(_a text[])
+  RETURNS text[] AS $$
+  SELECT array_agg(quote_literal(v)) FROM unnest(_a) v;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION estimated_count(_where text) RETURNS bigint AS $$
+DECLARE
+rec record;
+rows bigint;
+BEGIN
+    FOR rec in EXECUTE format(
+        $q$
+            EXPLAIN SELECT 1 FROM items WHERE %s
+        $q$,
+        _where)
+    LOOP
+        rows := substring(rec."QUERY PLAN" FROM ' rows=([[:digit:]]+)');
+        EXIT WHEN rows IS NOT NULL;
+    END LOOP;
+
+    RETURN rows;
+END;
+$$ LANGUAGE PLPGSQL;
+/* converts a jsonb text array to a pg text[] array */
+CREATE OR REPLACE FUNCTION textarr(_js jsonb)
+  RETURNS text[] AS $$
+  SELECT
+    CASE jsonb_typeof(_js)
+        WHEN 'array' THEN ARRAY(SELECT jsonb_array_elements_text(_js))
+        ELSE ARRAY[_js->>0]
+    END
+;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION jsonb_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
+SETOF RECORD AS $$
+with recursive extract_all as
+(
+    select
+        ARRAY[key]::text[] as path,
+        value
+    FROM jsonb_each(jdata)
+union all
+    select
+        path || coalesce(obj_key, (arr_key- 1)::text),
+        coalesce(obj_value, arr_value)
+    from extract_all
+    left join lateral
+        jsonb_each(case jsonb_typeof(value) when 'object' then value end)
+        as o(obj_key, obj_value)
+        on jsonb_typeof(value) = 'object'
+    left join lateral
+        jsonb_array_elements(case jsonb_typeof(value) when 'array' then value end)
+        with ordinality as a(arr_value, arr_key)
+        on jsonb_typeof(value) = 'array'
+    where obj_key is not null or arr_key is not null
+)
+select *
+from extract_all;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION jsonb_obj_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
+SETOF RECORD AS $$
+with recursive extract_all as
+(
+    select
+        ARRAY[key]::text[] as path,
+        value
+    FROM jsonb_each(jdata)
+union all
+    select
+        path || obj_key,
+        obj_value
+    from extract_all
+    left join lateral
+        jsonb_each(case jsonb_typeof(value) when 'object' then value end)
+        as o(obj_key, obj_value)
+        on jsonb_typeof(value) = 'object'
+    where obj_key is not null
+)
+select *
+from extract_all;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION jsonb_val_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
+SETOF RECORD AS $$
+SELECT * FROM jsonb_obj_paths(jdata) WHERE jsonb_typeof(value) not in  ('object','array');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION path_includes(IN path text[], IN includes text[]) RETURNS BOOLEAN AS $$
+WITH t AS (SELECT unnest(includes) i)
+SELECT EXISTS (
+    SELECT 1 FROM t WHERE path @> string_to_array(trim(i), '.')
+);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION path_excludes(IN path text[], IN excludes text[]) RETURNS BOOLEAN AS $$
+WITH t AS (SELECT unnest(excludes) e)
+SELECT NOT EXISTS (
+    SELECT 1 FROM t WHERE path @> string_to_array(trim(e), '.')
+);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION jsonb_obj_paths_filtered (
+    IN jdata jsonb,
+    IN includes text[] DEFAULT ARRAY[]::text[],
+    IN excludes text[] DEFAULT ARRAY[]::text[],
+    OUT path text[],
+    OUT value jsonb
+) RETURNS
+SETOF RECORD AS $$
+SELECT path, value
+FROM jsonb_obj_paths(jdata)
+WHERE
+    CASE WHEN cardinality(includes) > 0 THEN path_includes(path, includes) ELSE TRUE END
+    AND
+    path_excludes(path, excludes)
+
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION filter_jsonb(
+    IN jdata jsonb,
+    IN includes text[] DEFAULT ARRAY[]::text[],
+    IN excludes text[] DEFAULT ARRAY[]::text[]
+) RETURNS jsonb AS $$
+DECLARE
+rec RECORD;
+outj jsonb := '{}'::jsonb;
+created_paths text[] := '{}'::text[];
+BEGIN
+
+IF empty_arr(includes) AND empty_arr(excludes) THEN
+RAISE NOTICE 'no filter';
+  RETURN jdata;
+END IF;
+FOR rec in
+SELECT * FROM jsonb_obj_paths_filtered(jdata, includes, excludes)
+WHERE jsonb_typeof(value) != 'object'
+LOOP
+    IF array_length(rec.path,1)>1 THEN
+        FOR i IN 1..(array_length(rec.path,1)-1) LOOP
+          IF NOT array_to_string(rec.path[1:i],'.') = ANY (created_paths) THEN
+            outj := jsonb_set(outj, rec.path[1:i],'{}', true);
+            created_paths := created_paths || array_to_string(rec.path[1:i],'.');
+          END IF;
+        END LOOP;
+    END IF;
+    outj := jsonb_set(outj, rec.path, rec.value, true);
+    created_paths := created_paths || array_to_string(rec.path,'.');
+END LOOP;
+RETURN outj;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION flip_jsonb_array(j jsonb) RETURNS jsonb AS $$
+SELECT jsonb_agg(value) FROM (SELECT value FROM jsonb_array_elements(j) WITH ORDINALITY ORDER BY ordinality DESC) as t;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+/* Functions to create an iterable of cursors over partitions. */
+CREATE OR REPLACE FUNCTION create_cursor(q text) RETURNS refcursor AS $$
+DECLARE
+    curs refcursor;
+BEGIN
+    OPEN curs FOR EXECUTE q;
+    RETURN curs;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION partition_queries(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC'
+) RETURNS SETOF text AS $$
+DECLARE
+    partition_query text;
+    query text;
+    p record;
+    cursors refcursor;
+BEGIN
+IF _orderby ILIKE 'datetime d%' THEN
+    partition_query := format($q$
+        SELECT partition, tstzrange
+        FROM items_partitions
+        ORDER BY tstzrange DESC;
+    $q$);
+ELSIF _orderby ILIKE 'datetime a%' THEN
+    partition_query := format($q$
+        SELECT partition, tstzrange
+        FROM items_partitions
+        ORDER BY tstzrange ASC
+        ;
+    $q$);
+ELSE
+    query := format($q$
+        SELECT * FROM items
+        WHERE %s
+        ORDER BY %s
+    $q$, _where, _orderby
+    );
+
+    RETURN NEXT query;
+    RETURN;
+END IF;
+--RAISE NOTICE 'Partition Query: %', partition_query;
+FOR p IN
+    EXECUTE partition_query
+LOOP
+    query := format($q$
+        SELECT * FROM items
+        WHERE datetime >= %L AND datetime < %L AND %s
+        ORDER BY %s
+    $q$, lower(p.tstzrange), upper(p.tstzrange), _where, _orderby
+    );
+    --RAISE NOTICE 'query: %', query;
+    RETURN NEXT query;
+END LOOP;
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION partition_cursor(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC'
+) RETURNS SETOF refcursor AS $$
+DECLARE
+    partition_query text;
+    query text;
+    p record;
+    cursors refcursor;
+BEGIN
+FOR query IN SELECT * FROM partion_queries(_where, _orderby) LOOP
+    RETURN NEXT create_cursor(query);
+END LOOP;
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION partition_count(
+    IN _where text DEFAULT 'TRUE'
+) RETURNS bigint AS $$
+DECLARE
+    partition_query text;
+    query text;
+    p record;
+    subtotal bigint;
+    total bigint := 0;
+BEGIN
+partition_query := format($q$
+    SELECT partition, tstzrange
+    FROM items_partitions
+    ORDER BY tstzrange DESC;
+$q$);
+RAISE NOTICE 'Partition Query: %', partition_query;
+FOR p IN
+    EXECUTE partition_query
+LOOP
+    query := format($q$
+        SELECT count(*) FROM items
+        WHERE datetime BETWEEN %L AND %L AND %s
+    $q$, lower(p.tstzrange), upper(p.tstzrange), _where
+    );
+    RAISE NOTICE 'Query %', query;
+    RAISE NOTICE 'Partition %, Count %, Total %',p.partition, subtotal, total;
+    EXECUTE query INTO subtotal;
+    total := subtotal + total;
+END LOOP;
+RETURN total;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+/* looks for a geometry in a stac item first from geometry and falling back to bbox */
+CREATE OR REPLACE FUNCTION stac_geom(value jsonb) RETURNS geometry AS $$
+SELECT
+    CASE
+            WHEN value->>'geometry' IS NOT NULL THEN
+                ST_GeomFromGeoJSON(value->>'geometry')
+            WHEN value->>'bbox' IS NOT NULL THEN
+                ST_MakeEnvelope(
+                    (value->'bbox'->>0)::float,
+                    (value->'bbox'->>1)::float,
+                    (value->'bbox'->>2)::float,
+                    (value->'bbox'->>3)::float,
+                    4326
+                )
+            ELSE NULL
+        END as geometry
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION stac_datetime(value jsonb) RETURNS timestamptz AS $$
+SELECT COALESCE(
+    (value->'properties'->>'datetime')::timestamptz,
+    (value->'properties'->>'start_datetime')::timestamptz
+);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+
+CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS $$
+SELECT COALESCE(
+    (value->'properties'->>'datetime')::timestamptz,
+    (value->'properties'->>'end_datetime')::timestamptz
+);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+
+
+CREATE OR REPLACE FUNCTION stac_daterange(value jsonb) RETURNS tstzrange AS $$
+SELECT tstzrange(stac_datetime(value),stac_end_datetime(value));
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 SET SEARCH_PATH TO pgstac, public;
+
+CREATE TABLE IF NOT EXISTS collections (
+    id VARCHAR GENERATED ALWAYS AS (content->>'id') STORED PRIMARY KEY,
+    content JSONB
+);
+
+CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
+    INSERT INTO collections (content)
+    VALUES (data)
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
+DECLARE
+out collections%ROWTYPE;
+BEGIN
+    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
+    INSERT INTO collections (content)
+    VALUES (data)
+    ON CONFLICT (id) DO
+    UPDATE
+        SET content=EXCLUDED.content
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
+DECLARE
+out collections%ROWTYPE;
+BEGIN
+    DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
+SELECT content FROM collections
+WHERE id=$1
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
+SELECT jsonb_agg(content) FROM collections;
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+SET SEARCH_PATH TO pgstac, public;
+
+CREATE TABLE IF NOT EXISTS items (
+    id text NOT NULL,
+    geometry geometry NOT NULL,
+    collection_id text NOT NULL,
+    datetime timestamptz NOT NULL,
+    end_datetime timestamptz NOT NULL,
+    properties jsonb NOT NULL,
+    content JSONB NOT NULL
+)
+PARTITION BY RANGE (datetime)
+;
+
+CREATE OR REPLACE FUNCTION properties_idx (IN content jsonb) RETURNS jsonb AS $$
+    with recursive extract_all as
+    (
+        select
+            ARRAY[key]::text[] as path,
+            ARRAY[key]::text[] as fullpath,
+            value
+        FROM jsonb_each(content->'properties')
+    union all
+        select
+            CASE WHEN obj_key IS NOT NULL THEN path || obj_key ELSE path END,
+            path || coalesce(obj_key, (arr_key- 1)::text),
+            coalesce(obj_value, arr_value)
+        from extract_all
+        left join lateral
+            jsonb_each(case jsonb_typeof(value) when 'object' then value end)
+            as o(obj_key, obj_value)
+            on jsonb_typeof(value) = 'object'
+        left join lateral
+            jsonb_array_elements(case jsonb_typeof(value) when 'array' then value end)
+            with ordinality as a(arr_value, arr_key)
+            on jsonb_typeof(value) = 'array'
+        where obj_key is not null or arr_key is not null
+    )
+    , paths AS (
+    select
+        array_to_string(path, '.') as path,
+        value
+    FROM extract_all
+    WHERE
+        jsonb_typeof(value) NOT IN ('array','object')
+    ), grouped AS (
+    SELECT path, jsonb_agg(distinct value) vals FROM paths group by path
+    ) SELECT coalesce(jsonb_object_agg(path, CASE WHEN jsonb_array_length(vals)=1 THEN vals->0 ELSE vals END) - '{datetime}'::text[], '{}'::jsonb) FROM grouped
+    ;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET JIT TO OFF;
+
+
+CREATE OR REPLACE FUNCTION analyze_empty_partitions() RETURNS VOID AS $$
+DECLARE
+    p text;
+BEGIN
+    FOR p IN SELECT partition FROM all_items_partitions WHERE est_cnt = 0 LOOP
+        EXECUTE format('ANALYZE %I;', p);
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION items_partition_name(timestamptz) RETURNS text AS $$
+    SELECT to_char($1, '"items_p"IYYY"w"IW');
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION items_partition_exists(text) RETURNS boolean AS $$
+    SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relname=$1);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION items_partition_exists(timestamptz) RETURNS boolean AS $$
+    SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relname=items_partition_name($1));
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION items_partition_create_worker(partition text, partition_start timestamptz, partition_end timestamptz) RETURNS VOID AS $$
+DECLARE
+    err_context text;
+BEGIN
+    EXECUTE format(
+        $f$
+            CREATE TABLE IF NOT EXISTS %1$I PARTITION OF items
+                FOR VALUES FROM (%2$L)  TO (%3$L);
+            CREATE UNIQUE INDEX IF NOT EXISTS %4$I ON %1$I (id);
+        $f$,
+        partition,
+        partition_start,
+        partition_end,
+        concat(partition, '_id_pk')
+    );
+EXCEPTION
+        WHEN duplicate_table THEN
+            RAISE NOTICE 'Partition % already exists.', partition;
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
+            RAISE INFO 'Error Name:%',SQLERRM;
+            RAISE INFO 'Error State:%', SQLSTATE;
+            RAISE INFO 'Error Context:%', err_context;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH to pgstac, public;
+
+CREATE OR REPLACE FUNCTION items_partition_create(ts timestamptz) RETURNS text AS $$
+DECLARE
+    partition text := items_partition_name(ts);
+    partition_start timestamptz;
+    partition_end timestamptz;
+BEGIN
+    IF items_partition_exists(partition) THEN
+        RETURN partition;
+    END IF;
+    partition_start := date_trunc('week', ts);
+    partition_end := partition_start + '1 week'::interval;
+    PERFORM items_partition_create_worker(partition, partition_start, partition_end);
+    RAISE NOTICE 'partition: %', partition;
+    RETURN partition;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION items_partition_create(st timestamptz, et timestamptz) RETURNS SETOF text AS $$
+WITH t AS (
+    SELECT
+        generate_series(
+            date_trunc('week',st),
+            date_trunc('week', et),
+            '1 week'::interval
+        ) w
+)
+SELECT items_partition_create(w) FROM t;
+$$ LANGUAGE SQL;
+
+
+CREATE UNLOGGED TABLE items_staging (
+    content JSONB NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION items_staging_insert_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    mindate timestamptz;
+    maxdate timestamptz;
+    partition text;
+BEGIN
+    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
+    PERFORM items_partition_create(mindate, maxdate);
+    INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
+        SELECT
+            content->>'id',
+            stac_geom(content),
+            content->>'collection',
+            stac_datetime(content),
+            stac_end_datetime(content),
+            properties_idx(content),
+            content
+        FROM newdata
+    ;
+    DELETE FROM items_staging;
+    PERFORM analyze_empty_partitions();
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE TRIGGER items_staging_insert_trigger AFTER INSERT ON items_staging REFERENCING NEW TABLE AS newdata
+    FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_insert_triggerfunc();
+
+
+CREATE UNLOGGED TABLE items_staging_ignore (
+    content JSONB NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION items_staging_ignore_insert_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    mindate timestamptz;
+    maxdate timestamptz;
+    partition text;
+BEGIN
+    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
+    PERFORM items_partition_create(mindate, maxdate);
+    INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
+        SELECT
+            content->>'id',
+            stac_geom(content),
+            content->>'collection',
+            stac_datetime(content),
+            stac_end_datetime(content),
+            properties_idx(content),
+            content
+        FROM newdata
+    ON CONFLICT DO NOTHING
+    ;
+    DELETE FROM items_staging_ignore;
+    PERFORM analyze_empty_partitions();
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE TRIGGER items_staging_ignore_insert_trigger AFTER INSERT ON items_staging_ignore REFERENCING NEW TABLE AS newdata
+    FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_ignore_insert_triggerfunc();
+
+CREATE UNLOGGED TABLE items_staging_upsert (
+    content JSONB NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION items_staging_upsert_insert_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    mindate timestamptz;
+    maxdate timestamptz;
+    partition text;
+BEGIN
+    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
+    PERFORM items_partition_create(mindate, maxdate);
+    INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
+        SELECT
+            content->>'id',
+            stac_geom(content),
+            content->>'collection',
+            stac_datetime(content),
+            stac_end_datetime(content),
+            properties_idx(content),
+            content
+        FROM newdata
+    ON CONFLICT (datetime, id) DO UPDATE SET
+        content = EXCLUDED.content
+        WHERE items.content IS DISTINCT FROM EXCLUDED.content
+    ;
+    DELETE FROM items_staging_upsert;
+    PERFORM analyze_empty_partitions();
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE TRIGGER items_staging_upsert_insert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
+    FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_upsert_insert_triggerfunc();
+
+CREATE OR REPLACE FUNCTION items_update_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    NEW.id := NEW.content->>'id';
+    NEW.datetime := stac_datetime(NEW.content);
+    NEW.end_datetime := stac_end_datetime(NEW.content);
+    NEW.collection_id := NEW.content->>'collection';
+    NEW.geometry := stac_geom(NEW.content);
+    NEW.properties := properties_idx(NEW.content);
+    IF TG_OP = 'UPDATE' AND NEW IS NOT DISTINCT FROM OLD THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER items_update_trigger BEFORE UPDATE ON items
+    FOR EACH ROW EXECUTE PROCEDURE items_update_triggerfunc();
+
+/*
+View to get a table of available items partitions
+with date ranges
+*/
+CREATE VIEW all_items_partitions AS
+WITH base AS
+(SELECT
+    c.oid::pg_catalog.regclass::text as partition,
+    pg_catalog.pg_get_expr(c.relpartbound, c.oid) as _constraint,
+    regexp_matches(
+        pg_catalog.pg_get_expr(c.relpartbound, c.oid),
+        E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
+    ) as t,
+    reltuples::bigint as est_cnt
+FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
+WHERE c.oid = i.inhrelid AND i.inhparent = 'items'::regclass)
+SELECT partition, tstzrange(
+    t[1]::timestamptz,
+    t[2]::timestamptz
+), est_cnt
+FROM base
+ORDER BY 2 desc;
+
+CREATE OR REPLACE VIEW items_partitions AS
+SELECT * FROM all_items_partitions WHERE est_cnt>0;
+
+CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
+    SELECT content FROM items WHERE id=_id;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION delete_item(_id text) RETURNS VOID AS $$
+DECLARE
+out items%ROWTYPE;
+BEGIN
+    DELETE FROM items WHERE id = _id RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
+    INSERT INTO items_staging (content) VALUES (data);
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION update_item(data jsonb) RETURNS VOID AS $$
+DECLARE
+    out items%ROWTYPE;
+BEGIN
+    UPDATE items SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION upsert_item(data jsonb) RETURNS VOID AS $$
+    INSERT INTO items_staging_upsert (content) VALUES (data);
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
+SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb
+FROM items WHERE collection_id=$1;
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS $$
+SELECT to_jsonb(array[array[min(datetime)::text, max(datetime)::text]])
+FROM items WHERE collection_id=$1;
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections SET
+    content = content ||
+    jsonb_build_object(
+        'extent', jsonb_build_object(
+            'spatial', jsonb_build_object(
+                'bbox', collection_bbox(collections.id)
+            ),
+            'temporal', jsonb_build_object(
+                'interval', collection_temporal_extent(collections.id)
+            )
+        )
+    )
+;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+
+----- BEGIN SEARCH
 
 CREATE OR REPLACE FUNCTION items_path(
     IN dotpath text,
@@ -854,3 +1581,26 @@ collection := jsonb_build_object(
 RETURN collection;
 END;
 $$ LANGUAGE PLPGSQL SET jit TO off;
+
+
+
+----- END SEARCH
+
+WITH t AS (SELECT items_partition_create_worker(partition, lower(tstzrange), upper(tstzrange)) FROM pgstac_bk.items_partitions) SELECT count(*) FROM t;
+
+INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
+SELECT id, geometry, collection_id, stac_datetime(content), stac_end_datetime(content), properties_idx(content), content
+FROM pgstac_bk.items;
+
+DROP SCHEMA pgstac_bk CASCADE;
+
+CREATE INDEX "datetime_idx" ON items (datetime);
+CREATE INDEX "end_datetime_idx" ON items (end_datetime);
+CREATE INDEX "properties_idx" ON items USING GIN (properties jsonb_path_ops);
+CREATE INDEX "collection_idx" ON items (collection_id);
+CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
+CREATE UNIQUE INDEX "items_id_datetime_idx" ON items (datetime, id);
+
+ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
+
+INSERT INTO pgstac.migrations (version) VALUES ('0.3.0');
