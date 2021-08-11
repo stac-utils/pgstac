@@ -1589,7 +1589,7 @@ $$ LANGUAGE PLPGSQL SET jit TO off;
 WITH t AS (SELECT items_partition_create_worker(partition, lower(tstzrange), upper(tstzrange)) FROM pgstac_bk.items_partitions) SELECT count(*) FROM t;
 
 INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
-SELECT id, geometry, collection_id, stac_datetime(content), stac_end_datetime(content), properties_idx(properties), content
+SELECT id, geometry, collection_id, stac_datetime(content), stac_end_datetime(content), properties_idx(content), content
 FROM pgstac_bk.items;
 
 DROP SCHEMA pgstac_bk CASCADE;
