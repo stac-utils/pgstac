@@ -40,6 +40,23 @@ SELECT results_eq($$
     'Test that id gets added to cql filter when cql filter does exist'
 );
 
+SELECT results_eq($$
+    SELECT add_filters_to_cql('{"collections":["a","b"]}'::jsonb);
+    $$,$$
+    SELECT '{"filter":{"and": [{"in": [{"property": "collection"}, ["a", "b"]]}]}}'::jsonb;
+    $$,
+    'Test that collections gets added to cql filter when cql filter does not exist'
+);
+
+SELECT results_eq($$
+    SELECT add_filters_to_cql('{"collection":["a","b"]}'::jsonb);
+    $$,$$
+    SELECT '{"collection": ["a", "b"]}'::jsonb;
+    $$,
+    'Test that collection are not added to cql filter'
+);
+
+
 SELECT has_function('pgstac'::name, 'cql_and_append', ARRAY['jsonb','jsonb']);
 
 SELECT has_function('pgstac'::name, 'query_to_cqlfilter', ARRAY['jsonb']);
