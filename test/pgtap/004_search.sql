@@ -140,7 +140,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     select s from search('{"collections":["pgstac-test-collection"],"fields":{"include":["id"]}, "limit": 1}') s;
     $$,$$
-    select '{"next": 20200307aC0870130w361200, "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "20200307aC0870130w361200"}]}'::jsonb
+    select '{"next": "20200307aC0870130w361200", "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "20200307aC0870130w361200"}]}'::jsonb
     $$,
     'Test collections search with unknow collection'
 );
