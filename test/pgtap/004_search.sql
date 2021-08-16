@@ -137,6 +137,22 @@ SELECT results_eq($$
     'Test lt as a filter on a numeric field with order by'
 );
 
+SELECT results_eq($$
+    select s from search('{"collections":["pgstac-test-collection"],"fields":{"include":["id"]}, "limit": 1}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "20200307aC0870130w361200"}]}'::jsonb
+    $$,
+    'Test collections search with unknow collection'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["something"]}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search with unknow collection'
+);
+
 /* template
 SELECT results_eq($$
 
