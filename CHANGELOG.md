@@ -1,14 +1,14 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-
-### Changed
-
-### Removed
+## [v0.3.2]
 
 ## Fixed
+
+- Fixed CQL term to be "collections", not "collection" ([#43](https://github.com/stac-utils/pgstac/pull/43))
+
+## [v0.3.1]
+
+_TODO_
 
 ## [v0.2.8]
 
