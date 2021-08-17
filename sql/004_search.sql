@@ -146,12 +146,12 @@ IF j ? 'id' THEN
     );
     newprops := jsonb_insert(newprops, '{1}', newprop);
 END IF;
-IF j ? 'collection' THEN
+IF j ? 'collections' THEN
     newprop := jsonb_build_object(
         'in',
         jsonb_build_array(
             '{"property":"collection"}'::jsonb,
-            j->'collection'
+            j->'collections'
         )
     );
     newprops := jsonb_insert(newprops, '{1}', newprop);
@@ -188,7 +188,7 @@ IF newprops IS NOT NULL AND jsonb_array_length(newprops) > 0 THEN
         j,
         '{filter}',
         cql_and_append(j, jsonb_build_object('and', newprops))
-    ) - '{id,collection,datetime,bbox,intersects}'::text[];
+    ) - '{id,collections,datetime,bbox,intersects}'::text[];
 END IF;
 
 return j;
