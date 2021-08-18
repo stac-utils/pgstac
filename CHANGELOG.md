@@ -1,5 +1,11 @@
 # Changelog
 
+## [next]
+
+### Added
+
+- add `geometrysearch`, `geojsonsearch` and `xyzsearch` for optimized searches for tiled requets ([#39](https://github.com/stac-utils/pgstac/pull/39))
+
 ## [v0.3.2]
 
 ## Fixed
