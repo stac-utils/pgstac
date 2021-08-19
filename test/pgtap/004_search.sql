@@ -170,6 +170,14 @@ SELECT results_eq($$
     'Test collections search with unknow collection'
 );
 
+SELECT results_eq($$
+    select s from search('{"collections":["something"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search return empty feature not null'
+);
+
 /* template
 SELECT results_eq($$
 
