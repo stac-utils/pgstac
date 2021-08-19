@@ -821,7 +821,6 @@ IF has_next OR token_type='prev' THEN
 END IF;
 
 
-
 -- include/exclude any fields following fields extension
 IF _search ? 'fields' THEN
     IF _search->'fields' ? 'exclude' THEN
@@ -836,7 +835,6 @@ IF _search ? 'fields' THEN
     SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
-
 context := jsonb_strip_nulls(jsonb_build_object(
     'limit', _limit,
     'matched', total_count,
@@ -845,7 +843,7 @@ context := jsonb_strip_nulls(jsonb_build_object(
 
 collection := jsonb_build_object(
     'type', 'FeatureCollection',
-    'features', out_records,
+    'features', coalesce(out_records, '[]'::jsonb),
     'next', next,
     'prev', prev,
     'context', context
