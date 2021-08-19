@@ -159,7 +159,7 @@ SELECT results_eq($$
     $$,$$
     select '{"next": "pgstac-test-item-0003", "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "pgstac-test-item-0003"}]}'::jsonb
     $$,
-    'Test collections search with collection'
+    'Test collections search'
 );
 
 SELECT results_eq($$
