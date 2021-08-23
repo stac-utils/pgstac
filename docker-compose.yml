@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    platform: linux/amd64
     depends_on:
       - database
     volumes:
@@ -20,6 +21,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    platform: linux/amd64
     environment:
       - POSTGRES_USER=username
       - POSTGRES_PASSWORD=password
