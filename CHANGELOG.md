@@ -1,10 +1,19 @@
 # Changelog
 
-## [next]
+## [v0.3.4]
 
 ### Added
 
 - add `geometrysearch`, `geojsonsearch` and `xyzsearch` for optimized searches for tiled requets ([#39](https://github.com/stac-utils/pgstac/pull/39))
+
+## [v0.3.3]
+
+## Fixed
+
+- Fixed CQL term to be "id", not "ids" ([#46](https://github.com/stac-utils/pgstac/pull/46))
+- Make sure featureCollection response has empty features `[]` not `null` ([#46](https://github.com/stac-utils/pgstac/pull/46))
+- Fixed bugs for `sortby` and `pagination` ([#46](https://github.com/stac-utils/pgstac/pull/46))
+- Make sure pgtap errors get caught in CI ([#46](https://github.com/stac-utils/pgstac/pull/46))
 
 ## [v0.3.2]
 
