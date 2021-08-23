@@ -7,7 +7,6 @@ SELECT is_indexed('pgstac'::name, 'items'::name, 'datetime');
 SELECT is_indexed('pgstac'::name, 'items'::name, 'end_datetime');
 SELECT is_indexed('pgstac'::name, 'items'::name, 'properties');
 SELECT is_indexed('pgstac'::name, 'items'::name, 'collection_id');
-SELECT is_indexed('pgstac'::name, 'items'::name, ARRAY['datetime,id']);
 
 SELECT is_partitioned('pgstac'::name,'items'::name);
 
