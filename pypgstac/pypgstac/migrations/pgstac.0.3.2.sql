@@ -870,12 +870,12 @@ DECLARE
 newprop jsonb;
 newprops jsonb := '[]'::jsonb;
 BEGIN
-IF j ? 'id' THEN
+IF j ? 'ids' THEN
     newprop := jsonb_build_object(
         'in',
         jsonb_build_array(
             '{"property":"id"}'::jsonb,
-            j->'id'
+            j->'ids'
         )
     );
     newprops := jsonb_insert(newprops, '{1}', newprop);
@@ -922,7 +922,7 @@ IF newprops IS NOT NULL AND jsonb_array_length(newprops) > 0 THEN
         j,
         '{filter}',
         cql_and_append(j, jsonb_build_object('and', newprops))
-    ) - '{id,collections,datetime,bbox,intersects}'::text[];
+    ) - '{ids,collections,datetime,bbox,intersects}'::text[];
 END IF;
 
 return j;
@@ -1233,17 +1233,21 @@ CREATE OR REPLACE FUNCTION sort_sqlorderby(
     _search jsonb DEFAULT NULL,
     reverse boolean DEFAULT FALSE
 ) RETURNS text AS $$
-WITH sorts AS (
+WITH sortby AS (
+    SELECT coalesce(_search->'sortby','[{"field":"datetime", "direction":"desc"}]') as sort
+), withid AS (
+    SELECT CASE
+        WHEN sort @? '$[*] ? (@.field == "id")' THEN sort
+        ELSE sort || '[{"field":"id", "direction":"desc"}]'::jsonb
+        END as sort
+    FROM sortby
+), withid_rows AS (
+    SELECT jsonb_array_elements(sort) as value FROM withid
+),sorts AS (
     SELECT
         (items_path(value->>'field')).path as key,
         parse_sort_dir(value->>'direction', reverse) as dir
-    FROM jsonb_array_elements(
-        '[]'::jsonb
-        ||
-        coalesce(_search->'sortby','[{"field":"datetime", "direction":"desc"}]')
-        ||
-        '[{"field":"id","direction":"desc"}]'::jsonb
-    )
+    FROM withid_rows
 )
 SELECT array_to_string(
     array_agg(concat(key, ' ', dir)),
@@ -1258,107 +1262,109 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION get_token_filter(_search jsonb = '{}'::jsonb, token_rec jsonb DEFAULT NULL) RETURNS text AS $$
 DECLARE
-token_id text;
-filters text[] := '{}'::text[];
-prev boolean := TRUE;
-field text;
-dir text;
-sort record;
-orfilters text[] := '{}'::text[];
-andfilters text[] := '{}'::text[];
-output text;
-token_where text;
+    token_id text;
+    filters text[] := '{}'::text[];
+    prev boolean := TRUE;
+    field text;
+    dir text;
+    sort record;
+    orfilters text[] := '{}'::text[];
+    andfilters text[] := '{}'::text[];
+    output text;
+    token_where text;
 BEGIN
--- If no token provided return NULL
-IF token_rec IS NULL THEN
-    IF NOT (_search ? 'token' AND
-            (
-                (_search->>'token' ILIKE 'prev:%')
-                OR
-                (_search->>'token' ILIKE 'next:%')
-            )
-    ) THEN
-        RETURN NULL;
-    END IF;
-    prev := (_search->>'token' ILIKE 'prev:%');
-    token_id := substr(_search->>'token', 6);
-    SELECT to_jsonb(items) INTO token_rec FROM items WHERE id=token_id;
-END IF;
-RAISE NOTICE 'TOKEN ID: %', token_rec->'id';
-
-CREATE TEMP TABLE sorts (
-    _row int GENERATED ALWAYS AS IDENTITY NOT NULL,
-    _field text PRIMARY KEY,
-    _dir text NOT NULL,
-    _val text
-) ON COMMIT DROP;
-
--- Make sure we only have distinct columns to sort with taking the first one we get
-INSERT INTO sorts (_field, _dir)
-    SELECT
-        (items_path(value->>'field')).path,
-        get_sort_dir(value)
-    FROM
-        jsonb_array_elements(coalesce(_search->'sort','[{"field":"datetime","direction":"desc"}]'))
-ON CONFLICT DO NOTHING
-;
-
--- Get the first sort direction provided. As the id is a primary key, if there are any
--- sorts after id they won't do anything, so make sure that id is the last sort item.
-SELECT _dir INTO dir FROM sorts ORDER BY _row ASC LIMIT 1;
-IF EXISTS (SELECT 1 FROM sorts WHERE _field = 'id') THEN
-    DELETE FROM sorts WHERE _row > (SELECT _row FROM sorts WHERE _field = 'id');
-ELSE
-    INSERT INTO sorts (_field, _dir) VALUES ('id', dir);
-END IF;
-
--- Add value from looked up item to the sorts table
-UPDATE sorts SET _val=quote_literal(token_rec->>_field);
-
--- Check if all sorts are the same direction and use row comparison
--- to filter
-IF (SELECT count(DISTINCT _dir) FROM sorts) = 1 THEN
-    SELECT format(
-            '(%s) %s (%s)',
-            concat_ws(', ', VARIADIC array_agg(quote_ident(_field))),
-            CASE WHEN (prev AND dir = 'ASC') OR (NOT prev AND dir = 'DESC') THEN '<' ELSE '>' END,
-            concat_ws(', ', VARIADIC array_agg(_val))
-    ) INTO output FROM sorts
-    WHERE token_rec ? _field
-    ;
-ELSE
-    FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
-        RAISE NOTICE 'SORT: %', sort;
-        IF sort._row = 1 THEN
-            orfilters := orfilters || format('(%s %s %s)',
-                quote_ident(sort._field),
-                CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                sort._val
-            );
-        ELSE
-            orfilters := orfilters || format('(%s AND %s %s %s)',
-                array_to_string(andfilters, ' AND '),
-                quote_ident(sort._field),
-                CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                sort._val
-            );
-
+    -- If no token provided return NULL
+    IF token_rec IS NULL THEN
+        IF NOT (_search ? 'token' AND
+                (
+                    (_search->>'token' ILIKE 'prev:%')
+                    OR
+                    (_search->>'token' ILIKE 'next:%')
+                )
+        ) THEN
+            RETURN NULL;
         END IF;
-        andfilters := andfilters || format('%s = %s',
-            quote_ident(sort._field),
-            sort._val
-        );
-    END LOOP;
-    output := array_to_string(orfilters, ' OR ');
-END IF;
-DROP TABLE IF EXISTS sorts;
-token_where := concat('(',coalesce(output,'true'),')');
-IF trim(token_where) = '' THEN
-    token_where := NULL;
-END IF;
-RAISE NOTICE 'TOKEN_WHERE: |%|',token_where;
-RETURN token_where;
-END;
+        prev := (_search->>'token' ILIKE 'prev:%');
+        token_id := substr(_search->>'token', 6);
+        SELECT to_jsonb(items) INTO token_rec FROM items WHERE id=token_id;
+    END IF;
+    RAISE NOTICE 'TOKEN ID: %', token_rec->'id';
+
+    CREATE TEMP TABLE sorts (
+        _row int GENERATED ALWAYS AS IDENTITY NOT NULL,
+        _field text PRIMARY KEY,
+        _dir text NOT NULL,
+        _val text
+    ) ON COMMIT DROP;
+
+    -- Make sure we only have distinct columns to sort with taking the first one we get
+    INSERT INTO sorts (_field, _dir)
+        SELECT
+            (items_path(value->>'field')).path,
+            get_sort_dir(value)
+        FROM
+            jsonb_array_elements(coalesce(_search->'sortby','[{"field":"datetime","direction":"desc"}]'))
+    ON CONFLICT DO NOTHING
+    ;
+    RAISE NOTICE 'sorts 1: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
+    -- Get the first sort direction provided. As the id is a primary key, if there are any
+    -- sorts after id they won't do anything, so make sure that id is the last sort item.
+    SELECT _dir INTO dir FROM sorts ORDER BY _row ASC LIMIT 1;
+    IF EXISTS (SELECT 1 FROM sorts WHERE _field = 'id') THEN
+        DELETE FROM sorts WHERE _row > (SELECT _row FROM sorts WHERE _field = 'id' ORDER BY _row ASC);
+    ELSE
+        INSERT INTO sorts (_field, _dir) VALUES ('id', dir);
+    END IF;
+
+    -- Add value from looked up item to the sorts table
+    UPDATE sorts SET _val=quote_literal(token_rec->>_field);
+
+    -- Check if all sorts are the same direction and use row comparison
+    -- to filter
+    RAISE NOTICE 'sorts 2: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
+
+    IF (SELECT count(DISTINCT _dir) FROM sorts) = 1 THEN
+        SELECT format(
+                '(%s) %s (%s)',
+                concat_ws(', ', VARIADIC array_agg(quote_ident(_field))),
+                CASE WHEN (prev AND dir = 'ASC') OR (NOT prev AND dir = 'DESC') THEN '<' ELSE '>' END,
+                concat_ws(', ', VARIADIC array_agg(_val))
+        ) INTO output FROM sorts
+        WHERE token_rec ? _field
+        ;
+    ELSE
+        FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
+            RAISE NOTICE 'SORT: %', sort;
+            IF sort._row = 1 THEN
+                orfilters := orfilters || format('(%s %s %s)',
+                    quote_ident(sort._field),
+                    CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
+                    sort._val
+                );
+            ELSE
+                orfilters := orfilters || format('(%s AND %s %s %s)',
+                    array_to_string(andfilters, ' AND '),
+                    quote_ident(sort._field),
+                    CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
+                    sort._val
+                );
+
+            END IF;
+            andfilters := andfilters || format('%s = %s',
+                quote_ident(sort._field),
+                sort._val
+            );
+        END LOOP;
+        output := array_to_string(orfilters, ' OR ');
+    END IF;
+    DROP TABLE IF EXISTS sorts;
+    token_where := concat('(',coalesce(output,'true'),')');
+    IF trim(token_where) = '' THEN
+        token_where := NULL;
+    END IF;
+    RAISE NOTICE 'TOKEN_WHERE: |%|',token_where;
+    RETURN token_where;
+    END;
 $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
@@ -1555,7 +1561,6 @@ IF has_next OR token_type='prev' THEN
 END IF;
 
 
-
 -- include/exclude any fields following fields extension
 IF _search ? 'fields' THEN
     IF _search->'fields' ? 'exclude' THEN
@@ -1570,7 +1575,6 @@ IF _search ? 'fields' THEN
     SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
-
 context := jsonb_strip_nulls(jsonb_build_object(
     'limit', _limit,
     'matched', total_count,
@@ -1579,7 +1583,7 @@ context := jsonb_strip_nulls(jsonb_build_object(
 
 collection := jsonb_build_object(
     'type', 'FeatureCollection',
-    'features', out_records,
+    'features', coalesce(out_records, '[]'::jsonb),
     'next', next,
     'prev', prev,
     'context', context

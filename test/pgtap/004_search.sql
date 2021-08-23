@@ -25,7 +25,7 @@ SELECT results_eq($$ SELECT bbox_geom('[0,1,2,3,4,5]'::jsonb) $$, $$ SELECT '010
 SELECT has_function('pgstac'::name, 'add_filters_to_cql', ARRAY['jsonb']);
 
 SELECT results_eq($$
-    SELECT add_filters_to_cql('{"id":["a","b"]}'::jsonb);
+    SELECT add_filters_to_cql('{"ids":["a","b"]}'::jsonb);
     $$,$$
     SELECT '{"filter":{"and": [{"in": [{"property": "id"}, ["a", "b"]]}]}}'::jsonb;
     $$,
@@ -33,7 +33,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    SELECT add_filters_to_cql('{"id":["a","b"],"filter":{"and":[{"eq":[1,1]}]}}'::jsonb);
+    SELECT add_filters_to_cql('{"ids":["a","b"],"filter":{"and":[{"eq":[1,1]}]}}'::jsonb);
     $$,$$
     SELECT '{"filter":{"and": [{"and": [{"eq": [1, 1]}]}, {"and": [{"in": [{"property": "id"}, ["a", "b"]]}]}]}}'::jsonb;
     $$,
@@ -153,6 +153,23 @@ SELECT results_eq($$
     $$,
     'Test lt as a filter on a numeric field with order by'
 );
+
+SELECT results_eq($$
+    select s from search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test ids search single'
+);
+
+SELECT results_eq($$
+    select s from search('{"ids":["pgstac-test-item-0097","pgstac-test-item-0003"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0003"},{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test ids search multi'
+);
+
 
 SELECT results_eq($$
     select s from search('{"collections":["pgstac-test-collection"],"fields":{"include":["id"]}, "limit": 1}') s;
