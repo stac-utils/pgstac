@@ -40,6 +40,23 @@ SELECT results_eq($$
     'Test that id gets added to cql filter when cql filter does exist'
 );
 
+SELECT results_eq($$
+    SELECT add_filters_to_cql('{"collections":["a","b"]}'::jsonb);
+    $$,$$
+    SELECT '{"filter":{"and": [{"in": [{"property": "collection"}, ["a", "b"]]}]}}'::jsonb;
+    $$,
+    'Test that collections gets added to cql filter when cql filter does not exist'
+);
+
+SELECT results_eq($$
+    SELECT add_filters_to_cql('{"collection":["a","b"]}'::jsonb);
+    $$,$$
+    SELECT '{"collection": ["a", "b"]}'::jsonb;
+    $$,
+    'Test that collection are not added to cql filter'
+);
+
+
 SELECT has_function('pgstac'::name, 'cql_and_append', ARRAY['jsonb','jsonb']);
 
 SELECT has_function('pgstac'::name, 'query_to_cqlfilter', ARRAY['jsonb']);
@@ -135,6 +152,30 @@ SELECT results_eq($$
     select '{"next": "pgstac-test-item-0012", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 31, "returned": 10}, "features": [{"id": "pgstac-test-item-0097", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 1}}, {"id": "pgstac-test-item-0063", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0085", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0073", "properties": {"datetime": "2011-08-15T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0041", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0034", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0005", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0048", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}]}'::jsonb
     $$,
     'Test lt as a filter on a numeric field with order by'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["pgstac-test-collection"],"fields":{"include":["id"]}, "limit": 1}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0003", "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "pgstac-test-item-0003"}]}'::jsonb
+    $$,
+    'Test collections search'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["something"]}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search with unknow collection'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["something"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search return empty feature not null'
 );
 
 /* template
