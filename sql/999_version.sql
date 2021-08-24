@@ -1,1 +1,1 @@
-INSERT INTO pgstac.migrations (version) VALUES ('0.3.3');
+INSERT INTO pgstac.migrations (version) VALUES ('0.3.4');

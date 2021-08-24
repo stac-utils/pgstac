@@ -315,6 +315,16 @@ CREATE OR REPLACE FUNCTION upsert_item(data jsonb) RETURNS VOID AS $$
     INSERT INTO items_staging_upsert (content) VALUES (data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
+CREATE OR REPLACE FUNCTION create_items(data jsonb) RETURNS VOID AS $$
+    INSERT INTO items_staging (content)
+    SELECT * FROM jsonb_array_elements(data);
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION upsert_items(data jsonb) RETURNS VOID AS $$
+    INSERT INTO items_staging_upsert (content)
+    SELECT * FROM jsonb_array_elements(data);
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
 
 CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
 SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb

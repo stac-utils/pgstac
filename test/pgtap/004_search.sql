@@ -195,6 +195,24 @@ SELECT results_eq($$
     'Test collections search return empty feature not null'
 );
 
+SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean']);
+
+SELECT results_eq($$
+    select hash from search_query('{"collections":["pgstac-test-collection"]}') s;
+    $$,$$
+    select '4688c09f64bc21b5e4bb7ce19c755623'
+    $$,
+    'Test search_query to return valid hash'
+);
+
+SELECT results_eq($$
+    select search from search_query('{"collections":["pgstac-test-collection"]}') s;
+    $$,$$
+    select '{"collections":["pgstac-test-collection"]}'::jsonb
+    $$,
+    'Test search_query to return valid search'
+);
+
 /* template
 SELECT results_eq($$
 
