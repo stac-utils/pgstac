@@ -31,7 +31,7 @@ services:
       - PGHOST=localhost
       - PGDATABASE=postgis
     ports:
-      - "5432:5432"
+      - "5439:5432"
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
       - ./:/opt/src

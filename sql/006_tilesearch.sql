@@ -75,17 +75,17 @@ BEGIN
 
             prev_area := unionedgeom_area;
 
-            RAISE NOTICE '% % % %', st_area(unionedgeom)/tilearea, counter, scancounter, ftime();
+            RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             IF fields IS NOT NULL THEN
                 out_records := out_records || filter_jsonb(iter_record.content, includes, excludes);
             ELSE
                 out_records := out_records || iter_record.content;
             END IF;
 
-            IF counter > _limit
+            IF counter >= _limit
                 OR scancounter > _scanlimit
                 OR ftime() > _timelimit
-                OR unionedgeom_area >= tilearea
+                OR (skipcovered AND unionedgeom_area >= tilearea)
             THEN
                 exit_flag := TRUE;
                 EXIT;
