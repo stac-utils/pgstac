@@ -19,7 +19,7 @@ SELECT age(clock_timestamp(), transaction_timestamp());
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION pgstac.geojsonsearch(geojson jsonb, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, skipcovered boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION pgstac.geojsonsearch(geojson jsonb, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, exitwhenfull boolean DEFAULT true, skipcovered boolean DEFAULT true)
  RETURNS jsonb
  LANGUAGE sql
 AS $function$
@@ -30,12 +30,13 @@ AS $function$
         _scanlimit,
         _limit,
         _timelimit,
+        exitwhenfull,
         skipcovered
     );
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION pgstac.geometrysearch(geom geometry, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, skipcovered boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION pgstac.geometrysearch(geom geometry, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, exitwhenfull boolean DEFAULT true, skipcovered boolean DEFAULT true)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS $function$
@@ -59,7 +60,17 @@ DECLARE
     includes text[];
 
 BEGIN
+    -- If skipcovered is true then you will always want to exit when the passed in geometry is full
+    IF skipcovered THEN
+        exitwhenfull := TRUE;
+    END IF;
+
     SELECT * INTO search FROM searches WHERE hash=queryhash;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Search with Query Hash % Not Found', queryhash;
+    END IF;
+
     tilearea := st_area(geom);
     _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
 
@@ -86,35 +97,36 @@ BEGIN
         LOOP
             FETCH curs INTO iter_record;
             EXIT WHEN NOT FOUND;
+            IF exitwhenfull OR skipcovered THEN -- If we are not using exitwhenfull or skipcovered, we do not need to do expensive geometry operations
+                clippedgeom := st_intersection(geom, iter_record.geometry);
 
-            clippedgeom := st_intersection(geom, iter_record.geometry);
+                IF unionedgeom IS NULL THEN
+                    unionedgeom := clippedgeom;
+                ELSE
+                    unionedgeom := st_union(unionedgeom, clippedgeom);
+                END IF;
 
-            IF unionedgeom IS NULL THEN
-                unionedgeom := clippedgeom;
-            ELSE
-                unionedgeom := st_union(unionedgeom, clippedgeom);
+                unionedgeom_area := st_area(unionedgeom);
+
+                IF skipcovered AND prev_area = unionedgeom_area THEN
+                    scancounter := scancounter + 1;
+                    CONTINUE;
+                END IF;
+
+                prev_area := unionedgeom_area;
+
+                RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             END IF;
 
-            unionedgeom_area := st_area(unionedgeom);
-
-            IF skipcovered AND prev_area = unionedgeom_area THEN
-                scancounter := scancounter + 1;
-                CONTINUE;
-            END IF;
-
-            prev_area := unionedgeom_area;
-
-            RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             IF fields IS NOT NULL THEN
                 out_records := out_records || filter_jsonb(iter_record.content, includes, excludes);
             ELSE
                 out_records := out_records || iter_record.content;
             END IF;
-
             IF counter >= _limit
                 OR scancounter > _scanlimit
                 OR ftime() > _timelimit
-                OR (skipcovered AND unionedgeom_area >= tilearea)
+                OR (exitwhenfull AND unionedgeom_area >= tilearea)
             THEN
                 exit_flag := TRUE;
                 EXIT;
@@ -166,7 +178,7 @@ AS $function$
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION pgstac.xyzsearch(_x integer, _y integer, _z integer, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, skipcovered boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION pgstac.xyzsearch(_x integer, _y integer, _z integer, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, exitwhenfull boolean DEFAULT true, skipcovered boolean DEFAULT true)
  RETURNS jsonb
  LANGUAGE sql
 AS $function$
@@ -177,6 +189,7 @@ AS $function$
         _scanlimit,
         _limit,
         _timelimit,
+        exitwhenfull,
         skipcovered
     );
 $function$
