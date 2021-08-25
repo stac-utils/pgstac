@@ -136,38 +136,42 @@ async def run_migration(
     if toversion is None:
         toversion = version
     files = []
+
     conn = await asyncpg.connect(dsn=dsn)
     oldversion = await get_version(conn)
+    try:
+        if oldversion == toversion:
+            typer.echo(f"Target database already at version: {toversion}")
+            await conn.close()
+            return toversion
+        if oldversion is None:
+            typer.echo(f"No pgstac version set, installing {toversion} from scratch.")
+            files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
+        else:
+            typer.echo(f"Migrating from {oldversion} to {toversion}.")
+            m = MigrationPath(migrations_dir, oldversion, toversion)
+            files = m.migrations()
 
-    if oldversion == toversion:
-        typer.echo(f"Target database already at version: {toversion}")
-        return toversion
-    if oldversion is None:
-        typer.echo(f"No pgstac version set, installing {toversion} from scratch.")
-        files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
-    else:
-        typer.echo(f"Migrating from {oldversion} to {toversion}.")
-        m = MigrationPath(migrations_dir, oldversion, toversion)
-        files = m.migrations()
+        if len(files) < 1:
+            raise Exception("Could not find migration files")
 
-    if len(files) < 1:
-        raise Exception("Could not find migration files")
+        typer.echo(f"Running migrations for {files}.")
 
-    typer.echo(f"Running migrations for {files}.")
+        for file in files:
+            migration_sql = get_sql(file)
+            async with conn.transaction():
+                await conn.execute(migration_sql)
+                await conn.execute(
+                    """
+                    INSERT INTO pgstac.migrations (version)
+                    VALUES ($1);
+                    """,
+                    toversion,
+                )
 
-    for file in files:
-        migration_sql = get_sql(file)
-        async with conn.transaction():
-            await conn.execute(migration_sql)
-            await conn.execute(
-                """
-                INSERT INTO pgstac.migrations (version)
-                VALUES ($1);
-                """,
-                toversion,
-            )
+        newversion = await get_version(conn)
+        await conn.close()
 
-    newversion = await get_version(conn)
-    await conn.close()
-
-    return newversion
+        return newversion
+    finally:
+        await conn.close()
