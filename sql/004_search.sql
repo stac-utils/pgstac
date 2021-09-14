@@ -669,7 +669,8 @@ CREATE TABLE IF NOT EXISTS searches(
     estimated_count bigint,
     estimated_cost float,
     total_count bigint,
-    partitions text[]
+    partitions text[],
+    metadata jsonb
 );
 
 

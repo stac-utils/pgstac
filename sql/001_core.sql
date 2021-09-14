@@ -4,7 +4,7 @@ SET SEARCH_PATH TO pgstac, public;
 
 CREATE TABLE migrations (
   version text,
-  datetime timestamptz DEFAULT now() NOT NULL
+  datetime timestamptz DEFAULT clock_timestamp() NOT NULL
 );
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$

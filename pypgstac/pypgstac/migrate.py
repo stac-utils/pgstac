@@ -112,8 +112,7 @@ async def get_version(conn: asyncpg.Connection) -> str:
         try:
             version = await conn.fetchval(
                 """
-                SELECT version FROM pgstac.migrations
-                ORDER BY datetime DESC LIMIT 1;
+                SELECT get_version();
                 """
             )
         except asyncpg.exceptions.UndefinedTableError:
@@ -163,8 +162,7 @@ async def run_migration(
                 await conn.execute(migration_sql)
                 await conn.execute(
                     """
-                    INSERT INTO pgstac.migrations (version)
-                    VALUES ($1);
+                    SELECT set_version($1);
                     """,
                     toversion,
                 )
