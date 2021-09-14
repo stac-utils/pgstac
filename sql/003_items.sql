@@ -264,6 +264,7 @@ CREATE TRIGGER items_update_trigger BEFORE UPDATE ON items
 View to get a table of available items partitions
 with date ranges
 */
+DROP VIEW IF EXISTS all_items_partitions CASCADE;
 CREATE VIEW all_items_partitions AS
 WITH base AS
 (SELECT
@@ -279,7 +280,8 @@ WHERE c.oid = i.inhrelid AND i.inhparent = 'items'::regclass)
 SELECT partition, tstzrange(
     t[1]::timestamptz,
     t[2]::timestamptz
-), est_cnt
+), t[1]::timestamptz as pstart,
+    t[2]::timestamptz as pend, est_cnt
 FROM base
 ORDER BY 2 desc;
 
