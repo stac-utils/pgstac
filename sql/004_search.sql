@@ -38,7 +38,7 @@ IF cardinality(path_elements)<1 THEN
     path := field;
     path_txt := field;
     jsonpath := '$';
-    eq := NULL; -- format($F$ %s = %%s $F$, field);
+    eq := NULL;
     RETURN;
 END IF;
 
@@ -495,6 +495,23 @@ WITH t AS (
 FROM t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE VIEW items_btree_indexes AS
+SELECT
+    substring(indexdef from 'btree (.*)')
+FROM pg_indexes
+WHERE
+    schemaname='pgstac'
+    AND tablename='items'
+;
+
+CREATE OR REPLACE FUNCTION field_orderby(p text) RETURNS text AS $$
+WITH t AS (
+    SELECT
+        replace(trim(substring(indexdef from 'btree \((.*)\)')),' ','')as s
+    FROM pg_indexes WHERE schemaname='pgstac' AND tablename='items' AND indexdef ~* 'btree'
+) SELECT s FROM t WHERE strpos(s, lower(trim(p)))>0;
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION sort_sqlorderby(
     _search jsonb DEFAULT NULL,
     reverse boolean DEFAULT FALSE
@@ -511,7 +528,7 @@ WITH sortby AS (
     SELECT jsonb_array_elements(sort) as value FROM withid
 ),sorts AS (
     SELECT
-        (items_path(value->>'field')).path as key,
+        coalesce(field_orderby((items_path(value->>'field')).path_txt), (items_path(value->>'field')).path) as key,
         parse_sort_dir(value->>'direction', reverse) as dir
     FROM withid_rows
 )
@@ -641,7 +658,6 @@ CREATE OR REPLACE FUNCTION search_hash(jsonb) RETURNS text AS $$
     SELECT md5(search_tohash($1)::text);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-
 CREATE TABLE IF NOT EXISTS searches(
     hash text GENERATED ALWAYS AS (search_hash(search)) STORED PRIMARY KEY,
     search jsonb NOT NULL,
@@ -651,26 +667,87 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     statslastupdated timestamptz,
     estimated_count bigint,
-    total_count bigint
+    estimated_cost float,
+    total_count bigint,
+    partitions text[]
 );
 
-CREATE OR REPLACE FUNCTION search_query(_search jsonb = '{}'::jsonb, updatestats boolean DEFAULT false) RETURNS searches AS $$
+
+CREATE OR REPLACE FUNCTION explain_partitions(_where text) RETURNS jsonb AS $$
+DECLARE
+explain_json jsonb;
+partitions text[];
+BEGIN
+RAISE NOTICE 'BEFORE EXPLAIN: %', ftime();
+EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', _where)
+INTO explain_json;
+RAISE NOTICE 'AFTER EXPLAIN: %', ftime();
+
+WITH t AS (
+    SELECT j->>0 as p FROM
+        jsonb_path_query(
+            explain_json,
+            'strict $.**."Relation Name" ? (@ != null)'
+        ) j
+), ordered AS (
+    SELECT p FROM t JOIN items_partitions
+        ON (t.p = items_partitions.partition)
+    ORDER BY pstart DESC
+)
+SELECT array_agg(p) INTO partitions FROM ordered;
+
+
+RETURN jsonb_build_object(
+  'estimated_cost', explain_json->0->'Plan'->'Total Cost',
+  'estimated_rows', explain_json->0->'Plan'->'Plan Rows',
+  'partitions', to_jsonb(partitions)
+);
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+
+CREATE OR REPLACE FUNCTION items_count(_where text) RETURNS bigint AS $$
+DECLARE
+cnt bigint;
+BEGIN
+EXECUTE format('SELECT count(*) FROM items WHERE %s', _where) INTO cnt;
+RETURN cnt;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+
+
+
+DROP FUNCTION IF EXISTS search_query;
+CREATE OR REPLACE FUNCTION search_query(
+    _search jsonb = '{}'::jsonb,
+    updatestats boolean DEFAULT false
+) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
+    pexplain jsonb;
 BEGIN
-INSERT INTO searches (search)
-    VALUES (search_tohash(_search))
-    ON CONFLICT DO NOTHING
-    RETURNING * INTO search;
-IF search.hash IS NULL THEN
-    SELECT * INTO search FROM searches WHERE hash=search_hash(_search);
+SELECT * INTO search FROM searches WHERE hash=search_hash(_search) FOR UPDATE;
+
+IF NOT FOUND THEN
+    INSERT INTO searches (search)
+        VALUES (search_tohash(_search))
+        ON CONFLICT DO NOTHING
+        RETURNING * INTO search;
 END IF;
+
+-- Calculate the where clause if not already calculated
 IF search._where IS NULL THEN
     search._where := cql_to_where(_search);
 END IF;
+
+-- Calculate the order by clause if not already calculated
 IF search.orderby IS NULL THEN
     search.orderby := sort_sqlorderby(_search);
 END IF;
+
 
 IF search.statslastupdated IS NULL OR age(search.statslastupdated) > '1 day'::interval OR (_search ? 'context' AND search.total_count IS NULL) THEN
     updatestats := TRUE;
@@ -679,11 +756,20 @@ END IF;
 IF updatestats THEN
     -- Get Estimated Stats
     RAISE NOTICE 'Getting stats for %', search._where;
-    search.estimated_count := estimated_count(search._where);
-    RAISE NOTICE 'Estimated Count: %', search.estimated_count;
+    pexplain := explain_partitions(search._where);
+    --RAISE NOTICE 'PEXPLAIN: %', pexplain;
+    search.estimated_count := pexplain->'estimated_rows';
+    search.estimated_cost := pexplain->'estimated_cost';
+    search.partitions := textarr(pexplain->'partitions');
+    RAISE NOTICE 'SEARCH: %', search;
 
-    IF _search ? 'context' OR search.estimated_count < 10000 THEN
-        --search.total_count := partition_count(search._where);
+    IF _search ? 'context'
+        AND (
+            _search->>'context' = 'full' OR
+            (_search->'context'->>'cost')::float > search.estimated_cost OR
+            (_search->'context'->>'count')::float > search.estimated_count
+        ) THEN
+        RAISE NOTICE 'Calculating actual count...';
         EXECUTE format(
             'SELECT count(*) FROM items WHERE %s',
             search._where
@@ -697,7 +783,7 @@ END IF;
 
 search.lastused := now();
 search.usecount := coalesce(search.usecount,0) + 1;
-RAISE NOTICE 'SEARCH: %', search;
+--RAISE NOTICE 'SEARCH: %', search;
 UPDATE searches SET
     _where = search._where,
     orderby = search.orderby,
@@ -705,7 +791,8 @@ UPDATE searches SET
     usecount = search.usecount,
     statslastupdated = search.statslastupdated,
     estimated_count = search.estimated_count,
-    total_count = search.total_count
+    total_count = search.total_count,
+    partitions = search.partitions
 WHERE hash = search.hash
 ;
 RETURN search;
@@ -745,6 +832,9 @@ DECLARE
     exit_flag boolean := FALSE;
     batches int := 0;
     timer timestamptz := clock_timestamp();
+    pstart timestamptz;
+    pend timestamptz;
+    pcurs refcursor;
 BEGIN
 searches := search_query(_search);
 _where := searches._where;
@@ -764,12 +854,13 @@ full_where := concat_ws(' AND ', _where, token_where);
 RAISE NOTICE 'FULL QUERY % %', full_where, clock_timestamp()-timer;
 timer := clock_timestamp();
 
-FOR query IN SELECT partition_queries(full_where, orderby) LOOP
+FOR query IN SELECT partition_queries(full_where, orderby, searches.partitions) LOOP
     timer := clock_timestamp();
-    query := format('%s LIMIT %L', query, _limit + 1);
+    query := format('%s LIMIT %s', query, _limit + 1);
     RAISE NOTICE 'Partition Query: %', query;
     batches := batches + 1;
     curs = create_cursor(query);
+    --OPEN curs
     LOOP
         FETCH curs into iter_record;
         EXIT WHEN NOT FOUND;
@@ -786,7 +877,7 @@ FOR query IN SELECT partition_queries(full_where, orderby) LOOP
             EXIT;
         END IF;
     END LOOP;
-    RAISE NOTICE 'Query took %', clock_timestamp()-timer;
+    RAISE NOTICE 'Query took %. Total Time %', clock_timestamp()-timer, ftime();
     timer := clock_timestamp();
     EXIT WHEN exit_flag;
 END LOOP;
@@ -857,4 +948,6 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SET jit TO off;
+$$ LANGUAGE PLPGSQL
+SET jit TO off
+;

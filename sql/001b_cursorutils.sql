@@ -1,4 +1,8 @@
 /* Functions to create an iterable of cursors over partitions. */
+CREATE OR REPLACE FUNCTION items_date_range() RETURNS tstzrange AS $$
+SELECT tstzrange(min(datetime), max(datetime)) FROM items;
+$$ LANGUAGE SQL PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION create_cursor(q text) RETURNS refcursor AS $$
 DECLARE
     curs refcursor;
@@ -8,29 +12,26 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
+DROP FUNCTION IF EXISTS partition_queries;
 CREATE OR REPLACE FUNCTION partition_queries(
     IN _where text DEFAULT 'TRUE',
-    IN _orderby text DEFAULT 'datetime DESC, id DESC'
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN partitions text[] DEFAULT '{items}'
 ) RETURNS SETOF text AS $$
 DECLARE
     partition_query text;
     query text;
-    p record;
+    p text;
     cursors refcursor;
+    dstart timestamptz;
+    dend timestamptz;
+    step interval := '10 weeks'::interval;
 BEGIN
+
 IF _orderby ILIKE 'datetime d%' THEN
-    partition_query := format($q$
-        SELECT partition, tstzrange
-        FROM items_partitions
-        ORDER BY tstzrange DESC;
-    $q$);
+    partitions := partitions;
 ELSIF _orderby ILIKE 'datetime a%' THEN
-    partition_query := format($q$
-        SELECT partition, tstzrange
-        FROM items_partitions
-        ORDER BY tstzrange ASC
-        ;
-    $q$);
+    partitions := array_reverse(partitions);
 ELSE
     query := format($q$
         SELECT * FROM items
@@ -42,14 +43,18 @@ ELSE
     RETURN NEXT query;
     RETURN;
 END IF;
-FOR p IN
-    EXECUTE partition_query
+RAISE NOTICE 'PARTITIONS ---> %',partitions;
+FOREACH p IN ARRAY partitions
+    --EXECUTE partition_query
 LOOP
     query := format($q$
-        SELECT * FROM items
-        WHERE datetime >= %L AND datetime < %L AND %s
+        SELECT * FROM %I
+        WHERE %s
         ORDER BY %s
-    $q$, lower(p.tstzrange), upper(p.tstzrange), _where, _orderby
+        $q$,
+        p,
+        _where,
+        _orderby
     );
     RETURN NEXT query;
 END LOOP;
@@ -67,7 +72,7 @@ DECLARE
     p record;
     cursors refcursor;
 BEGIN
-FOR query IN SELECT * FROM partion_queries(_where, _orderby) LOOP
+FOR query IN SELECT * FROM partition_queries(_where, _orderby) LOOP
     RETURN NEXT create_cursor(query);
 END LOOP;
 RETURN;
@@ -106,3 +111,72 @@ END LOOP;
 RETURN total;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+DROP FUNCTION IF EXISTS partition_checks;
+CREATE OR REPLACE FUNCTION partition_checks(
+    IN partition text,
+    OUT min_datetime timestamptz,
+    OUT max_datetime timestamptz,
+    OUT min_end_datetime timestamptz,
+    OUT max_end_datetime timestamptz,
+    OUT collections text[],
+    OUT cnt bigint
+) RETURNS RECORD AS $$
+DECLARE
+q text;
+end_datetime_constraint text := concat(partition, '_end_datetime_constraint');
+collections_constraint text := concat(partition, '_collections_constraint');
+BEGIN
+RAISE NOTICE 'CREATING CONSTRAINTS FOR %', partition;
+q := format($q$
+        SELECT
+            min(datetime),
+            max(datetime),
+            min(end_datetime),
+            max(end_datetime),
+            array_agg(DISTINCT collection_id),
+            count(*)
+        FROM %I;
+    $q$,
+    partition
+);
+EXECUTE q INTO min_datetime, max_datetime, min_end_datetime, max_end_datetime, collections, cnt;
+RAISE NOTICE '% % % % % %', min_datetime, max_datetime, min_end_datetime, max_end_datetime, collections, cnt;
+IF cnt IS NULL or cnt = 0 THEN
+    RAISE NOTICE 'Partition % is empty, removing...', partition;
+    q := format($q$
+        DROP TABLE IF EXISTS %I;
+        $q$, partition
+    );
+    EXECUTE q;
+    RETURN;
+END IF;
+q := format($q$
+        ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+        ALTER TABLE %I ADD CONSTRAINT %I
+            check((end_datetime >= %L) AND (end_datetime <= %L));
+        ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+        ALTER TABLE %I ADD CONSTRAINT %I
+            check((collection_id = ANY(%L)));
+        ANALYZE %I;
+    $q$,
+    partition,
+    end_datetime_constraint,
+    partition,
+    end_datetime_constraint,
+    min_end_datetime,
+    max_end_datetime,
+    partition,
+    collections_constraint,
+    partition,
+    collections_constraint,
+    collections,
+    partition
+);
+
+EXECUTE q;
+RETURN;
+
+END;
+$$ LANGUAGE PLPGSQL;
