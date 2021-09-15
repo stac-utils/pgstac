@@ -637,13 +637,12 @@ CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
     SELECT $1 - '{token,limit,context,includes,excludes}'::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION search_hash(jsonb) RETURNS text AS $$
-    SELECT md5(search_tohash($1)::text);
+CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
+    SELECT md5(concat($1::text, $2::text));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-
 CREATE TABLE IF NOT EXISTS searches(
-    hash text GENERATED ALWAYS AS (search_hash(search)) STORED PRIMARY KEY,
+    hash text GENERATED ALWAYS AS (search_hash(search, metadata)) STORED PRIMARY KEY,
     search jsonb NOT NULL,
     _where text,
     orderby text,
@@ -651,19 +650,20 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     statslastupdated timestamptz,
     estimated_count bigint,
-    total_count bigint
+    total_count bigint,
+    metadata jsonb DEFAULT '{}'::jsonb
 );
 
-CREATE OR REPLACE FUNCTION search_query(_search jsonb = '{}'::jsonb, updatestats boolean DEFAULT false) RETURNS searches AS $$
+CREATE OR REPLACE FUNCTION search_query(_search jsonb = '{}'::jsonb, updatestats boolean DEFAULT false, metadata jsonb = '{}'::jsonb) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
 BEGIN
-INSERT INTO searches (search)
-    VALUES (search_tohash(_search))
+INSERT INTO searches (search, metadata)
+    VALUES (search_tohash(_search), metadata)
     ON CONFLICT DO NOTHING
     RETURNING * INTO search;
 IF search.hash IS NULL THEN
-    SELECT * INTO search FROM searches WHERE hash=search_hash(_search);
+    SELECT * INTO search FROM searches WHERE hash=search_hash(search_tohash(_search), metadata);
 END IF;
 IF search._where IS NULL THEN
     search._where := cql_to_where(_search);
