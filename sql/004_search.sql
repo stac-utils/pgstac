@@ -651,19 +651,19 @@ CREATE TABLE IF NOT EXISTS searches(
     statslastupdated timestamptz,
     estimated_count bigint,
     total_count bigint,
-    metadata jsonb DEFAULT '{}'::jsonb
+    metadata jsonb DEFAULT NULL
 );
 
-CREATE OR REPLACE FUNCTION search_query(_search jsonb = '{}'::jsonb, updatestats boolean DEFAULT false, metadata jsonb = '{}'::jsonb) RETURNS searches AS $$
+CREATE OR REPLACE FUNCTION search_query(_search jsonb = '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT NULL) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
 BEGIN
 INSERT INTO searches (search, metadata)
-    VALUES (search_tohash(_search), metadata)
+    VALUES (search_tohash(_search), _metadata)
     ON CONFLICT DO NOTHING
     RETURNING * INTO search;
 IF search.hash IS NULL THEN
-    SELECT * INTO search FROM searches WHERE hash=search_hash(search_tohash(_search), metadata);
+    SELECT * INTO search FROM searches WHERE hash=search_hash(search_tohash(_search), _metadata);
 END IF;
 IF search._where IS NULL THEN
     search._where := cql_to_where(_search);
