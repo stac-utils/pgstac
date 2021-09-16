@@ -4,7 +4,7 @@ SELECT has_function('pgstac'::name, 'xyzsearch', ARRAY['int','int','int','text',
 
 
 SELECT results_eq($$
-    select s from xyzsearch(8615, 13418, 15, '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb) s;
+    select s from xyzsearch(8615, 13418, 15, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb) s;
     $$,$$
     select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0003"}]}'::jsonb
     $$,
@@ -12,7 +12,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    select s from xyzsearch(1048, 1682, 12, '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb) s;
+    select s from xyzsearch(1048, 1682, 12, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb) s;
     $$,$$
     select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0050"}, {"id": "pgstac-test-item-0049"}, {"id": "pgstac-test-item-0048"}, {"id": "pgstac-test-item-0047"}, {"id": "pgstac-test-item-0100"}, {"id": "pgstac-test-item-0089"}]}'::jsonb
     $$,
@@ -20,7 +20,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    select s from xyzsearch(1048, 1682, 12, '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb, NULL, 1) s;
+    select s from xyzsearch(1048, 1682, 12, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb, NULL, 1) s;
     $$,$$
     select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0050"}]}'::jsonb
     $$,
@@ -28,7 +28,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    select s from xyzsearch(16792, 26892, 16, '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb, exitwhenfull => true) s;
+    select s from xyzsearch(16792, 26892, 16, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb, exitwhenfull => true) s;
     $$,$$
     select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0098"}, {"id": "pgstac-test-item-0097"}]}'::jsonb
     $$,
@@ -36,7 +36,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    select s from xyzsearch(16792, 26892, 16, '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb, exitwhenfull => false, skipcovered => false) s;
+    select s from xyzsearch(16792, 26892, 16, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb, exitwhenfull => false, skipcovered => false) s;
     $$,$$
     select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0098"}, {"id": "pgstac-test-item-0097"}, {"id": "pgstac-test-item-0091"}]}'::jsonb
     $$,

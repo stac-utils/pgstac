@@ -1,8 +1,4 @@
 /* Functions to create an iterable of cursors over partitions. */
-CREATE OR REPLACE FUNCTION items_date_range() RETURNS tstzrange AS $$
-SELECT tstzrange(min(datetime), max(datetime)) FROM items;
-$$ LANGUAGE SQL PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION create_cursor(q text) RETURNS refcursor AS $$
 DECLARE
     curs refcursor;
@@ -44,20 +40,22 @@ ELSE
     RETURN;
 END IF;
 RAISE NOTICE 'PARTITIONS ---> %',partitions;
-FOREACH p IN ARRAY partitions
-    --EXECUTE partition_query
-LOOP
-    query := format($q$
-        SELECT * FROM %I
-        WHERE %s
-        ORDER BY %s
-        $q$,
-        p,
-        _where,
-        _orderby
-    );
-    RETURN NEXT query;
-END LOOP;
+IF cardinality(partitions) > 0 THEN
+    FOREACH p IN ARRAY partitions
+        --EXECUTE partition_query
+    LOOP
+        query := format($q$
+            SELECT * FROM %I
+            WHERE %s
+            ORDER BY %s
+            $q$,
+            p,
+            _where,
+            _orderby
+        );
+        RETURN NEXT query;
+    END LOOP;
+END IF;
 RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
@@ -112,6 +110,28 @@ RETURN total;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
+
+CREATE OR REPLACE FUNCTION drop_partition_constraints(IN partition text) RETURNS VOID AS $$
+DECLARE
+    q text;
+    end_datetime_constraint text := concat(partition, '_end_datetime_constraint');
+    collections_constraint text := concat(partition, '_collections_constraint');
+BEGIN
+    q := format($q$
+            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+        $q$,
+        partition,
+        end_datetime_constraint,
+        partition,
+        collections_constraint
+    );
+
+    EXECUTE q;
+    RETURN;
+
+END;
+$$ LANGUAGE PLPGSQL;
 
 DROP FUNCTION IF EXISTS partition_checks;
 CREATE OR REPLACE FUNCTION partition_checks(

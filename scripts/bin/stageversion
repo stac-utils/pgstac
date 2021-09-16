@@ -29,7 +29,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
     cd $BASEDIR
     # Modify 999_version.sql so that base migrations have a reference to the version.
-    echo "INSERT INTO pgstac.migrations (version) VALUES ('${VERSION}');" >sql/999_version.sql
+    echo "SELECT set_version('${VERSION}');" >sql/999_version.sql
 
     # Assemble a base migration for the version and put it in the migrations directory.
     cat sql/*.sql >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql

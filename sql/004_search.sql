@@ -495,20 +495,11 @@ WITH t AS (
 FROM t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE VIEW items_btree_indexes AS
-SELECT
-    substring(indexdef from 'btree (.*)')
-FROM pg_indexes
-WHERE
-    schemaname='pgstac'
-    AND tablename='items'
-;
-
 CREATE OR REPLACE FUNCTION field_orderby(p text) RETURNS text AS $$
 WITH t AS (
     SELECT
         replace(trim(substring(indexdef from 'btree \((.*)\)')),' ','')as s
-    FROM pg_indexes WHERE schemaname='pgstac' AND tablename='items' AND indexdef ~* 'btree'
+    FROM pg_indexes WHERE schemaname='pgstac' AND tablename='items' AND indexdef ~* 'btree' AND indexdef ~* 'properties'
 ) SELECT s FROM t WHERE strpos(s, lower(trim(p)))>0;
 $$ LANGUAGE SQL;
 
@@ -654,57 +645,145 @@ CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
     SELECT $1 - '{token,limit,context,includes,excludes}'::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION search_hash(jsonb) RETURNS text AS $$
-    SELECT md5(search_tohash($1)::text);
+CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
+    SELECT md5(concat(search_tohash($1)::text,$2::text));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE TABLE IF NOT EXISTS searches(
-    hash text GENERATED ALWAYS AS (search_hash(search)) STORED PRIMARY KEY,
+    hash text GENERATED ALWAYS AS (search_hash(search, metadata)) STORED PRIMARY KEY,
     search jsonb NOT NULL,
     _where text,
     orderby text,
     lastused timestamptz DEFAULT now(),
     usecount bigint DEFAULT 0,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS search_wheres(
+    _where text PRIMARY KEY,
+    lastused timestamptz DEFAULT now(),
+    usecount bigint DEFAULT 0,
     statslastupdated timestamptz,
     estimated_count bigint,
     estimated_cost float,
+    time_to_estimate float,
     total_count bigint,
-    partitions text[],
-    metadata jsonb
+    time_to_count float,
+    partitions text[]
 );
 
 
-CREATE OR REPLACE FUNCTION explain_partitions(_where text) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false) RETURNS search_wheres AS $$
 DECLARE
-explain_json jsonb;
-partitions text[];
+    t timestamptz;
+    i interval;
+    explain_json jsonb;
+    partitions text[];
+    sw search_wheres%ROWTYPE;
 BEGIN
-RAISE NOTICE 'BEFORE EXPLAIN: %', ftime();
-EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', _where)
-INTO explain_json;
-RAISE NOTICE 'AFTER EXPLAIN: %', ftime();
+    SELECT * INTO sw FROM search_wheres WHERE _where=inwhere FOR UPDATE;
 
-WITH t AS (
-    SELECT j->>0 as p FROM
-        jsonb_path_query(
-            explain_json,
-            'strict $.**."Relation Name" ? (@ != null)'
-        ) j
-), ordered AS (
-    SELECT p FROM t JOIN items_partitions
-        ON (t.p = items_partitions.partition)
-    ORDER BY pstart DESC
-)
-SELECT array_agg(p) INTO partitions FROM ordered;
+    -- Update statistics if explicitly set, if statistics do not exist, or statistics ttl has expired
+    IF NOT updatestats THEN
+        RAISE NOTICE 'Checking if update is needed.';
+        RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
+        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(), now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', context(), sw.total_count;
+        IF
+            sw.statslastupdated IS NULL
+            OR (now() - sw.statslastupdated) > context_stats_ttl()
+            OR (context() != 'off' AND sw.total_count IS NULL)
+        THEN
+            updatestats := TRUE;
+        END IF;
+    END IF;
+
+    sw._where := inwhere;
+    sw.lastused := now();
+    sw.usecount := coalesce(sw.usecount,0) + 1;
+
+    IF NOT updatestats THEN
+        UPDATE search_wheres SET
+            lastused = sw.lastused,
+            usecount = sw.usecount
+        WHERE _where = inwhere
+        RETURNING * INTO sw
+        ;
+        RETURN sw;
+    END IF;
+    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
+    t := clock_timestamp();
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+    INTO explain_json;
+    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
+    WITH t AS (
+        SELECT j->>0 as p FROM
+            jsonb_path_query(
+                explain_json,
+                'strict $.**."Relation Name" ? (@ != null)'
+            ) j
+    ), ordered AS (
+        SELECT p FROM t ORDER BY p DESC
+        -- SELECT p FROM t JOIN items_partitions
+        --     ON (t.p = items_partitions.partition)
+        -- ORDER BY pstart DESC
+    )
+    SELECT array_agg(p) INTO partitions FROM ordered;
+    i := clock_timestamp() - t;
+    RAISE NOTICE 'Time for explain + join: %', clock_timestamp() - t;
 
 
-RETURN jsonb_build_object(
-  'estimated_cost', explain_json->0->'Plan'->'Total Cost',
-  'estimated_rows', explain_json->0->'Plan'->'Plan Rows',
-  'partitions', to_jsonb(partitions)
-);
+
+    sw.statslastupdated := now();
+    sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
+    sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
+    sw.time_to_estimate := extract(epoch from i);
+    sw.partitions := partitions;
+
+    -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
+    IF
+        context() = 'on'
+        OR
+        ( context() = 'auto' AND
+            (
+                sw.estimated_count < context_estimated_count()
+                OR
+                sw.estimated_cost < context_estimated_cost()
+            )
+        )
+    THEN
+        t := clock_timestamp();
+        RAISE NOTICE 'Calculating actual count...';
+        EXECUTE format(
+            'SELECT count(*) FROM items WHERE %s',
+            inwhere
+        ) INTO sw.total_count;
+        i := clock_timestamp() - t;
+        RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
+        sw.time_to_count := extract(epoch FROM i);
+    ELSE
+        sw.total_count := NULL;
+        sw.time_to_count := NULL;
+    END IF;
+
+
+    INSERT INTO search_wheres SELECT sw.*
+    ON CONFLICT (_where)
+    DO UPDATE
+        SET
+            lastused = sw.lastused,
+            usecount = sw.usecount,
+            statslastupdated = sw.statslastupdated,
+            estimated_count = sw.estimated_count,
+            estimated_cost = sw.estimated_cost,
+            time_to_estimate = sw.time_to_estimate,
+            partitions = sw.partitions,
+            total_count = sw.total_count,
+            time_to_count = sw.time_to_count
+    ;
+    RETURN sw;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL ;
 
 
 
@@ -724,20 +803,17 @@ $$ LANGUAGE PLPGSQL;
 DROP FUNCTION IF EXISTS search_query;
 CREATE OR REPLACE FUNCTION search_query(
     _search jsonb = '{}'::jsonb,
-    updatestats boolean DEFAULT false
+    updatestats boolean = false,
+    _metadata jsonb = '{}'::jsonb
 ) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
     pexplain jsonb;
+    t timestamptz;
+    i interval;
 BEGIN
-SELECT * INTO search FROM searches WHERE hash=search_hash(_search) FOR UPDATE;
-
-IF NOT FOUND THEN
-    INSERT INTO searches (search)
-        VALUES (search_tohash(_search))
-        ON CONFLICT DO NOTHING
-        RETURNING * INTO search;
-END IF;
+SELECT * INTO search FROM searches
+WHERE hash=search_hash(_search, _metadata) FOR UPDATE;
 
 -- Calculate the where clause if not already calculated
 IF search._where IS NULL THEN
@@ -749,52 +825,20 @@ IF search.orderby IS NULL THEN
     search.orderby := sort_sqlorderby(_search);
 END IF;
 
-
-IF search.statslastupdated IS NULL OR age(search.statslastupdated) > '1 day'::interval OR (_search ? 'context' AND search.total_count IS NULL) THEN
-    updatestats := TRUE;
-END IF;
-
-IF updatestats THEN
-    -- Get Estimated Stats
-    RAISE NOTICE 'Getting stats for %', search._where;
-    pexplain := explain_partitions(search._where);
-    --RAISE NOTICE 'PEXPLAIN: %', pexplain;
-    search.estimated_count := pexplain->'estimated_rows';
-    search.estimated_cost := pexplain->'estimated_cost';
-    search.partitions := textarr(pexplain->'partitions');
-    RAISE NOTICE 'SEARCH: %', search;
-
-    IF _search ? 'context'
-        AND (
-            _search->>'context' = 'full' OR
-            (_search->'context'->>'cost')::float > search.estimated_cost OR
-            (_search->'context'->>'count')::float > search.estimated_count
-        ) THEN
-        RAISE NOTICE 'Calculating actual count...';
-        EXECUTE format(
-            'SELECT count(*) FROM items WHERE %s',
-            search._where
-        ) INTO search.total_count;
-        RAISE NOTICE 'Actual Count: %', search.total_count;
-    ELSE
-        search.total_count := NULL;
-    END IF;
-    search.statslastupdated := now();
-END IF;
+PERFORM where_stats(search._where, updatestats);
 
 search.lastused := now();
-search.usecount := coalesce(search.usecount,0) + 1;
---RAISE NOTICE 'SEARCH: %', search;
-UPDATE searches SET
-    _where = search._where,
-    orderby = search.orderby,
-    lastused = search.lastused,
-    usecount = search.usecount,
-    statslastupdated = search.statslastupdated,
-    estimated_count = search.estimated_count,
-    total_count = search.total_count,
-    partitions = search.partitions
-WHERE hash = search.hash
+search.usecount := coalesce(search.usecount, 0) + 1;
+INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
+VALUES (_search, search._where, search.orderby, search.lastused, search.usecount, _metadata)
+ON CONFLICT (hash) DO
+UPDATE SET
+    _where = EXCLUDED._where,
+    orderby = EXCLUDED.orderby,
+    lastused = EXCLUDED.lastused,
+    usecount = EXCLUDED.usecount,
+    metadata = EXCLUDED.metadata
+RETURNING * INTO search
 ;
 RETURN search;
 
@@ -836,11 +880,13 @@ DECLARE
     pstart timestamptz;
     pend timestamptz;
     pcurs refcursor;
+    search_where search_wheres%ROWTYPE;
 BEGIN
 searches := search_query(_search);
 _where := searches._where;
 orderby := searches.orderby;
-total_count := coalesce(searches.total_count, searches.estimated_count);
+search_where := where_stats(_where);
+total_count := coalesce(search_where.total_count, search_where.estimated_count);
 
 
 IF token_type='prev' THEN
@@ -855,7 +901,7 @@ full_where := concat_ws(' AND ', _where, token_where);
 RAISE NOTICE 'FULL QUERY % %', full_where, clock_timestamp()-timer;
 timer := clock_timestamp();
 
-FOR query IN SELECT partition_queries(full_where, orderby, searches.partitions) LOOP
+FOR query IN SELECT partition_queries(full_where, orderby, search_where.partitions) LOOP
     timer := clock_timestamp();
     query := format('%s LIMIT %s', query, _limit + 1);
     RAISE NOTICE 'Partition Query: %', query;
@@ -933,11 +979,18 @@ IF _search ? 'fields' THEN
     SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
-context := jsonb_strip_nulls(jsonb_build_object(
-    'limit', _limit,
-    'matched', total_count,
-    'returned', coalesce(jsonb_array_length(out_records), 0)
-));
+IF context() != 'off' THEN
+    context := jsonb_strip_nulls(jsonb_build_object(
+        'limit', _limit,
+        'matched', total_count,
+        'returned', coalesce(jsonb_array_length(out_records), 0)
+    ));
+ELSE
+    context := jsonb_strip_nulls(jsonb_build_object(
+        'limit', _limit,
+        'returned', coalesce(jsonb_array_length(out_records), 0)
+    ));
+END IF;
 
 collection := jsonb_build_object(
     'type', 'FeatureCollection',

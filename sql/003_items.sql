@@ -71,7 +71,7 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION items_partition_name(timestamptz) RETURNS text AS $$
     SELECT to_char($1, '"items_p"IYYY"w"IW');
-$$ LANGUAGE SQL;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION items_partition_exists(text) RETURNS boolean AS $$
     SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relname=$1);
@@ -146,9 +146,25 @@ DECLARE
     mindate timestamptz;
     maxdate timestamptz;
     partition text;
+    p record;
 BEGIN
-    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
-    PERFORM items_partition_create(mindate, maxdate);
+    CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
+    SELECT
+        items_partition_name(stac_datetime(content)) as partition,
+        date_trunc('week', min(stac_datetime(content))) as partition_start
+    FROM newdata
+    GROUP BY 1;
+
+    FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Getting partition % ready.', p.partition;
+        IF NOT items_partition_exists(p.partition) THEN
+            RAISE NOTICE 'Creating partition %.', p.partition;
+            PERFORM items_partition_create_worker(p.partition, p.partition_start, p.partition_end);
+        END IF;
+        PERFORM drop_partition_constraints(p.partition);
+    END LOOP;
+
     INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
         SELECT
             content->>'id',
@@ -161,7 +177,14 @@ BEGIN
         FROM newdata
     ;
     DELETE FROM items_staging;
-    PERFORM analyze_empty_partitions();
+
+
+    FOR p IN SELECT new_partitions.partition FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Setting constraints for partition %.', p.partition;
+        PERFORM partition_checks(p.partition);
+    END LOOP;
+    DROP TABLE IF EXISTS new_partitions;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
@@ -177,12 +200,25 @@ CREATE UNLOGGED TABLE items_staging_ignore (
 
 CREATE OR REPLACE FUNCTION items_staging_ignore_insert_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
-    mindate timestamptz;
-    maxdate timestamptz;
-    partition text;
+    p record;
 BEGIN
-    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
-    PERFORM items_partition_create(mindate, maxdate);
+    CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
+    SELECT
+        items_partition_name(stac_datetime(content)) as partition,
+        date_trunc('week', min(stac_datetime(content))) as partition_start
+    FROM newdata
+    GROUP BY 1;
+
+    FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Getting partition % ready.', p.partition;
+        IF NOT items_partition_exists(p.partition) THEN
+            RAISE NOTICE 'Creating partition %.', p.partition;
+            PERFORM items_partition_create_worker(p.partition, p.partition_start, p.partition_end);
+        END IF;
+        PERFORM drop_partition_constraints(p.partition);
+    END LOOP;
+
     INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
         SELECT
             content->>'id',
@@ -193,10 +229,17 @@ BEGIN
             properties_idx(content),
             content
         FROM newdata
-    ON CONFLICT DO NOTHING
+        ON CONFLICT (datetime, id) DO NOTHING
     ;
-    DELETE FROM items_staging_ignore;
-    PERFORM analyze_empty_partitions();
+    DELETE FROM items_staging;
+
+
+    FOR p IN SELECT new_partitions.partition FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Setting constraints for partition %.', p.partition;
+        PERFORM partition_checks(p.partition);
+    END LOOP;
+    DROP TABLE IF EXISTS new_partitions;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
@@ -211,12 +254,25 @@ CREATE UNLOGGED TABLE items_staging_upsert (
 
 CREATE OR REPLACE FUNCTION items_staging_upsert_insert_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
-    mindate timestamptz;
-    maxdate timestamptz;
-    partition text;
+    p record;
 BEGIN
-    SELECT min(stac_datetime(content)), max(stac_datetime(content)) INTO mindate, maxdate FROM newdata;
-    PERFORM items_partition_create(mindate, maxdate);
+    CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
+    SELECT
+        items_partition_name(stac_datetime(content)) as partition,
+        date_trunc('week', min(stac_datetime(content))) as partition_start
+    FROM newdata
+    GROUP BY 1;
+
+    FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Getting partition % ready.', p.partition;
+        IF NOT items_partition_exists(p.partition) THEN
+            RAISE NOTICE 'Creating partition %.', p.partition;
+            PERFORM items_partition_create_worker(p.partition, p.partition_start, p.partition_end);
+        END IF;
+        PERFORM drop_partition_constraints(p.partition);
+    END LOOP;
+
     INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
         SELECT
             content->>'id',
@@ -227,16 +283,22 @@ BEGIN
             properties_idx(content),
             content
         FROM newdata
-    ON CONFLICT (datetime, id) DO UPDATE SET
-        content = EXCLUDED.content
-        WHERE items.content IS DISTINCT FROM EXCLUDED.content
-    ;
-    DELETE FROM items_staging_upsert;
-    PERFORM analyze_empty_partitions();
+        ON CONFLICT (datetime, id) DO UPDATE SET
+            content = EXCLUDED.content
+            WHERE items.content IS DISTINCT FROM EXCLUDED.content
+        ;
+    DELETE FROM items_staging;
+
+
+    FOR p IN SELECT new_partitions.partition FROM new_partitions
+    LOOP
+        RAISE NOTICE 'Setting constraints for partition %.', p.partition;
+        PERFORM partition_checks(p.partition);
+    END LOOP;
+    DROP TABLE IF EXISTS new_partitions;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
-
 
 CREATE TRIGGER items_staging_upsert_insert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_upsert_insert_triggerfunc();
