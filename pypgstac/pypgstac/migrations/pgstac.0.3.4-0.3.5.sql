@@ -1,4 +1,9 @@
 SET SEARCH_PATH to pgstac, public;
+
+CREATE TEMP TABLE temp_migrations AS SELECT version, max(datetime) as datetime from migrations group by 1;
+TRUNCATE pgstac.migrations;
+INSERT INTO pgstac.migrations SELECT * FROM temp_migrations;
+
 drop function if exists "pgstac"."partition_queries"(_where text, _orderby text);
 
 drop function if exists "pgstac"."search_hash"(jsonb);
