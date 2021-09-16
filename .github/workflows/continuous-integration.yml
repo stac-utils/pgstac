@@ -18,10 +18,20 @@ jobs:
   test-sql:
     name: test-sql
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ghcr.io/developmentseed/postgis-pgtap:13-3.1
+        env:
+          POSTGRES_USER: username
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # needed because the postgres container does not provide a healthcheck
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
     steps:
       - uses: actions/checkout@v2
-      - name: Start Test db
-        run: docker-compose -f docker-compose.test.yml up -d test-database
       - name: Install Postgres libs
         run: sudo apt-get install libpq-dev
       - name: Run test
