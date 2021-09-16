@@ -930,6 +930,6 @@ SELECT array_to_string(
 $function$
 ;
 
-
+SELECT partition_checks(partition) FROM all_items_partitions;
 
 SELECT set_version('0.3.5');
