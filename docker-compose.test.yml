@@ -1,0 +1,13 @@
+services:
+  test-database:
+    container_name: postgres
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      POSTGRES_USER: username
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
