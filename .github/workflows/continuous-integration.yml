@@ -16,7 +16,7 @@ jobs:
         run: ./scripts/cibuild
 
   test-sql:
-    name: test
+    name: test-sql
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,14 +40,12 @@ jobs:
         env:
           POSTGRES_USER: username
           POSTGRES_PASS: password
-          POSTGRES_HOST_READER: localhost
-          POSTGRES_HOST_WRITER: localhost
           POSTGRES_DBNAME: postgres
           POSTGRES_PORT: 5432
         run: |
           echo "Registering PgSTAC extension"
-          psql -X -f pgstac.sql
-          TESTOUTPUT=$(psql -X -f test/pgtap.sql)
+          psql -X -h localhost -f pgstac.sql
+          TESTOUTPUT=$(psql -X -h localhost -f test/pgtap.sql)
           echo "Checking if any tests are not ok on db $1"
           if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
               echo "PGTap tests failed."
