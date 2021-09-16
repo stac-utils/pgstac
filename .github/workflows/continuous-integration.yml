@@ -14,3 +14,45 @@ jobs:
       - uses: actions/checkout@v2
       - name: Execute linters and test suites
         run: ./scripts/cibuild
+
+  test-sql:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:13-3.1
+        env:
+          POSTGRES_USER: username
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # needed because the postgres container does not provide a healthcheck
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Postgres libs
+        run: sudo apt-get install libpq-dev
+
+      - name: Run test
+        env:
+          POSTGRES_USER: username
+          POSTGRES_PASS: password
+          POSTGRES_HOST_READER: localhost
+          POSTGRES_HOST_WRITER: localhost
+          POSTGRES_DBNAME: postgres
+          POSTGRES_PORT: 5432
+        run: |
+          echo "Registering PgSTAC extension"
+          psql -X -f pgstac.sql
+          TESTOUTPUT=$(psql -X -f test/pgtap.sql)
+          echo "Checking if any tests are not ok on db $1"
+          if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
+              echo "PGTap tests failed."
+              echo "$TESTOUTPUT"
+              exit 1
+          else
+              echo "All PGTap Tests Passed!"
+          fi
