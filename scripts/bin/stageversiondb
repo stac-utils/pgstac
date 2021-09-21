@@ -39,7 +39,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
             echo $?
             calc_migration $F_BASE $T_BASE >>$STAGED
             echo $?
-            echo "INSERT INTO migrations (version) VALUES ('$T');" >>$STAGED
+            echo "SELECT set_version('$T');" >>$STAGED
             echo $?
             echo "Created '$STAGED'. You must review and rename to $FILE before"
             echo "committing and tagging a release."

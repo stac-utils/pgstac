@@ -42,7 +42,8 @@ RUN \
 EXPOSE 5432
 
 RUN mkdir -p /docker-entrypoint-initdb.d
-COPY ./sql /docker-entrypoint-initdb.d/
+COPY pgstac.sql /docker-entrypoint-initdb.d/
+COPY ./sql /docker-entrypoint-initdb.d/sql/
 
 RUN mkdir -p /opt/src/pypgstac
 

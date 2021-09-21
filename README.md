@@ -22,6 +22,21 @@ STAC Client that uses PGStac available in [STAC-FastAPI](https://github.com/stac
 
 PGStac requires **Postgresql>=12**, **PostGIS>=3**, and **PG_Partman**. Best performance will be had using PostgreSQL>=13 and PostGIS>=3.1.
 
+### PGStac Settings
+PGStac installs everything into the pgstac schema in the database. You will need to make sure that this schema is set up in the search_path for the database.
+
+There are additional variables that control the settings used for calculating and displaying context (total row count) for a search.
+
+Variables can be set either by passing them in via the connection options using your connection library or by setting them on the Role that is used to log in to the database.
+
+```
+ALTER ROLE <username> SET SEARCH_PATH to pgstac, public;
+ALTER ROLE <username> SET pgstac.collection TO <'on','off','auto'>;
+ALTER ROLE <username> SET pgstac.context_estimated_count TO '<number of estimated rows when in auto mode that when an estimated count is less than will trigger a full count>';
+ALTER ROLE <username> SET pgstac.context_estimated_cost TO '<estimated query cost from explain when in auto mode that when an estimated cost is less than will trigger a full count>';
+ALTER ROLE <username> SET pgstac.context_stats_ttl TO '<an interval string ie "1 day" after which pgstac search will force recalculation of it's estimates>>';
+```
+
 ## PyPGStac
 PGStac includes a Python utility for bulk data loading and managing migrations.
 
