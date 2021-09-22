@@ -3,6 +3,7 @@ DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy collections (content) FROM 'test/testdata/collections.ndjson'
 \copy items_staging (content) FROM 'test/testdata/items.ndjson'
 
+SET pgstac.context TO 'on';
 
 SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb']);
 
@@ -195,12 +196,12 @@ SELECT results_eq($$
     'Test collections search return empty feature not null'
 );
 
-SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean']);
+SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
 
 SELECT results_eq($$
     select hash from search_query('{"collections":["pgstac-test-collection"]}') s;
     $$,$$
-    select '4688c09f64bc21b5e4bb7ce19c755623'
+    select '2bbae9a0ef0bbb5ffaca06603ce621d7'
     $$,
     'Test search_query to return valid hash'
 );

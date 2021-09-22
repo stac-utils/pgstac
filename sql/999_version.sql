@@ -1,1 +1,1 @@
-INSERT INTO pgstac.migrations (version) VALUES ('0.3.4');
+SELECT set_version('0.3.5');
