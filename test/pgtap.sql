@@ -25,7 +25,7 @@ SELECT plan(97);
 -- Run the tests.
 
 -- Core
-\i test//pgtap/001_core.sql
+\i test/pgtap/001_core.sql
 \i test/pgtap/001a_jsonutils.sql
 \i test/pgtap/001b_cursorutils.sql
 \i test/pgtap/001s_stacutils.sql
