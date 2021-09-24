@@ -42,3 +42,19 @@ SELECT results_eq($$
     $$,
     'Test xyzsearch to return feature collection with all intersecting items but exits continue even if tile is filled'
 );
+
+SELECT results_eq($$
+    select s from geojsonsearch('{"type": "Point","coordinates": [-87.75608539581299,30.692471153735646]}', '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb, exitwhenfull => true, skipcovered => true) s;
+    $$,$$
+    select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test geojsonsearch to return feature collection with all intersecting items intersecting the point'
+);
+
+SELECT results_eq($$
+    select s from geojsonsearch('{"type": "Point","coordinates": [-87.75608539581299,30.692471153735646]}', '4688c09f64bc21b5e4bb7ce19c755623', '{"include":["id"]}'::jsonb, exitwhenfull => false, skipcovered => false) s;
+    $$,$$
+    select '{"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test geojsonsearch to return feature collection with all intersecting items intersecting the point'
+);
