@@ -1,5 +1,7 @@
 FROM python:3.8-slim as python-base
 
+LABEL maintainer="David Bitner"
+
 ENV \
     PYTHONUNBUFFERED=1 \
     PYTHONFAULTHANDLER=1 \

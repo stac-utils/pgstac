@@ -1,10 +1,9 @@
 services:
   dev:
-    container_name: pgstac-dev
-    image: pgstac-dev
+    container_name: pypgstac
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.pypgstac
     platform: linux/amd64
     depends_on:
       - database
@@ -16,11 +15,10 @@ services:
       - PGHOST=database
       - PGDATABASE=postgis
   database:
-    container_name: pgstac-db
-    image: pgstac-db
+    container_name: pgstac
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.pgstac
     platform: linux/amd64
     environment:
       - POSTGRES_USER=username
@@ -35,5 +33,6 @@ services:
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
       - ./:/opt/src
+
 volumes:
   pgstac-pgdata:
