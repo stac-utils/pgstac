@@ -901,13 +901,16 @@ full_where := concat_ws(' AND ', _where, token_where);
 RAISE NOTICE 'FULL QUERY % %', full_where, clock_timestamp()-timer;
 timer := clock_timestamp();
 
+CREATE TEMP TABLE results (content jsonb) ON COMMIT DROP;
+
+
 FOR query IN SELECT partition_queries(full_where, orderby, search_where.partitions) LOOP
     timer := clock_timestamp();
     query := format('%s LIMIT %s', query, _limit + 1);
     RAISE NOTICE 'Partition Query: %', query;
     batches := batches + 1;
-    curs = create_cursor(query);
-    --OPEN curs
+    -- curs = create_cursor(query);
+    OPEN curs FOR EXECUTE query;
     LOOP
         FETCH curs into iter_record;
         EXIT WHEN NOT FOUND;
@@ -917,18 +920,23 @@ FOR query IN SELECT partition_queries(full_where, orderby, search_where.partitio
             first_record := last_record;
         END IF;
         IF cntr <= _limit THEN
-            out_records := out_records || last_record.content;
+            INSERT INTO results (content) VALUES (last_record.content);
+            -- out_records := out_records || last_record.content;
+
         ELSIF cntr > _limit THEN
             has_next := true;
             exit_flag := true;
             EXIT;
         END IF;
     END LOOP;
+    CLOSE curs;
     RAISE NOTICE 'Query took %. Total Time %', clock_timestamp()-timer, ftime();
     timer := clock_timestamp();
     EXIT WHEN exit_flag;
 END LOOP;
 RAISE NOTICE 'Scanned through % partitions.', batches;
+
+SELECT jsonb_agg(content) INTO out_records FROM results;
 
 
 -- Flip things around if this was the result of a prev token query
