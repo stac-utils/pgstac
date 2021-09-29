@@ -118,12 +118,12 @@ DECLARE
     collections_constraint text := concat(partition, '_collections_constraint');
 BEGIN
     q := format($q$
-            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+            ALTER TABLE %I
+                DROP CONSTRAINT IF EXISTS %I,
+                DROP CONSTRAINT IF EXISTS %I;
         $q$,
         partition,
         end_datetime_constraint,
-        partition,
         collections_constraint
     );
 
@@ -162,7 +162,7 @@ q := format($q$
     partition
 );
 EXECUTE q INTO min_datetime, max_datetime, min_end_datetime, max_end_datetime, collections, cnt;
-RAISE NOTICE '% % % % % %', min_datetime, max_datetime, min_end_datetime, max_end_datetime, collections, cnt;
+RAISE NOTICE '% % % % % % %', min_datetime, max_datetime, min_end_datetime, max_end_datetime, collections, cnt, ftime();
 IF cnt IS NULL or cnt = 0 THEN
     RAISE NOTICE 'Partition % is empty, removing...', partition;
     q := format($q$
@@ -172,30 +172,30 @@ IF cnt IS NULL or cnt = 0 THEN
     EXECUTE q;
     RETURN;
 END IF;
+RAISE NOTICE 'Running Constraint DDL %', ftime();
 q := format($q$
-        ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-        ALTER TABLE %I ADD CONSTRAINT %I
-            check((end_datetime >= %L) AND (end_datetime <= %L));
-        ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-        ALTER TABLE %I ADD CONSTRAINT %I
-            check((collection_id = ANY(%L)));
-        ANALYZE %I;
+        ALTER TABLE %I
+        DROP CONSTRAINT IF EXISTS %I,
+        ADD CONSTRAINT %I
+            check((end_datetime >= %L) AND (end_datetime <= %L)) NOT VALID,
+        DROP CONSTRAINT IF EXISTS %I,
+        ADD CONSTRAINT %I
+            check((collection_id = ANY(%L))) NOT VALID;
     $q$,
     partition,
     end_datetime_constraint,
-    partition,
     end_datetime_constraint,
     min_end_datetime,
     max_end_datetime,
-    partition,
     collections_constraint,
-    partition,
     collections_constraint,
     collections,
     partition
 );
+RAISE NOTICE 'q: %', q;
 
 EXECUTE q;
+RAISE NOTICE 'Returning %', ftime();
 RETURN;
 
 END;
