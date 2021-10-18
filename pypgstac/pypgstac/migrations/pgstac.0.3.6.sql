@@ -450,6 +450,31 @@ RETURN;
 
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION validate_constraints() RETURNS VOID AS $$
+DECLARE
+q text;
+BEGIN
+FOR q IN
+    SELECT FORMAT(
+        'ALTER TABLE %I.%I.%I VALIDATE CONSTRAINT %I;',
+        current_database(),
+        nsp.nspname,
+        cls.relname,
+        con.conname
+    )
+    FROM pg_constraint AS con
+    JOIN pg_class AS cls
+    ON con.conrelid = cls.oid
+    JOIN pg_namespace AS nsp
+    ON cls.relnamespace = nsp.oid
+    WHERE convalidated IS FALSE
+    AND nsp.nspname = 'pgstac'
+LOOP
+    EXECUTE q;
+END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
 /* looks for a geometry in a stac item first from geometry and falling back to bbox */
 CREATE OR REPLACE FUNCTION stac_geom(value jsonb) RETURNS geometry AS $$
 SELECT

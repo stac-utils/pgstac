@@ -3,6 +3,35 @@ CREATE INDEX search_wheres_partitions ON pgstac.search_wheres USING gin (partiti
 
 set check_function_bodies = off;
 
+CREATE OR REPLACE FUNCTION pgstac.validate_constraints()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+q text;
+BEGIN
+FOR q IN
+    SELECT FORMAT(
+        'ALTER TABLE %I.%I.%I VALIDATE CONSTRAINT %I;',
+        current_database(),
+        nsp.nspname,
+        cls.relname,
+        con.conname
+    )
+    FROM pg_constraint AS con
+    JOIN pg_class AS cls
+    ON con.conrelid = cls.oid
+    JOIN pg_namespace AS nsp
+    ON cls.relnamespace = nsp.oid
+    WHERE convalidated IS FALSE
+    AND nsp.nspname = 'pgstac'
+LOOP
+    EXECUTE q;
+END LOOP;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.drop_partition_constraints(partition text)
  RETURNS void
  LANGUAGE plpgsql
