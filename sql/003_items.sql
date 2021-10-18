@@ -143,10 +143,8 @@ CREATE UNLOGGED TABLE items_staging (
 
 CREATE OR REPLACE FUNCTION items_staging_insert_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
-    mindate timestamptz;
-    maxdate timestamptz;
-    partition text;
     p record;
+    _partitions text[];
 BEGIN
     CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
     SELECT
@@ -154,6 +152,15 @@ BEGIN
         date_trunc('week', min(stac_datetime(content))) as partition_start
     FROM newdata
     GROUP BY 1;
+
+    -- set statslastupdated in cache to be old enough cache always regenerated
+
+    SELECT array_agg(partition) INTO _partitions FROM new_partitions;
+    UPDATE search_wheres
+        SET
+            statslastupdated = NULL
+        WHERE partitions && _partitions
+    ;
 
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
     LOOP
@@ -164,7 +171,6 @@ BEGIN
         END IF;
         PERFORM drop_partition_constraints(p.partition);
     END LOOP;
-
     INSERT INTO items (id, geometry, collection_id, datetime, end_datetime, properties, content)
         SELECT
             content->>'id',
@@ -201,6 +207,7 @@ CREATE UNLOGGED TABLE items_staging_ignore (
 CREATE OR REPLACE FUNCTION items_staging_ignore_insert_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p record;
+    _partitions text[];
 BEGIN
     CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
     SELECT
@@ -208,6 +215,15 @@ BEGIN
         date_trunc('week', min(stac_datetime(content))) as partition_start
     FROM newdata
     GROUP BY 1;
+
+    -- set statslastupdated in cache to be old enough cache always regenerated
+
+    SELECT array_agg(partition) INTO _partitions FROM new_partitions;
+    UPDATE search_wheres
+        SET
+            statslastupdated = NULL
+        WHERE partitions && _partitions
+    ;
 
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
     LOOP
@@ -255,6 +271,7 @@ CREATE UNLOGGED TABLE items_staging_upsert (
 CREATE OR REPLACE FUNCTION items_staging_upsert_insert_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p record;
+    _partitions text[];
 BEGIN
     CREATE TEMP TABLE new_partitions ON COMMIT DROP AS
     SELECT
@@ -262,6 +279,15 @@ BEGIN
         date_trunc('week', min(stac_datetime(content))) as partition_start
     FROM newdata
     GROUP BY 1;
+
+    -- set statslastupdated in cache to be old enough cache always regenerated
+
+    SELECT array_agg(partition) INTO _partitions FROM new_partitions;
+    UPDATE search_wheres
+        SET
+            statslastupdated = NULL
+        WHERE partitions && _partitions
+    ;
 
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
     LOOP

@@ -672,6 +672,7 @@ CREATE TABLE IF NOT EXISTS search_wheres(
     partitions text[]
 );
 
+CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
 
 CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false) RETURNS search_wheres AS $$
 DECLARE
@@ -937,6 +938,8 @@ END LOOP;
 RAISE NOTICE 'Scanned through % partitions.', batches;
 
 SELECT jsonb_agg(content) INTO out_records FROM results;
+
+DROP TABLE results;
 
 
 -- Flip things around if this was the result of a prev token query
