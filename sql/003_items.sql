@@ -159,9 +159,11 @@ BEGIN
     UPDATE search_wheres
         SET
             statslastupdated = NULL
-        WHERE partitions && _partitions
+        WHERE _where IN (
+            SELECT _where FROM search_wheres sw WHERE sw.partitions && _partitions
+            FOR UPDATE SKIP LOCKED
+        )
     ;
-
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
     LOOP
         RAISE NOTICE 'Getting partition % ready.', p.partition;
@@ -222,7 +224,10 @@ BEGIN
     UPDATE search_wheres
         SET
             statslastupdated = NULL
-        WHERE partitions && _partitions
+        WHERE _where IN (
+            SELECT _where FROM search_wheres sw WHERE sw.partitions && _partitions
+            FOR UPDATE SKIP LOCKED
+        )
     ;
 
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
@@ -286,7 +291,10 @@ BEGIN
     UPDATE search_wheres
         SET
             statslastupdated = NULL
-        WHERE partitions && _partitions
+        WHERE _where IN (
+            SELECT _where FROM search_wheres sw WHERE sw.partitions && _partitions
+            FOR UPDATE SKIP LOCKED
+        )
     ;
 
     FOR p IN SELECT new_partitions.partition, new_partitions.partition_start, new_partitions.partition_start + '1 week'::interval as partition_end FROM new_partitions
