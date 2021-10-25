@@ -42,8 +42,7 @@ RUN \
 EXPOSE 5432
 
 RUN mkdir -p /docker-entrypoint-initdb.d
-COPY pgstac.sql /docker-entrypoint-initdb.d/
-COPY ./sql /docker-entrypoint-initdb.d/sql/
+RUN echo "#!/bin/bash \n unset PGHOST \n pypgstac migrate" >/docker-entrypoint-initdb.d/initpgstac.sh && chmod +x /docker-entrypoint-initdb.d/initpgstac.sh
 
 RUN mkdir -p /opt/src/pypgstac
 
