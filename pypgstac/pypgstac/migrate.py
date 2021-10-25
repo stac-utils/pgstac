@@ -145,7 +145,10 @@ async def run_migration(
             await conn.close()
             return toversion
         if oldversion is None:
-            typer.echo(f"**** You can ignore error above that says relation pgstac.migrations does not exist *****")
+            typer.echo(
+                "**** You can ignore error above that says relation "
+                "pgstac.migrations does not exist *****"
+            )
             typer.echo(f"No pgstac version set, installing {toversion} from scratch.")
             files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
         else:
