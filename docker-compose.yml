@@ -4,7 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pypgstac
-    platform: linux/amd64
     depends_on:
       - database
     volumes:
@@ -14,12 +13,12 @@ services:
       - PGPASSWORD=password
       - PGHOST=database
       - PGDATABASE=postgis
+
   database:
     container_name: pgstac
     build:
       context: .
       dockerfile: Dockerfile.pgstac
-    platform: linux/amd64
     environment:
       - POSTGRES_USER=username
       - POSTGRES_PASSWORD=password
