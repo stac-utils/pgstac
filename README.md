@@ -20,7 +20,7 @@ PGDatabase Schema and Functions for Storing and Accessing STAC collections and i
 
 STAC Client that uses PGStac available in [STAC-FastAPI](https://github.com/stac-utils/stac-fastapi)
 
-PGStac requires **Postgresql>=12**, **PostGIS>=3**, and **PG_Partman**. Best performance will be had using PostgreSQL>=13 and PostGIS>=3.1.
+PGStac requires **Postgresql>=12** and **PostGIS>=3**. Best performance will be had using PostgreSQL>=13 and PostGIS>=3.1.
 
 ### PGStac Settings
 PGStac installs everything into the pgstac schema in the database. You will need to make sure that this schema is set up in the search_path for the database.
