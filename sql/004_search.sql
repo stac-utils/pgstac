@@ -332,6 +332,25 @@ args text[] := NULL;
 BEGIN
 RAISE NOTICE 'j: %, op: %, jtype: %', j, op, jtype;
 
+-- for in, convert value, list to array syntax to match other ops
+IF op = 'in' THEN
+    j := jsonb_build_array( j->'value', j->'list');
+    jtype := 'array';
+    RAISE NOTICE 'IN: j: %, jtype: %', j, jtype;
+END IF;
+
+IF op = 'between' THEN
+    j := jsonb_build_array( j->'value', j->'lower', j->'upper');
+    jtype := 'array';
+    RAISE NOTICE 'BETWEEN: j: %, jtype: %', j, jtype;
+END IF;
+
+IF op = 'not' AND jtype = 'object' THEN
+    j := jsonb_build_array( j );
+    jtype := 'array';
+    RAISE NOTICE 'NOT: j: %, jtype: %', j, jtype;
+END IF;
+
 -- Set Lower Case on Both Arguments When Case Insensitive Flag Set
 IF op in ('eq','lt','lte','gt','gte','like') AND jsonb_typeof(j->2) = 'boolean' THEN
     IF (j->>2)::boolean THEN
@@ -349,6 +368,8 @@ IF op = 'eq' THEN
         RETURN format((items_path(j->0->>'property')).eq, j->1);
     END IF;
 END IF;
+
+
 
 IF op ilike 't_%' or op = 'anyinteracts' THEN
     RETURN temporal_op_query(op, j);
@@ -439,8 +460,6 @@ RETURN j->>0;
 
 END;
 $$ LANGUAGE PLPGSQL;
-
-
 
 
 CREATE OR REPLACE FUNCTION cql_to_where(_search jsonb = '{}'::jsonb) RETURNS text AS $$
