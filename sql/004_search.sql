@@ -333,13 +333,13 @@ BEGIN
 RAISE NOTICE 'j: %, op: %, jtype: %', j, op, jtype;
 
 -- for in, convert value, list to array syntax to match other ops
-IF op = 'in' THEN
+IF op = 'in'  and j ? 'value' and j ? 'list' THEN
     j := jsonb_build_array( j->'value', j->'list');
     jtype := 'array';
     RAISE NOTICE 'IN: j: %, jtype: %', j, jtype;
 END IF;
 
-IF op = 'between' THEN
+IF op = 'between' and j ? 'value' and j ? 'lower' and j ? 'upper' THEN
     j := jsonb_build_array( j->'value', j->'lower', j->'upper');
     jtype := 'array';
     RAISE NOTICE 'BETWEEN: j: %, jtype: %', j, jtype;
