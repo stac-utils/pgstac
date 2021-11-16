@@ -1340,7 +1340,15 @@ ops jsonb :=
         "lte": "%s <= %s",
         "gt": "%s > %s",
         "gte": "%s >= %s",
+        "le": "%s <= %s",
+        "ge": "%s >= %s",
+        "=": "%s = %s",
+        "<": "%s < %s",
+        "<=": "%s <= %s",
+        ">": "%s > %s",
+        ">=": "%s >= %s",
         "like": "%s LIKE %s",
+        "ilike": "%s ILIKE %s",
         "+": "%s + %s",
         "-": "%s - %s",
         "*": "%s * %s",
@@ -1348,7 +1356,9 @@ ops jsonb :=
         "in": "%s = ANY (%s)",
         "not": "NOT (%s)",
         "between": "%s BETWEEN %s AND %s",
-        "lower":"lower(%s)"
+        "lower":" lower(%s)",
+        "upper":" upper(%s)",
+        "isnull": "%s IS NULL"
     }'::jsonb;
 ret text;
 args text[] := NULL;
