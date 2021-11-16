@@ -4,6 +4,7 @@ DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy items_staging (content) FROM 'test/testdata/items.ndjson'
 
 SET pgstac.context TO 'on';
+SET pgstac."default-filter-lang" TO 'cql-json';
 
 SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb']);
 
@@ -213,6 +214,307 @@ SELECT results_eq($$
     $$,
     'Test search_query to return valid search'
 );
+
+-- CQL 2 Tests from examples at https://github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md
+
+SET pgstac."default-filter-lang" TO 'cql2-json';
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter": {
+                "op" : "and",
+                "args": [
+                {
+                    "op": "=",
+                    "args": [ { "property": "id" }, "LC08_L1TP_060247_20180905_20180912_01_T1_L1TP" ]
+                },
+                {
+                    "op": "=",
+                    "args" : [ { "property": "collection" }, "landsat8_l1tp" ]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( (id = 'LC08_L1TP_060247_20180905_20180912_01_T1_L1TP') and (collection_id = 'landsat8_l1tp') )
+    $r$,E' \n');
+    $$, 'Test Example 1'
+);
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "and",
+                "args": [
+                {
+                    "op": "=",
+                    "args": [ { "property": "collection" }, "landsat8_l1tp" ]
+                },
+                {
+                    "op": "<=",
+                    "args": [ { "property": "eo:cloud_cover" }, "10" ]
+                },
+                {
+                    "op": ">=",
+                    "args": [ { "property": "datetime" }, "2021-04-08T04:39:23Z" ]
+                },
+                {
+                    "op": "s_intersects",
+                    "args": [
+                    {
+                        "property": "geometry"
+                    },
+                    {
+                        "type": "Polygon",
+                        "coordinates": [
+                        [
+                            [43.5845, -79.5442],
+                            [43.6079, -79.4893],
+                            [43.5677, -79.4632],
+                            [43.6129, -79.3925],
+                            [43.6223, -79.3238],
+                            [43.6576, -79.3163],
+                            [43.7945, -79.1178],
+                            [43.8144, -79.1542],
+                            [43.8555, -79.1714],
+                            [43.7509, -79.6390],
+                            [43.5845, -79.5442]
+                        ]
+                        ]
+                    }
+                    ]
+                }
+                ]
+            }
+            }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( (collection_id = 'landsat8_l1tp') and ( properties->>'eo:cloud_cover'  <= '10') and (datetime >= '2021-04-08T04:39:23Z') and st_intersects(geometry, '0103000020E6100000010000000B000000894160E5D0CA4540ED9E3C2CD4E253C0849ECDAACFCD4540B37BF2B050DF53C038F8C264AAC8454076E09C11A5DD53C0F5DBD78173CE454085EB51B81ED953C08126C286A7CF4540789CA223B9D453C0C0EC9E3C2CD4454063EE5A423ED453C004560E2DB2E5454001DE02098AC753C063EE5A423EE84540C442AD69DEC953C02FDD240681ED454034A2B437F8CA53C08048BF7D1DE0454037894160E5E853C0894160E5D0CA4540ED9E3C2CD4E253C0'::geometry) )
+    $r$,E' \n');
+    $$, 'Test Example 2'
+);
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "and",
+                "args": [
+                {
+                    "op": ">",
+                    "args": [ { "property": "sentinel:data_coverage" }, 50 ]
+                },
+                {
+                    "op": "<",
+                    "args": [ { "property": "eo:cloud_cover" }, 10 ]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( ( properties->>'sentinel:data_coverage'  > '50'::numeric) and ( properties->>'eo:cloud_cover'  < '10'::numeric) )
+    $r$,E' \n');
+    $$, 'Test Example 3'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "or",
+                "args": [
+                {
+                    "op": ">",
+                    "args": [ { "property": "sentinel:data_coverage" }, 50 ]
+                },
+                {
+                    "op": "<",
+                    "args": [ { "property": "eo:cloud_cover" }, 10 ]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( ( properties->>'sentinel:data_coverage'  > '50'::numeric) or ( properties->>'eo:cloud_cover'  < '10'::numeric) )
+    $r$,E' \n');
+    $$, 'Test Example 4'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "eq",
+                "args": [
+                { "property": "prop1" },
+                { "property": "prop2" }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( properties->>'prop1'  =  properties->>'prop2' )
+    $r$,E' \n');
+    $$, 'Test Example 5'
+);
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+       {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "t_intersects",
+                "args": [
+                { "property": "datetime" },
+                [ "2020-11-11T00:00:00Z", "2020-11-12T00:00:00Z"]
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    (datetime <= '2020-11-12 00:00:00+00'::timestamptz AND end_datetime >= '2020-11-11 00:00:00+00'::timestamptz)
+    $r$,E' \n');
+    $$, 'Test Example 6'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "s_intersects",
+                "args": [
+                { "property": "geometry" } ,
+                {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [-77.0824, 38.7886], [-77.0189, 38.7886],
+                        [-77.0189, 38.8351], [-77.0824, 38.8351],
+                        [-77.0824, 38.7886]
+                    ]]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340'::geometry)
+    $r$,E' \n');
+    $$, 'Test Example 7'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter": {
+                "op": "or" ,
+                "args": [
+                {
+                    "op": "s_intersects",
+                    "args": [
+                    { "property": "geometry" } ,
+                    {
+                        "type": "Polygon",
+                        "coordinates": [[
+                        [-77.0824, 38.7886], [-77.0189, 38.7886],
+                        [-77.0189, 38.8351], [-77.0824, 38.8351],
+                        [-77.0824, 38.7886]
+                        ]]
+                    }
+                    ]
+                },
+                {
+                    "op": "s_intersects",
+                    "args": [
+                    { "property": "geometry" } ,
+                    {
+                        "type": "Polygon",
+                        "coordinates": [[
+                        [-79.0935, 38.7886], [-79.0290, 38.7886],
+                        [-79.0290, 38.8351], [-79.0935, 38.8351],
+                        [-79.0935, 38.7886]
+                        ]]
+                    }
+                    ]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340'::geometry) or st_intersects(geometry, '0103000020E61000000100000005000000448B6CE7FBC553C014D044D8F064434060E5D022DBC153C014D044D8F064434060E5D022DBC153C0DE718A8EE46A4340448B6CE7FBC553C0DE718A8EE46A4340448B6CE7FBC553C014D044D8F0644340'::geometry) )
+    $r$,E' \n');
+    $$, 'Test Example 8'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+        {
+            "filter": {
+                "op": "or",
+                "args": [
+                {
+                    "op": ">=",
+                    "args": [ { "property": "sentinel:data_coverage" }, 50 ]
+                },
+                {
+                    "op": ">=",
+                    "args": [ { "property": "landsat:coverage_percent" }, 50 ]
+                },
+                {
+                    "op": "and",
+                    "args": [
+                    {
+                        "op": "isNull",
+                        "args": { "property": "sentinel:data_coverage" }
+                    },
+                    {
+                        "op": "isNull",
+                        "args": { "property": "landsat:coverage_percent" }
+                    }
+                    ]
+                }
+                ]
+            }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( ( properties->>'sentinel:data_coverage'  >= '50'::numeric) or ( properties->>'landsat:coverage_percent'  >= '50'::numeric) or  ( ( properties->>'sentinel:data_coverage'  IS NULL) and ( properties->>'landsat:coverage_percent'  IS NULL) )  )
+    $r$,E' \n');
+    $$, 'Test Example 9'
+);
+
 
 /* template
 SELECT results_eq($$

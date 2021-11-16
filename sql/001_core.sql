@@ -18,39 +18,47 @@ CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
 
 
-CREATE OR REPLACE FUNCTION get_setting(IN setting text, INOUT _default anynonarray = null::text ) AS $$
-DECLARE
-_type text;
-BEGIN
-  SELECT pg_typeof(_default) INTO _type;
-  IF _type = 'unknown' THEN _type='text'; END IF;
-  EXECUTE format($q$
-    SELECT COALESCE(
-      CAST(current_setting($1,TRUE) AS %s),
-      $2
-    )
-    $q$, _type)
-    INTO _default
-    USING setting, _default
-  ;
-  RETURN;
-END;
-$$ LANGUAGE PLPGSQL;
+CREATE TABLE IF NOT EXISTS pgstac_settings (
+  name text PRIMARY KEY,
+  value text NOT NULL
+);
 
-CREATE OR REPLACE FUNCTION context() RETURNS text AS $$
-  SELECT get_setting('pgstac.context','off'::text);
+INSERT INTO pgstac_settings (name, value) VALUES
+  ('context', 'off'),
+  ('context_estimated_count', '100000'),
+  ('context_estimated_cost', '1000000'),
+  ('context_stats_ttl', '1 day'),
+  ('default-filter-lang', 'cql2-json')
+ON CONFLICT DO NOTHING
+;
+
+
+CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
+SELECT COALESCE(
+  conf->>_setting,
+  current_setting(concat('pgstac.',_setting), TRUE),
+  (SELECT value FROM pgstac_settings WHERE name=_setting)
+);
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION context_estimated_count() RETURNS int AS $$
-  SELECT get_setting('pgstac.context_estimated_count', 100000::int);
+DROP FUNCTION IF EXISTS context();
+CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
+  SELECT get_setting('context', conf);
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION context_estimated_cost() RETURNS float AS $$
-  SELECT get_setting('pgstac.context_estimated_cost', 1000000::float);
+DROP FUNCTION IF EXISTS context_estimated_count();
+CREATE OR REPLACE FUNCTION context_estimated_count(conf jsonb DEFAULT NULL) RETURNS int AS $$
+  SELECT get_setting('context_estimated_count', conf)::int;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION context_stats_ttl() RETURNS interval AS $$
-  SELECT get_setting('pgstac.context_stats_ttl', '1 day'::interval);
+DROP FUNCTION IF EXISTS context_estimated_cost();
+CREATE OR REPLACE FUNCTION context_estimated_cost(conf jsonb DEFAULT NULL) RETURNS float AS $$
+  SELECT get_setting('context_estimated_cost', conf)::float;
+$$ LANGUAGE SQL;
+
+DROP FUNCTION IF EXISTS context_stats_ttl();
+CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS interval AS $$
+  SELECT get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
 
