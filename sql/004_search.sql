@@ -487,6 +487,7 @@ arg jsonb;
 argtext text;
 argstext text[] := '{}'::text[];
 inobj jsonb;
+_numeric text := '';
 ops jsonb :=
     '{
         "eq": "%s = %s",
@@ -603,6 +604,9 @@ IF op IN ('and', 'or') THEN
 END IF;
 
 IF ops ? op THEN
+    IF argstext[2] ~* 'numeric' THEN
+        argstext := ARRAY[concat('(',argstext[1],')::numeric')] || argstext[2:3];
+    END IF;
     RETURN format(concat('(',ops->>op,')'), VARIADIC argstext);
 END IF;
 

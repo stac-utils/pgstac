@@ -323,7 +323,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( ( properties->>'sentinel:data_coverage'  > '50'::numeric) and ( properties->>'eo:cloud_cover'  < '10'::numeric) )
+    ( (( properties->>'sentinel:data_coverage' )::numeric > '50'::numeric) and (( properties->>'eo:cloud_cover' )::numeric < '10'::numeric) )
     $r$,E' \n');
     $$, 'Test Example 3'
 );
@@ -351,7 +351,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( ( properties->>'sentinel:data_coverage'  > '50'::numeric) or ( properties->>'eo:cloud_cover'  < '10'::numeric) )
+    ( (( properties->>'sentinel:data_coverage' )::numeric > '50'::numeric) or (( properties->>'eo:cloud_cover' )::numeric < '10'::numeric) )
     $r$,E' \n');
     $$, 'Test Example 4'
 );
@@ -510,9 +510,84 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( ( properties->>'sentinel:data_coverage'  >= '50'::numeric) or ( properties->>'landsat:coverage_percent'  >= '50'::numeric) or  ( ( properties->>'sentinel:data_coverage'  IS NULL) and ( properties->>'landsat:coverage_percent'  IS NULL) )  )
+    ( (( properties->>'sentinel:data_coverage' )::numeric >= '50'::numeric) or (( properties->>'landsat:coverage_percent' )::numeric >= '50'::numeric) or  ( ( properties->>'sentinel:data_coverage'  IS NULL) and ( properties->>'landsat:coverage_percent'  IS NULL) )  )
     $r$,E' \n');
     $$, 'Test Example 9'
+);
+
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"t_intersects", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-17T00:00:00Z"]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 57, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime search with datetime as / separated string'
+);
+
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"t_intersects", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-17T00:00:00Z"]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 57, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime search with datetime as array'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"t_intersects", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-17T00:00:00Z"]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0016", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 57, "returned": 10}, "features": [{"id": "pgstac-test-item-0007", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 59}}, {"id": "pgstac-test-item-0008", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 64}}, {"id": "pgstac-test-item-0009", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 61}}, {"id": "pgstac-test-item-0010", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 31}}, {"id": "pgstac-test-item-0011", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 41}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0014", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 17}}, {"id": "pgstac-test-item-0015", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 54}}, {"id": "pgstac-test-item-0016", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 13}}]}'::jsonb
+    $$,
+    'Test datetime as an anyinteracts filter'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"eq", "args":[{"property":"eo:cloud_cover"},36]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0087", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 36}}, {"id": "pgstac-test-item-0089", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 36}}]}'::jsonb
+    $$,
+    'Test equality as a filter on a numeric field'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"lt", "args":[{"property":"eo:cloud_cover"},25]}, "fields":{"include":["id","datetime","eo:cloud_cover"]},"sortby":[{"field":"eo:cloud_cover","direction":"asc"}]}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0012", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 31, "returned": 10}, "features": [{"id": "pgstac-test-item-0097", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 1}}, {"id": "pgstac-test-item-0063", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0013", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0085", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0073", "properties": {"datetime": "2011-08-15T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0041", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0034", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0005", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0048", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0012", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}]}'::jsonb
+    $$,
+    'Test lt as a filter on a numeric field with order by'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"in","args":[{"property":"id"},["pgstac-test-item-0097"]]},"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test ids search single'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"in","args":[{"property":"id"},["pgstac-test-item-0097","pgstac-test-item-0003"]]},"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0003"},{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test ids search multi'
+);
+
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"in","args":[{"property":"collection"},["pgstac-test-collection"]]},"fields":{"include":["id"]}, "limit": 1}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0003", "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "pgstac-test-item-0003"}]}'::jsonb
+    $$,
+    'Test collections search'
+);
+
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"in","args":[{"property":"collection"},["nonexistent"]]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search with unknown collection'
 );
 
 
