@@ -846,7 +846,7 @@ CREATE TABLE IF NOT EXISTS search_wheres(
 
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
 
-CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false) RETURNS search_wheres AS $$
+CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false, conf jsonb default null) RETURNS search_wheres AS $$
 DECLARE
     t timestamptz;
     i interval;
@@ -860,12 +860,12 @@ BEGIN
     IF NOT updatestats THEN
         RAISE NOTICE 'Checking if update is needed.';
         RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
-        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(), now() - sw.statslastupdated;
-        RAISE NOTICE 'Context: %, Existing Total: %', context(), sw.total_count;
+        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(conf), now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', context(conf), sw.total_count;
         IF
             sw.statslastupdated IS NULL
-            OR (now() - sw.statslastupdated) > context_stats_ttl()
-            OR (context() != 'off' AND sw.total_count IS NULL)
+            OR (now() - sw.statslastupdated) > context_stats_ttl(conf)
+            OR (context(conf) != 'off' AND sw.total_count IS NULL)
         THEN
             updatestats := TRUE;
         END IF;
@@ -915,13 +915,13 @@ BEGIN
 
     -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
     IF
-        context() = 'on'
+        context(conf) = 'on'
         OR
-        ( context() = 'auto' AND
+        ( context(conf) = 'auto' AND
             (
-                sw.estimated_count < context_estimated_count()
+                sw.estimated_count < context_estimated_count(conf)
                 OR
-                sw.estimated_cost < context_estimated_cost()
+                sw.estimated_cost < context_estimated_cost(conf)
             )
         )
     THEN
@@ -998,7 +998,7 @@ IF search.orderby IS NULL THEN
     search.orderby := sort_sqlorderby(_search);
 END IF;
 
-PERFORM where_stats(search._where, updatestats);
+PERFORM where_stats(search._where, updatestats, _search->'conf');
 
 search.lastused := now();
 search.usecount := coalesce(search.usecount, 0) + 1;
@@ -1162,7 +1162,7 @@ IF _search ? 'fields' THEN
     SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
-IF context() != 'off' THEN
+IF context(_search->'conf') != 'off' THEN
     context := jsonb_strip_nulls(jsonb_build_object(
         'limit', _limit,
         'matched', total_count,

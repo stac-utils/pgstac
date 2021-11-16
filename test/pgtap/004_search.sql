@@ -590,6 +590,14 @@ SELECT results_eq($$
     'Test collections search with unknown collection'
 );
 
+SELECT results_eq($$
+    select s from search('{"filter":{"op":"in","args":[{"property":"collection"},["nonexistent"]]}, "conf":{"context":"off"}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test using conf to turn off context'
+);
+
 
 /* template
 SELECT results_eq($$
