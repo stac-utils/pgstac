@@ -476,10 +476,10 @@ SELECT results_eq($$
 );
 
 
-
 SELECT results_eq($$
     SELECT BTRIM(cql2_query($q$
         {
+            "filter-lang": "cql2-json",
             "filter": {
                 "op": "or",
                 "args": [
@@ -514,6 +514,90 @@ SELECT results_eq($$
     $r$,E' \n');
     $$, 'Test Example 9'
 );
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "between",
+            "args": [
+            { "property": "eo:cloud_cover" },
+            [ 0, 50 ]
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    (( properties->>'eo:cloud_cover' )::numeric BETWEEN ('{0,50}'::numeric[])[1] AND ('{0,50}'::numeric[])[2])
+    $r$,E' \n');
+    $$, 'Test Example 10'
+);
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "like",
+            "args": [
+            { "property": "mission" },
+            "sentinel%"
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    ( properties->>'mission'  LIKE 'sentinel%')
+    $r$,E' \n');
+    $$, 'Test Example 11'
+);
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "eq",
+            "args": [
+            {"upper": { "property": "mission" }},
+            "sentinel"
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    (( upper( properties->>'mission' )) = 'sentinel')
+    $r$,E' \n');
+    $$, 'Test upper'
+);
+
+SELECT results_eq($$
+    SELECT BTRIM(cql2_query($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "eq",
+            "args": [
+            {"lower": { "property": "mission" }},
+            "sentinel"
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    (( lower( properties->>'mission' )) = 'sentinel')
+    $r$,E' \n');
+    $$, 'Test lower'
+);
+
+
 
 
 SELECT results_eq($$

@@ -90,7 +90,7 @@ ops jsonb :=
         "/": "%s / %s",
         "in": "%s = ANY (%s)",
         "not": "NOT (%s)",
-        "between": "%s BETWEEN %s AND %s",
+        "between": "%s BETWEEN (%2$s)[1] AND (%2$s)[2]",
         "lower":" lower(%s)",
         "upper":" upper(%s)",
         "isnull": "%s IS NULL"
@@ -98,8 +98,31 @@ ops jsonb :=
 ret text;
 
 BEGIN
+RAISE NOTICE 'j: %s', j;
 IF j ? 'filter' THEN
     RETURN cql2_query(j->'filter');
+END IF;
+
+IF j ? 'upper' THEN
+RAISE NOTICE 'upper %s',jsonb_build_object(
+            'op', 'upper',
+            'args', jsonb_build_array( j-> 'upper')
+        ) ;
+    RETURN cql2_query(
+        jsonb_build_object(
+            'op', 'upper',
+            'args', jsonb_build_array( j-> 'upper')
+        )
+    );
+END IF;
+
+IF j ? 'lower' THEN
+    RETURN cql2_query(
+        jsonb_build_object(
+            'op', 'lower',
+            'args', jsonb_build_array( j-> 'lower')
+        )
+    );
 END IF;
 
 IF j ? 'args' AND jsonb_typeof(args) != 'array' THEN
@@ -210,7 +233,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION pgstac.where_stats(inwhere text, updatestats boolean DEFAULT false, conf jsonb DEFAULT NULL::jsonb)
- RETURNS pgstac.search_wheres
+ RETURNS search_wheres
  LANGUAGE plpgsql
 AS $function$
 DECLARE
@@ -883,7 +906,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION pgstac.search_query(_search jsonb DEFAULT '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT '{}'::jsonb)
- RETURNS pgstac.searches
+ RETURNS searches
  LANGUAGE plpgsql
 AS $function$
 DECLARE
@@ -926,6 +949,14 @@ END;
 $function$
 ;
 
+INSERT INTO pgstac_settings (name, value) VALUES
+  ('context', 'off'),
+  ('context_estimated_count', '100000'),
+  ('context_estimated_cost', '1000000'),
+  ('context_stats_ttl', '1 day'),
+  ('default-filter-lang', 'cql2-json')
+ON CONFLICT DO NOTHING
+;
 
 
 SELECT set_version('0.4.0');
