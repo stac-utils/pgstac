@@ -316,7 +316,15 @@ ops jsonb :=
         "lte": "%s <= %s",
         "gt": "%s > %s",
         "gte": "%s >= %s",
+        "le": "%s <= %s",
+        "ge": "%s >= %s",
+        "=": "%s = %s",
+        "<": "%s < %s",
+        "<=": "%s <= %s",
+        ">": "%s > %s",
+        ">=": "%s >= %s",
         "like": "%s LIKE %s",
+        "ilike": "%s ILIKE %s",
         "+": "%s + %s",
         "-": "%s - %s",
         "*": "%s * %s",
@@ -324,13 +332,34 @@ ops jsonb :=
         "in": "%s = ANY (%s)",
         "not": "NOT (%s)",
         "between": "%s BETWEEN %s AND %s",
-        "lower":"lower(%s)"
+        "lower":" lower(%s)",
+        "upper":" upper(%s)",
+        "isnull": "%s IS NULL"
     }'::jsonb;
 ret text;
 args text[] := NULL;
 
 BEGIN
 RAISE NOTICE 'j: %, op: %, jtype: %', j, op, jtype;
+
+-- for in, convert value, list to array syntax to match other ops
+IF op = 'in'  and j ? 'value' and j ? 'list' THEN
+    j := jsonb_build_array( j->'value', j->'list');
+    jtype := 'array';
+    RAISE NOTICE 'IN: j: %, jtype: %', j, jtype;
+END IF;
+
+IF op = 'between' and j ? 'value' and j ? 'lower' and j ? 'upper' THEN
+    j := jsonb_build_array( j->'value', j->'lower', j->'upper');
+    jtype := 'array';
+    RAISE NOTICE 'BETWEEN: j: %, jtype: %', j, jtype;
+END IF;
+
+IF op = 'not' AND jtype = 'object' THEN
+    j := jsonb_build_array( j );
+    jtype := 'array';
+    RAISE NOTICE 'NOT: j: %, jtype: %', j, jtype;
+END IF;
 
 -- Set Lower Case on Both Arguments When Case Insensitive Flag Set
 IF op in ('eq','lt','lte','gt','gte','like') AND jsonb_typeof(j->2) = 'boolean' THEN
@@ -349,6 +378,8 @@ IF op = 'eq' THEN
         RETURN format((items_path(j->0->>'property')).eq, j->1);
     END IF;
 END IF;
+
+
 
 IF op ilike 't_%' or op = 'anyinteracts' THEN
     RETURN temporal_op_query(op, j);
@@ -441,6 +472,173 @@ END;
 $$ LANGUAGE PLPGSQL;
 
 
+/* cql_query_op -- Parses a CQL query operation, recursing when necessary
+     IN jsonb -- a subelement from a valid stac query
+     IN text -- the operator being used on elements passed in
+     RETURNS a SQL fragment to be used in a WHERE clause
+*/
+DROP FUNCTION IF EXISTS cql2_query;
+CREATE OR REPLACE FUNCTION cql2_query(j jsonb, recursion int DEFAULT 0) RETURNS text AS $$
+DECLARE
+args jsonb := j->'args';
+jtype text := jsonb_typeof(j->'args');
+op text := lower(j->>'op');
+arg jsonb;
+argtext text;
+argstext text[] := '{}'::text[];
+inobj jsonb;
+_numeric text := '';
+ops jsonb :=
+    '{
+        "eq": "%s = %s",
+        "lt": "%s < %s",
+        "lte": "%s <= %s",
+        "gt": "%s > %s",
+        "gte": "%s >= %s",
+        "le": "%s <= %s",
+        "ge": "%s >= %s",
+        "=": "%s = %s",
+        "<": "%s < %s",
+        "<=": "%s <= %s",
+        ">": "%s > %s",
+        ">=": "%s >= %s",
+        "like": "%s LIKE %s",
+        "ilike": "%s ILIKE %s",
+        "+": "%s + %s",
+        "-": "%s - %s",
+        "*": "%s * %s",
+        "/": "%s / %s",
+        "in": "%s = ANY (%s)",
+        "not": "NOT (%s)",
+        "between": "%s BETWEEN (%2$s)[1] AND (%2$s)[2]",
+        "lower":" lower(%s)",
+        "upper":" upper(%s)",
+        "isnull": "%s IS NULL"
+    }'::jsonb;
+ret text;
+
+BEGIN
+RAISE NOTICE 'j: %s', j;
+IF j ? 'filter' THEN
+    RETURN cql2_query(j->'filter');
+END IF;
+
+IF j ? 'upper' THEN
+RAISE NOTICE 'upper %s',jsonb_build_object(
+            'op', 'upper',
+            'args', jsonb_build_array( j-> 'upper')
+        ) ;
+    RETURN cql2_query(
+        jsonb_build_object(
+            'op', 'upper',
+            'args', jsonb_build_array( j-> 'upper')
+        )
+    );
+END IF;
+
+IF j ? 'lower' THEN
+    RETURN cql2_query(
+        jsonb_build_object(
+            'op', 'lower',
+            'args', jsonb_build_array( j-> 'lower')
+        )
+    );
+END IF;
+
+IF j ? 'args' AND jsonb_typeof(args) != 'array' THEN
+    args := jsonb_build_array(args);
+END IF;
+-- END Cases where no further nesting is expected
+IF j ? 'op' THEN
+    -- Special case to use JSONB index for equality
+    IF op = 'eq'
+        AND args->0 ? 'property'
+        AND jsonb_typeof(args->1) IN ('number', 'string')
+        AND (items_path(args->0->>'property')).eq IS NOT NULL
+    THEN
+        RETURN format((items_path(args->0->>'property')).eq, args->1);
+    END IF;
+
+    -- Temporal Query
+    IF op ilike 't_%' or op = 'anyinteracts' THEN
+        RETURN temporal_op_query(op, args);
+    END IF;
+
+    -- Spatial Query
+    IF op ilike 's_%' or op = 'intersects' THEN
+        RETURN spatial_op_query(op, args);
+    END IF;
+
+    -- In Query - separate into separate eq statements so that we can use eq jsonb optimization
+    IF op = 'in' THEN
+        RAISE NOTICE '% IN args: %', repeat('     ', recursion), args;
+        SELECT INTO inobj
+            jsonb_agg(
+                jsonb_build_object(
+                    'op', 'eq',
+                    'args', jsonb_build_array( args->0 , v)
+                )
+            )
+        FROM jsonb_array_elements( args->1) v;
+        RETURN cql2_query(jsonb_build_object('op','or','args',inobj));
+    END IF;
+END IF;
+
+IF j ? 'property' THEN
+    RETURN (items_path(j->>'property')).path_txt;
+END IF;
+
+RAISE NOTICE '%jtype: %',repeat('     ', recursion), jtype;
+IF jsonb_typeof(j) = 'number' THEN
+    RETURN format('%L::numeric', j->>0);
+END IF;
+
+IF jsonb_typeof(j) = 'string' THEN
+    RETURN quote_literal(j->>0);
+END IF;
+
+IF jsonb_typeof(j) = 'array' THEN
+    IF j @? '$[*] ? (@.type() == "number")' THEN
+        RETURN CONCAT(quote_literal(textarr(j)::text), '::numeric[]');
+    ELSE
+        RETURN CONCAT(quote_literal(textarr(j)::text), '::text[]');
+    END IF;
+END IF;
+RAISE NOTICE 'ARGS after array cleaning: %', args;
+
+RAISE NOTICE '%beforeargs op: %, args: %',repeat('     ', recursion), op, args;
+IF j ? 'args' THEN
+    FOR arg in SELECT * FROM jsonb_array_elements(args) LOOP
+        argtext := cql2_query(arg, recursion + 1);
+        RAISE NOTICE '%     -- arg: %, argtext: %', repeat('     ', recursion), arg, argtext;
+        argstext := argstext || argtext;
+    END LOOP;
+END IF;
+RAISE NOTICE '%afterargs op: %, argstext: %',repeat('     ', recursion), op, argstext;
+
+
+IF op IN ('and', 'or') THEN
+    RAISE NOTICE 'inand op: %, argstext: %', op, argstext;
+    SELECT
+        concat(' ( ',array_to_string(array_agg(e), concat(' ',op,' ')),' ) ')
+        INTO ret
+        FROM unnest(argstext) e;
+        RETURN ret;
+END IF;
+
+IF ops ? op THEN
+    IF argstext[2] ~* 'numeric' THEN
+        argstext := ARRAY[concat('(',argstext[1],')::numeric')] || argstext[2:3];
+    END IF;
+    RETURN format(concat('(',ops->>op,')'), VARIADIC argstext);
+END IF;
+
+RAISE NOTICE '%op: %, argstext: %',repeat('     ', recursion), op, argstext;
+
+RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
+
 
 
 CREATE OR REPLACE FUNCTION cql_to_where(_search jsonb = '{}'::jsonb) RETURNS text AS $$
@@ -448,18 +646,15 @@ DECLARE
 search jsonb := _search;
 _where text;
 BEGIN
-RAISE NOTICE 'SEARCH CQL 1: %', search;
-
--- Convert any old style stac query to cql
-search := query_to_cqlfilter(search);
-
-RAISE NOTICE 'SEARCH CQL 2: %', search;
-
--- Convert item,collection,datetime,bbox,intersects to cql
-search := add_filters_to_cql(search);
 
 RAISE NOTICE 'SEARCH CQL Final: %', search;
-_where := cql_query_op(search->'filter');
+IF (search ? 'filter-lang' AND search->>'filter-lang' = 'cql-json') OR get_setting('default-filter-lang', _search->'conf')='cql-json' THEN
+    search := query_to_cqlfilter(search);
+    search := add_filters_to_cql(search);
+    _where := cql_query_op(search->'filter');
+ELSE
+    _where := cql2_query(search->'filter');
+END IF;
 
 IF trim(_where) = '' THEN
     _where := NULL;
@@ -674,7 +869,7 @@ CREATE TABLE IF NOT EXISTS search_wheres(
 
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
 
-CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false) RETURNS search_wheres AS $$
+CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false, conf jsonb default null) RETURNS search_wheres AS $$
 DECLARE
     t timestamptz;
     i interval;
@@ -688,12 +883,12 @@ BEGIN
     IF NOT updatestats THEN
         RAISE NOTICE 'Checking if update is needed.';
         RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
-        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(), now() - sw.statslastupdated;
-        RAISE NOTICE 'Context: %, Existing Total: %', context(), sw.total_count;
+        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(conf), now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', context(conf), sw.total_count;
         IF
             sw.statslastupdated IS NULL
-            OR (now() - sw.statslastupdated) > context_stats_ttl()
-            OR (context() != 'off' AND sw.total_count IS NULL)
+            OR (now() - sw.statslastupdated) > context_stats_ttl(conf)
+            OR (context(conf) != 'off' AND sw.total_count IS NULL)
         THEN
             updatestats := TRUE;
         END IF;
@@ -743,13 +938,13 @@ BEGIN
 
     -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
     IF
-        context() = 'on'
+        context(conf) = 'on'
         OR
-        ( context() = 'auto' AND
+        ( context(conf) = 'auto' AND
             (
-                sw.estimated_count < context_estimated_count()
+                sw.estimated_count < context_estimated_count(conf)
                 OR
-                sw.estimated_cost < context_estimated_cost()
+                sw.estimated_cost < context_estimated_cost(conf)
             )
         )
     THEN
@@ -826,7 +1021,7 @@ IF search.orderby IS NULL THEN
     search.orderby := sort_sqlorderby(_search);
 END IF;
 
-PERFORM where_stats(search._where, updatestats);
+PERFORM where_stats(search._where, updatestats, _search->'conf');
 
 search.lastused := now();
 search.usecount := coalesce(search.usecount, 0) + 1;
@@ -990,7 +1185,7 @@ IF _search ? 'fields' THEN
     SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
-IF context() != 'off' THEN
+IF context(_search->'conf') != 'off' THEN
     context := jsonb_strip_nulls(jsonb_build_object(
         'limit', _limit,
         'matched', total_count,
