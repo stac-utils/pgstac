@@ -30,11 +30,22 @@ jobs:
         # needed because the postgres container does not provide a healthcheck
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
-    steps:
+     steps:
       - uses: actions/checkout@v2
+
       - name: Install Postgres libs
-        run: sudo apt-get install libpq-dev
-      - name: Run test
+        run: apt update && apt install -y postgresql-client libpq-dev
+
+      - name: Register PgSTAC extension
+        env:
+          PGUSER: username
+          PGPASSWORD: password
+          PGHOST: localhost
+          PGDATABASE: postgres
+          PGPORT: 5432
+        run: psql -X -f pgstac.sql
+
+      - name: Run PgTAP tests
         env:
           PGUSER: username
           PGPASSWORD: password
@@ -42,8 +53,6 @@ jobs:
           PGDATABASE: postgres
           PGPORT: 5432
         run: |
-          echo "Registering PgSTAC extension"
-          psql -X -f pgstac.sql
           TESTOUTPUT=$(psql -X -f test/pgtap.sql)
           echo "Checking if any tests are not ok on db $1"
           if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
