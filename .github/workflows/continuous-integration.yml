@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Install Postgres libs
-        run: apt update && apt install -y postgresql-client libpq-dev
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client libpq-dev
 
       - name: Register PgSTAC extension
         env:
