@@ -37,6 +37,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
             echo "Creating migrations from $F to $T"
             echo "SET SEARCH_PATH to pgstac, public;" >$STAGED
             echo $?
+            echo $F_BASE $T_BASE
             calc_migration $F_BASE $T_BASE >>$STAGED
             echo $?
             echo "SELECT set_version('$T');" >>$STAGED
