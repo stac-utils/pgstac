@@ -1,5 +1,11 @@
 # Changelog
 
+## Ureleased
+
+## Changed
+
+- Update `typer` to 0.4.0 to avoid clashes with `click` ([#76](https://github.com/stac-utils/pgstac/pull/76))
+
 ## [v0.3.4]
 
 ### Added
