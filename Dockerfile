@@ -34,7 +34,7 @@ RUN \
     && pip3 install -U pip setuptools packaging \
     && pip3 install -U psycopg2-binary \
     && pip3 install -U migra[pg] \
-    && pip3 install poetry==1.1.7 \
+    && pip3 install poetry==1.1.12 \
     && apt-get remove -y apt-transport-https \
     && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*

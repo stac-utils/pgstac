@@ -1,0 +1,29 @@
+#!/bin/bash
+
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0") [--no-cache]
+Updates the poetry lock file
+"
+}
+
+# Parse args
+while [[ "$#" > 0 ]]; do case $1 in
+    --help) usage; exit 0; shift;;
+  *) usage "Unknown parameter passed: $1"; shift; shift;;
+esac; done
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+
+    echo "==Updating lock file..."
+    docker-compose \
+        -f docker-compose.yml \
+        run dev /bin/bash -c "cd pypgstac && poetry update"
+
+fi
