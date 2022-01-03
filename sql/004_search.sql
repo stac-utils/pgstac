@@ -859,9 +859,9 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS search_wheres(
-    _where text PRIMARY KEY,
+    id bigint generated always as identity primary key,
+    _where text NOT NULL,
     lastused timestamptz DEFAULT now(),
     usecount bigint DEFAULT 0,
     statslastupdated timestamptz,
@@ -874,6 +874,7 @@ CREATE TABLE IF NOT EXISTS search_wheres(
 );
 
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
+CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((md5(_where)));
 
 CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false, conf jsonb default null) RETURNS search_wheres AS $$
 DECLARE
@@ -969,8 +970,10 @@ BEGIN
     END IF;
 
 
-    INSERT INTO search_wheres SELECT sw.*
-    ON CONFLICT (_where)
+    INSERT INTO search_wheres
+        (_where, lastused, usecount, statslastupdated, estimated_count, estimated_cost, time_to_estimate, partitions, total_count, time_to_count)
+    SELECT sw._where, sw.lastused, sw.usecount, sw.statslastupdated, sw.estimated_count, sw.estimated_cost, sw.time_to_estimate, sw.partitions, sw.total_count, sw.time_to_count
+    ON CONFLICT ((md5(_where)))
     DO UPDATE
         SET
             lastused = sw.lastused,
@@ -986,7 +989,6 @@ BEGIN
     RETURN sw;
 END;
 $$ LANGUAGE PLPGSQL ;
-
 
 
 CREATE OR REPLACE FUNCTION items_count(_where text) RETURNS bigint AS $$
