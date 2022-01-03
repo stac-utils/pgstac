@@ -643,12 +643,18 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION cql_to_where(_search jsonb = '{}'::jsonb) RETURNS text AS $$
 DECLARE
+filterlang text;
 search jsonb := _search;
 _where text;
 BEGIN
 
 RAISE NOTICE 'SEARCH CQL Final: %', search;
-IF (search ? 'filter-lang' AND search->>'filter-lang' = 'cql-json') OR get_setting('default-filter-lang', _search->'conf')='cql-json' THEN
+filterlang := COALESCE(
+    search->>'filter-lang',
+    get_setting('default-filter-lang', _search->'conf')
+);
+
+IF filterlang = 'cql-json' THEN
     search := query_to_cqlfilter(search);
     search := add_filters_to_cql(search);
     _where := cql_query_op(search->'filter');
