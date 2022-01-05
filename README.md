@@ -25,13 +25,25 @@ PGStac requires **Postgresql>=12** and **PostGIS>=3**. Best performance will be 
 ### PGStac Settings
 PGStac installs everything into the pgstac schema in the database. You will need to make sure that this schema is set up in the search_path for the database.
 
-There are additional variables that control the settings used for calculating and displaying context (total row count) for a search.
+There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql-json2). 
+The context is "off" by default, and the default filter language is set to "cql2-json".
 
-Variables can be set either by passing them in via the connection options using your connection library or by setting them on the Role that is used to log in to the database.
+Variables can be set either by passing them in via the connection options using your connection library, setting them in the pgstac_settings table or by setting them on the Role that is used to log in to the database.
 
+Example for updating the pgstac_settings table with a new value:
+```sql
+INSERT INTO pgstac_settings (name, value) 
+VALUES 
+    ('default-filter-lang', 'cql-json'),
+    ('context', 'on')
+    
+ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;
+```
+
+Alternatively, update the role:
 ```
 ALTER ROLE <username> SET SEARCH_PATH to pgstac, public;
-ALTER ROLE <username> SET pgstac.collection TO <'on','off','auto'>;
+ALTER ROLE <username> SET pgstac.context TO <'on','off','auto'>;
 ALTER ROLE <username> SET pgstac.context_estimated_count TO '<number of estimated rows when in auto mode that when an estimated count is less than will trigger a full count>';
 ALTER ROLE <username> SET pgstac.context_estimated_cost TO '<estimated query cost from explain when in auto mode that when an estimated cost is less than will trigger a full count>';
 ALTER ROLE <username> SET pgstac.context_stats_ttl TO '<an interval string ie "1 day" after which pgstac search will force recalculation of it's estimates>>';
@@ -93,7 +105,7 @@ Migrations are stored in ```pypgstac/pypgstac/migration`s``` and are distributed
 ### Running Migrations
 PyPGStac has a utility for checking the version of an existing PGStac database and applying the appropriate migrations in the correct order. It can also be used to setup a database from scratch.
 
-To create an initial PGStac database or bring an existing one up to date:
+To create an initial PGStac database or bring an existing one up to date, check you have the pypgstac version installed you want to migrate to and run:
 ```
 pypgstac migrate
 ```
