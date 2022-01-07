@@ -60,6 +60,10 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION parse_dtrange(IN _indate jsonb, OUT _tstzrange tstzrange) AS $$
 WITH t AS (
     SELECT CASE
+        WHEN _indate ? 'timestamp' THEN
+            ARRAY[_indate->>'timestamp', 'infinity']
+        WHEN _indate ? 'interval' THEN
+            textarr(_indate->'interval')
         WHEN jsonb_typeof(_indate) = 'array' THEN
             textarr(_indate)
         ELSE
@@ -586,6 +590,10 @@ END IF;
 
 IF j ? 'property' THEN
     RETURN (items_path(j->>'property')).path_txt;
+END IF;
+
+IF j ? 'timestamp' THEN
+    RETURN quote_literal(j->>'timestamp');
 END IF;
 
 RAISE NOTICE '%jtype: %',repeat('     ', recursion), jtype;

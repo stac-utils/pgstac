@@ -262,7 +262,7 @@ SELECT results_eq($$
                 },
                 {
                     "op": ">=",
-                    "args": [ { "property": "datetime" }, "2021-04-08T04:39:23Z" ]
+                    "args": [ { "property": "datetime" }, {"timestamp": "2021-04-08T04:39:23Z"} ]
                 },
                 {
                     "op": "s_intersects",
@@ -387,7 +387,7 @@ SELECT results_eq($$
                 "op": "t_intersects",
                 "args": [
                 { "property": "datetime" },
-                [ "2020-11-11T00:00:00Z", "2020-11-12T00:00:00Z"]
+                { "interval": [ "2020-11-11T00:00:00Z", "2020-11-12T00:00:00Z"] }
                 ]
             }
         }
