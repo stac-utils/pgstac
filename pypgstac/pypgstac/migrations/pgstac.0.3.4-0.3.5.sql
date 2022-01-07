@@ -930,6 +930,34 @@ SELECT array_to_string(
 $function$
 ;
 
+DO $$
+DECLARE
+    partition text;
+    topartition text;
+    q text;
+    matches text[];
+BEGIN
+FOR partition IN
+    SELECT
+        (to_json(parse_ident(c.oid::pg_catalog.regclass::text)))->>-1
+    FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
+    WHERE c.oid=i.inhrelid and i.inhparent='items'::regclass
+    LOOP
+        RAISE NOTICE 'Partition: %', partition;
+        topartition := (to_json(regexp_split_to_array(partition, '\.')))->>-1;
+        IF partition != topartition THEN
+            RAISE NOTICE 'Renaming partition % to %', partition, topartition;
+            q := format($q$
+                ALTER TABLE %I RENAME TO %I;
+            $q$, partition, topartition);
+            RAISE NOTICE '%', q;
+            EXECUTE q;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
 SELECT partition_checks(partition) FROM all_items_partitions;
 
 SELECT set_version('0.3.5');
