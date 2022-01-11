@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.4.2]
+
+### Changed
+
+- Add support for updated CQL2 spec to use timestamp or interval key
+
+### Fixed
+
+- Fix for 0.3.4 -> 0.3.5 migration making sure that partitions get renamed correctly
+
 ## [v0.4.1]
 
 ### Changed
