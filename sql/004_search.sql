@@ -555,7 +555,7 @@ END IF;
 -- END Cases where no further nesting is expected
 IF j ? 'op' THEN
     -- Special case to use JSONB index for equality
-    IF op = 'eq'
+    IF op IN ('eq', '=')
         AND args->0 ? 'property'
         AND jsonb_typeof(args->1) IN ('number', 'string')
         AND (items_path(args->0->>'property')).eq IS NOT NULL
