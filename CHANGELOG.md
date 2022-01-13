@@ -1,4 +1,9 @@
 # Changelog
+## [v0.4.3]
+
+### Fixed
+
+- Fix for optimization when using equals with json properties. Allow optimization for both "eq" and "=" (was only previously enabled for "eq")
 
 ## [v0.4.2]
 
