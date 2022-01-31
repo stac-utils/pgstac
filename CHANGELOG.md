@@ -2,9 +2,9 @@
 ## [v0.4.4]
 
 ### Added
- - Adds support for using ids, collections, datetime, bbox, and intersects parameters separated from the filter-lang
-  - Previously use of these parameters was translated into cql-json and then to SQL, so was not available when using cql2-json
-  - The deprecated query parameter is still only available when filter-lang is set to cql-json
+ - Adds support for using ids, collections, datetime, bbox, and intersects parameters separated from the filter-lang (Fixes #85)
+   - Previously use of these parameters was translated into cql-json and then to SQL, so was not available when using cql2-json
+   - The deprecated query parameter is still only available when filter-lang is set to cql-json
 
 
 ### Changed
