@@ -384,6 +384,16 @@ ORDER BY 2 desc;
 CREATE OR REPLACE VIEW items_partitions AS
 SELECT * FROM all_items_partitions WHERE est_cnt>0;
 
+CREATE OR REPLACE FUNCTION item_by_id(_id text) RETURNS items AS
+$$
+DECLARE
+    i items%ROWTYPE;
+BEGIN
+    SELECT * INTO i FROM items WHERE id=_id LIMIT 1;
+    RETURN i;
+END;
+$$ LANGUAGE PLPGSQL;
+
 CREATE OR REPLACE FUNCTION get_item(_id text) RETURNS jsonb AS $$
     SELECT content FROM items WHERE id=_id;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
