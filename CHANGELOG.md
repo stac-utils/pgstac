@@ -1,4 +1,22 @@
 # Changelog
+## [v0.4.4]
+
+### Added
+ - Adds support for using ids, collections, datetime, bbox, and intersects parameters separated from the filter-lang (Fixes #85)
+   - Previously use of these parameters was translated into cql-json and then to SQL, so was not available when using cql2-json
+   - The deprecated query parameter is still only available when filter-lang is set to cql-json
+
+
+### Changed
+- Add PLPGSQL for item lookups by id so that the query plan for the simple query can be cached
+  - Use item_by_id function when looking up records used for paging filters
+  - Add a short circuit to search to use item_by_id lookup when using the ids parameter
+    - This short circuit avoids using the query cache for this simple case
+    - Ordering when using the ids parameter is hard coded to return results in the same order as the array passed in (this avoids the overhead of full parsing and additional overhead to sort)
+
+### Fixed
+- Fix to make sure that filtering on the search_wheres table leverages the functional index on the hash of the query rather than on the query itself.
+
 ## [v0.4.3]
 
 ### Fixed

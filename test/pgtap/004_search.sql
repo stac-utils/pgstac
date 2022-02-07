@@ -164,13 +164,15 @@ SELECT results_eq($$
     'Test ids search single'
 );
 
+
 SELECT results_eq($$
     select s from search('{"ids":["pgstac-test-item-0097","pgstac-test-item-0003"],"fields":{"include":["id"]}}') s;
     $$,$$
-    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0003"},{"id": "pgstac-test-item-0097"}]}'::jsonb
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0097"},{"id": "pgstac-test-item-0003"}]}'::jsonb
     $$,
     'Test ids search multi'
 );
+
 
 
 SELECT results_eq($$
@@ -218,6 +220,48 @@ SELECT results_eq($$
 -- CQL 2 Tests from examples at https://github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md
 
 SET pgstac."default-filter-lang" TO 'cql2-json';
+
+
+SELECT results_eq($$
+    select s from search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0097"}]}'::jsonb
+    $$,
+    'Test ids search single'
+);
+
+SELECT results_eq($$
+    select s from search('{"ids":["pgstac-test-item-0097","pgstac-test-item-0003"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0097"},{"id": "pgstac-test-item-0003"}]}'::jsonb
+    $$,
+    'Test ids search multi'
+);
+
+
+SELECT results_eq($$
+    select s from search('{"collections":["pgstac-test-collection"],"fields":{"include":["id"]}, "limit": 1}') s;
+    $$,$$
+    select '{"next": "pgstac-test-item-0003", "prev": null, "type": "FeatureCollection", "context": {"limit": 1, "matched": 100, "returned": 1}, "features": [{"id": "pgstac-test-item-0003"}]}'::jsonb
+    $$,
+    'Test collections search'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["something"]}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search with unknow collection'
+);
+
+SELECT results_eq($$
+    select s from search('{"collections":["something"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'Test collections search return empty feature not null'
+);
 
 SELECT results_eq($$
     SELECT BTRIM(cql2_query($q$
