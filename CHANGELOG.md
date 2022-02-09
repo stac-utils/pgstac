@@ -8,6 +8,7 @@
 
 ### Changed
 - Changes requirement for PostgreSQL to 13+, the triggers used to main partitions are not available to be used on partitions prior to 13 ([#90](https://github.com/stac-utils/pgstac/pull/90))
+- Bump requirement for asyncpg to 0.25.0 ([#82](https://github.com/stac-utils/pgstac/pull/82))
 
 ### Added
 - Added more tests.
