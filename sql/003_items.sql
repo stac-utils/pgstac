@@ -250,7 +250,7 @@ BEGIN
             properties_idx(content),
             content
         FROM newdata
-        ON CONFLICT (datetime, id) DO NOTHING
+        ON CONFLICT DO NOTHING
     ;
     DELETE FROM items_staging;
 

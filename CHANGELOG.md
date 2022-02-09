@@ -1,4 +1,17 @@
 # Changelog
+## [v0.4.5]
+
+### Fixed
+ - Fixes support for using the intersects parameter at the base of a search (regression from changes in 0.4.4)
+ - Fixes issue where results for a search on id returned [None] rather than [] (regression from changes in 0.4.4)
+
+
+### Changed
+- Changes requirement for PostgreSQL to 13+, the triggers used to main partitions are not available to be used on partitions prior to 13 ([#90](https://github.com/stac-utils/pgstac/pull/90))
+
+### Added
+- Added more tests.
+
 ## [v0.4.4]
 
 ### Added

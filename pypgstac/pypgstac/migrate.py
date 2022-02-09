@@ -121,6 +121,19 @@ async def get_version(conn: asyncpg.Connection) -> str:
     return version
 
 
+async def check_pg_version(conn: asyncpg.Connection) -> str:
+    """Get the current pg version number from a pgstac database."""
+    async with conn.transaction():
+        version = await conn.fetchval(
+            """
+            SHOW server_version;
+            """
+        )
+        if int(version.split(".")[0]) < 13:
+            raise Exception("PGStac requires PostgreSQL 13+")
+        return version
+
+
 async def get_version_dsn(dsn: Optional[str] = None) -> str:
     """Get current version from a specified database."""
     conn = await asyncpg.connect(dsn=dsn)
@@ -138,6 +151,8 @@ async def run_migration(
     files = []
 
     conn = await asyncpg.connect(dsn=dsn)
+    pgversion = await check_pg_version(conn)
+    typer.echo(f"Migrating PGStac on PostgreSQL Version {pgversion}")
     oldversion = await get_version(conn)
     try:
         if oldversion == toversion:
