@@ -173,6 +173,13 @@ SELECT results_eq($$
     'Test ids search multi'
 );
 
+SELECT results_eq($$
+    select s from search('{"ids":["bogusid"],"fields":{"include":["id"]}}') s;
+    $$,$$
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}'::jsonb
+    $$,
+    'non-existent id returns empty array'
+);
 
 
 SELECT results_eq($$
@@ -215,6 +222,29 @@ SELECT results_eq($$
     select '{"collections":["pgstac-test-collection"]}'::jsonb
     $$,
     'Test search_query to return valid search'
+);
+
+
+
+SELECT results_eq($$
+    SELECT BTRIM(cql_to_where($q$
+        {
+            "intersects":
+                {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [-77.0824, 38.7886], [-77.0189, 38.7886],
+                        [-77.0189, 38.8351], [-77.0824, 38.8351],
+                        [-77.0824, 38.7886]
+                    ]]
+                }
+        }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    (  TRUE  )  AND st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340')
+    $r$,E' \n');
+    $$, 'Make sure that intersects returns valid query'
 );
 
 -- CQL 2 Tests from examples at https://github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md

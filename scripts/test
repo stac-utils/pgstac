@@ -32,6 +32,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Starting database..."
     scripts/server --detach;
 
+    scripts/migrate
+
     echo "Running database tests..."
     docker-compose \
         exec -T \

@@ -20,23 +20,23 @@ PGDatabase Schema and Functions for Storing and Accessing STAC collections and i
 
 STAC Client that uses PGStac available in [STAC-FastAPI](https://github.com/stac-utils/stac-fastapi)
 
-PGStac requires **Postgresql>=12** and **PostGIS>=3**. Best performance will be had using PostgreSQL>=13 and PostGIS>=3.1.
+PGStac requires **Postgresql>=13** and **PostGIS>=3**. Best performance will be had using PostGIS>=3.1.
 
 ### PGStac Settings
 PGStac installs everything into the pgstac schema in the database. You will need to make sure that this schema is set up in the search_path for the database.
 
-There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql-json2). 
+There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql-json2).
 The context is "off" by default, and the default filter language is set to "cql2-json".
 
 Variables can be set either by passing them in via the connection options using your connection library, setting them in the pgstac_settings table or by setting them on the Role that is used to log in to the database.
 
 Example for updating the pgstac_settings table with a new value:
 ```sql
-INSERT INTO pgstac_settings (name, value) 
-VALUES 
+INSERT INTO pgstac_settings (name, value)
+VALUES
     ('default-filter-lang', 'cql-json'),
     ('context', 'on')
-    
+
 ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;
 ```
 
