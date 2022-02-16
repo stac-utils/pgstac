@@ -97,9 +97,7 @@ async def aiter(list: T) -> AsyncGenerator[bytes, None]:
                 f"Cannot load iterator with values of type {type(item)} (value {item})"
             )
 
-        lines = "\n".join(
-            [item_str.rstrip().replace(r"\n", r"\\n").replace(r"\t", r"\\t")]
-        )
+        lines = "\n".join([item_str.rstrip()])
         encoded_lines = (lines + "\n").encode("utf-8")
 
         yield encoded_lines
@@ -237,10 +235,24 @@ async def load_iterator(
 async def load_ndjson(
     file: str, table: tables, method: loadopt = loadopt.insert, dsn: str = None
 ) -> None:
-    """Load data from an ndjson file."""
+    r"""Load data from an ndjson file.
+    NOTE: ndjson requires newlines within json text fields be double escaped (\\n)"""
     typer.echo(f"loading {file} into {table} using {method}")
     open_file: Any = open(file, "rb")
 
     with open_file as f:
         async with DB(dsn) as conn:
             await load_iterator(f, table, conn, method)
+
+
+async def load_json(
+    file: str, table: tables, method: loadopt = loadopt.insert, dsn: str = None
+) -> None:
+    r"""Load data from an json file.
+    NOTE: json files should only escape newlines within json text fields once (\n)"""
+    typer.echo(f"loading {file} into {table} using {method}")
+    open_file: Any = open(file, "rb")
+
+    with open_file as f:
+        async with DB(dsn) as conn:
+            await load_iterator([orjson.loads(f.read())], table, conn, method)
