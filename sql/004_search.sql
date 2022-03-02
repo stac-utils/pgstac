@@ -927,6 +927,7 @@ CREATE TABLE IF NOT EXISTS search_wheres(
     partitions text[]
 );
 
+CREATE INDEX ON searches ((true)) WHERE metadata->>'type'='mosaic';
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
 CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((md5(_where)));
 
