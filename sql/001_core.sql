@@ -1,6 +1,38 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE SCHEMA IF NOT EXISTS pgstac;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+DO $$
+  BEGIN
+    CREATE ROLE pgstac_admin;
+    CREATE ROLE pgstac_read;
+    CREATE ROLE pgstac_ingest;
+  EXCEPTION WHEN duplicate_object THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+GRANT pgstac_admin TO current_user;
+
+CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
+
+ALTER ROLE pgstac_admin SET SEARCH_PATH TO pgstac, public;
+ALTER ROLE pgstac_read SET SEARCH_PATH TO pgstac, public;
+ALTER ROLE pgstac_ingest SET SEARCH_PATH TO pgstac, public;
+
+GRANT USAGE ON SCHEMA pgstac to pgstac_read;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+
+GRANT pgstac_read TO pgstac_ingest;
+GRANT ALL ON SCHEMA pgstac TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
+
+SET ROLE pgstac_admin;
+
 SET SEARCH_PATH TO pgstac, public;
+
 
 CREATE TABLE migrations (
   version text PRIMARY KEY,
@@ -9,16 +41,16 @@ CREATE TABLE migrations (
 
 CREATE OR REPLACE FUNCTION get_version() RETURNS text AS $$
   SELECT version FROM migrations ORDER BY datetime DESC, version DESC LIMIT 1;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
   INSERT INTO migrations (version) VALUES ($1)
   ON CONFLICT DO NOTHING
   RETURNING version;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL;
 
 
-CREATE TABLE IF NOT EXISTS pgstac_settings (
+CREATE TABLE pgstac_settings (
   name text PRIMARY KEY,
   value text NOT NULL
 );
@@ -28,7 +60,8 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_estimated_count', '100000'),
   ('context_estimated_cost', '1000000'),
   ('context_stats_ttl', '1 day'),
-  ('default-filter-lang', 'cql2-json')
+  ('default-filter-lang', 'cql2-json'),
+  ('additional_properties', 'true')
 ON CONFLICT DO NOTHING
 ;
 
@@ -41,12 +74,10 @@ SELECT COALESCE(
 );
 $$ LANGUAGE SQL;
 
-DROP FUNCTION IF EXISTS context();
 CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
   SELECT get_setting('context', conf);
 $$ LANGUAGE SQL;
 
-DROP FUNCTION IF EXISTS context_estimated_count();
 CREATE OR REPLACE FUNCTION context_estimated_count(conf jsonb DEFAULT NULL) RETURNS int AS $$
   SELECT get_setting('context_estimated_count', conf)::int;
 $$ LANGUAGE SQL;
@@ -82,6 +113,11 @@ ELSE FALSE
 END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION array_intersection(_a ANYARRAY, _b ANYARRAY) RETURNS ANYARRAY AS $$
+  SELECT ARRAY ( SELECT unnest(_a) INTERSECT SELECT UNNEST(_b) );
+$$ LANGUAGE SQL IMMUTABLE;
+
+
 CREATE OR REPLACE FUNCTION array_map_ident(_a text[])
   RETURNS text[] AS $$
   SELECT array_agg(quote_ident(v)) FROM unnest(_a) v;
@@ -92,24 +128,6 @@ CREATE OR REPLACE FUNCTION array_map_literal(_a text[])
   SELECT array_agg(quote_literal(v)) FROM unnest(_a) v;
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION estimated_count(_where text) RETURNS bigint AS $$
-DECLARE
-rec record;
-rows bigint;
-BEGIN
-    FOR rec in EXECUTE format(
-        $q$
-            EXPLAIN SELECT 1 FROM items WHERE %s
-        $q$,
-        _where)
-    LOOP
-        rows := substring(rec."QUERY PLAN" FROM ' rows=([[:digit:]]+)');
-        EXIT WHEN rows IS NOT NULL;
-    END LOOP;
-
-    RETURN rows;
-END;
-$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION array_reverse(anyarray) RETURNS anyarray AS $$
 SELECT ARRAY(
@@ -117,4 +135,4 @@ SELECT ARRAY(
     FROM generate_subscripts($1,1) AS s(i)
     ORDER BY i DESC
 );
-$$ LANGUAGE 'sql' STRICT IMMUTABLE;
+$$ LANGUAGE SQL STRICT IMMUTABLE;

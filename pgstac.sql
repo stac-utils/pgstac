@@ -4,6 +4,8 @@ BEGIN;
 \i sql/001b_cursorutils.sql
 \i sql/001s_stacutils.sql
 \i sql/002_collections.sql
+\i sql/002a_queryables.sql
+\i sql/002b_cql.sql
 \i sql/003_items.sql
 \i sql/004_search.sql
 \i sql/005_tileutils.sql

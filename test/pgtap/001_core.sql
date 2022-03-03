@@ -7,12 +7,9 @@ SELECT has_extension('postgis');
 SELECT has_table('pgstac'::name, 'migrations'::name);
 
 
-SELECT has_function('pgstac'::name, 'textarr', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'to_text_array', ARRAY['jsonb']);
 SELECT results_eq(
-    $$ SELECT textarr('["a","b","c"]'::jsonb) $$,
+    $$ SELECT to_text_array('["a","b","c"]'::jsonb) $$,
     $$ SELECT '{a,b,c}'::text[] $$,
-    'textarr returns text[] from jsonb array'
+    'to_text_array returns text[] from jsonb array'
 );
-
-
-SELECT has_function('pgstac'::name, 'estimated_count', ARRAY['text']);

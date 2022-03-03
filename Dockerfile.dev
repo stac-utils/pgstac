@@ -12,7 +12,9 @@ ENV \
 
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-RUN pip install poetry==1.1.7
+RUN pip install --upgrade pip && \
+    pip install --upgrade poetry==1.1.13 && \
+    pip install --upgrade psycopg[binary]
 
 RUN mkdir -p /opt/src/pypgstac
 

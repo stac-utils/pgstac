@@ -4,243 +4,219 @@ from typing import Any, AsyncGenerator, Dict, Iterable, Optional, TypeVar
 
 import asyncpg
 import orjson
+from orjson import JSONDecodeError
+
 import typer
 from asyncpg.connection import Connection
 from smart_open import open
+from .db import PgstacDB
+from itertools import groupby
+import logging
+from stac_pydantic import Item, Collection
+from functools import lru_cache
 
 app = typer.Typer()
 
 
-async def con_init(conn: Connection) -> None:
-    """Use orjson for json returns."""
-    await conn.set_type_codec(
-        "json",
-        encoder=orjson.dumps,
-        decoder=orjson.loads,
-        schema="pg_catalog",
-    )
-    await conn.set_type_codec(
-        "jsonb",
-        encoder=orjson.dumps,
-        decoder=orjson.loads,
-        schema="pg_catalog",
-    )
+
+def safeget(d, *keys):
+    for key in keys:
+        try:
+            d = d[key]
+        except KeyError:
+            return '_'
+    return d
+
+from attr import define
+from typing import Optional
+
+def name_array_asdict(na: List):
+    out = {}
+    for i in na:
+        out[i["name"]] = i
+    return out
 
 
-class DB:
-    """Database connection context manager."""
-
-    pg_connection_string: Optional[str] = None
-    connection: Optional[Connection] = None
-
-    def __init__(self, pg_connection_string: Optional[str] = None) -> None:
-        """Initialize DB class."""
-        self.pg_connection_string = pg_connection_string
-
-    async def create_connection(self) -> Connection:
-        """Create database connection and set search_path."""
-        connection: Connection = await asyncpg.connect(
-            self.pg_connection_string,
-            server_settings={
-                "search_path": "pgstac,public",
-                "application_name": "pypgstac",
-            },
-        )
-        await con_init(connection)
-        self.connection = connection
-        return self.connection
-
-    async def __aenter__(self) -> Connection:
-        """Enter DB Connection."""
-        if self.connection is None:
-            await self.create_connection()
-        assert self.connection is not None
-        return self.connection
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit DB Connection."""
-        if self.connection:
-            await self.connection.close()
+def name_array_diff(a: List, b: List):
+    diff = dict_minus(name_array_asdict(a), name_array_asdict(b))
+    vals = diff.values()
+    return [v for v in vals if v != {}]
 
 
-class loadopt(str, Enum):
-    """Options for how to load data."""
+def dict_minus(a, b):
+    out = {}
+    for key, value in b.items():
+        # if key in ["proj:bbox", "proj:transform"]:
+        #     continue
 
-    insert = "insert"
-    insert_ignore = "insert_ignore"
-    upsert = "upsert"
+        if isinstance(value, list):
+            try:
+                arraydiff = name_array_diff(a[key], value)
+                if arraydiff is not None and arraydiff != []:
+                    out[key] = arraydiff
+                continue
+            except KeyError:
+                pass
+            except TypeError:
+                pass
 
+        if value is None or value == []:
+            continue
+        if key not in a:
+            out[key] = value
+            continue
 
-class tables(str, Enum):
-    """Tables available to load data into."""
+        if a.get(key) != value:
+            if isinstance(value, dict):
+                out[key] = dict_minus(a[key], value)
+                continue
+            out[key] = value
 
-    items = "items"
-    collections = "collections"
+    return out
 
+@lru_cache
+def get_epsg_from_wkt(wkt):
+    """Get srid from a wkt string."""
+    crs = CRS(wkt)
+    if crs:
+        auths = crs.list_authority()
+        if auths and len(auths) >= 1:
+            for auth in auths:
+                authcrs = CRS.from_authority(auth.auth_name, auth.code)
+                if crs.equals(authcrs):
+                    return int(auth.code)
 
-# Types of iterable that load_iterator can support
-T = TypeVar("T", Iterable[bytes], Iterable[Dict[str, Any]], Iterable[str])
+@define
+class Item:
+    id: Optional[str]
+    geom: Optional[str]
+    collection: Optional[str]
+    datetime: Optional[str]
+    end_datetime: Optional[str]
+    properties: Optional[dict]
+    content: Optional[dict]
+    _sort: tuple
 
-
-async def aiter(list: T) -> AsyncGenerator[bytes, None]:
-    """Async Iterator to convert data to be suitable for pg copy."""
-    for item in list:
-        item_str: str
-        if isinstance(item, bytes):
-            item_str = item.decode("utf-8")
-        elif isinstance(item, dict):
-            item_str = orjson.dumps(item).decode("utf-8")
-        elif isinstance(item, str):
-            item_str = item
-        else:
-            raise ValueError(
-                f"Cannot load iterator with values of type {type(item)} (value {item})"
-            )
-
-        lines = "\n".join(
-            [item_str.rstrip().replace(r"\n", r"\\n").replace(r"\t", r"\\t")]
-        )
-        encoded_lines = (lines + "\n").encode("utf-8")
-
-        yield encoded_lines
-
-
-async def copy(iter: T, table: tables, conn: asyncpg.Connection) -> None:
-    """Directly use copy to load data."""
-    bytes_iter = aiter(iter)
-    async with conn.transaction():
-        if table == "collections":
-            await conn.execute(
-                """
-                CREATE TEMP TABLE pgstactemp (content jsonb)
-                ON COMMIT DROP;
-            """
-            )
-            await conn.copy_to_table(
-                "pgstactemp",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
-            await conn.execute(
-                """
-                INSERT INTO collections (content)
-                SELECT content FROM pgstactemp;
-            """
-            )
-        if table == "items":
-            await conn.copy_to_table(
-                "items_staging",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
+    @classmethod
+    def from_dict(cls, d):
+        id = d.get('id')
+        geom = d.get('geometry')
+        collection = d.get('collection')
+        datetime = safeget(d, 'properties', 'datetime')
+        end_datetime = safeget(d, 'properties', 'end_datetime')
+        properties = safeget(d, 'properties')
+        content = d
+        _sort = (collection, datetime, id)
+        return cls(id, geom, collection, datetime, end_datetime, properties, content, _sort)
 
 
-async def copy_ignore_duplicates(
-    iter: T, table: tables, conn: asyncpg.Connection
+    def __lt__(self, other):
+        return self._sort < other._sort
+    def __le__(self, other):
+        return self._sort <= other._sort
+    def __gt__(self, other):
+        return self._sort > other._sort
+    def __ge__(self, other):
+        return self._sort >= other._sort
+
+
+
+def read_json(
+    file: str
 ) -> None:
-    """Load data first into a temp table to ignore duplicates."""
-    bytes_iter = aiter(iter)
-    async with conn.transaction():
-        if table == "collections":
-            await conn.execute(
-                """
-                CREATE TEMP TABLE pgstactemp (content jsonb)
-                ON COMMIT DROP;
-            """
-            )
-            await conn.copy_to_table(
-                "pgstactemp",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
-            await conn.execute(
-                """
-                INSERT INTO collections (content)
-                SELECT content FROM pgstactemp
-                ON CONFLICT DO NOTHING;
-            """
-            )
-        if table == "items":
-            await conn.copy_to_table(
-                "items_staging_ignore",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
-
-
-async def copy_upsert(iter: T, table: tables, conn: asyncpg.Connection) -> None:
-    """Insert data into a temp table to be able merge data."""
-    bytes_iter = aiter(iter)
-    async with conn.transaction():
-        if table == "collections":
-            await conn.execute(
-                """
-                CREATE TEMP TABLE pgstactemp (content jsonb)
-                ON COMMIT DROP;
-            """
-            )
-            await conn.copy_to_table(
-                "pgstactemp",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
-            await conn.execute(
-                """
-                INSERT INTO collections (content)
-                SELECT content FROM pgstactemp
-                ON CONFLICT (id) DO UPDATE
-                SET content = EXCLUDED.content
-                WHERE collections.content IS DISTINCT FROM EXCLUDED.content;
-            """
-            )
-        if table == "items":
-            await conn.copy_to_table(
-                "items_staging_upsert",
-                source=bytes_iter,
-                columns=["content"],
-                format="csv",
-                quote=chr(27),
-                delimiter=chr(31),
-            )
-
-
-async def load_iterator(
-    iter: T,
-    table: tables,
-    conn: asyncpg.Connection,
-    method: loadopt = loadopt.insert,
-):
-    """Use appropriate method to load data from a file like iterator."""
-    if method == loadopt.insert:
-        await copy(iter, table, conn)
-    elif method == loadopt.insert_ignore:
-        await copy_ignore_duplicates(iter, table, conn)
-    else:
-        await copy_upsert(iter, table, conn)
-
-
-async def load_ndjson(
-    file: str, table: tables, method: loadopt = loadopt.insert, dsn: str = None
-) -> None:
-    """Load data from an ndjson file."""
-    typer.echo(f"loading {file} into {table} using {method}")
+    """Load data from an ndjson or json file."""
     open_file: Any = open(file, "rb")
-
     with open_file as f:
-        async with DB(dsn) as conn:
-            await load_iterator(f, table, conn, method)
+        # Try reading line by line as ndjson
+        try:
+            for line in f:
+                line = line.strip().replace('////','//')
+                yield orjson.loads(line)
+        except JSONDecodeError as e:
+            # If reading first line as json fails, try reading entire file
+            logging.info(f'First line could not be parsed as json, trying full file.')
+            try:
+                f.seek(0)
+                json = orjson.loads(f.read())
+                if isinstance(json, list):
+                    for record in json:
+                        yield record
+                else:
+                    yield json
+            except JSONDecodeError as e:
+                logging.info('File cannot be read as json')
+                raise e
+
+
+class Loader:
+    def __init__(self, db: PgstacDB, schema: str = 'pgstac'):
+        print("migrate init")
+        self.db = db
+        self.schema = schema
+
+    def __hash__(self):
+        return self.schema
+
+    @lru_cache
+    def get_collection_item(self, collection:str):
+        collection = self.db.query_one(
+            """
+            SELECT item_template FROM collections
+            WHERE id = %s
+            """,
+            collection)
+        if collection is None:
+            raise Exception(f"Collection {collection} not found.")
+
+
+
+    def temp_items(self, iter: T):
+        self.db.connect()
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+            CREATE TEMP TABLE pgstacloader (content jsonb);
+            """)
+            with cursor.copy("COPY pgstacloader (content) FROM STDIN;"):
+
+
+    def format_item(self, item, item_template: dict):
+        """Format an item to insert into a record."""
+        out = {}
+        if not isinstance(item, dict):
+            try:
+                item = orjson.loads(item.replace("\\\\", "\\"))
+            except:
+                print(f"Could not load {item}")
+                return None
+
+        id = item.pop("id")
+        out["collection_id"] = item.pop("collection")
+        out["datetime"] = item["properties"].pop("datetime")
+
+        item.pop("bbox")
+        geojson = item.pop("geometry")
+        geometry = Geometry.from_geojson(geojson).wkb
+        out["geometry"] = geometry
+
+        content = dict_minus(item_template, item)
+
+        properties = content["properties"]
+
+        if properties.get("proj:epsg") == 4326:
+            properties.pop("proj:bbox")
+
+        if properties.get("proj:wkt2"):
+            srid = self.get_epsg(properties.get("proj:wkt2"))
+            if srid:
+                properties.pop("proj:wkt2")
+                properties["proj:epsg"] = srid
+
+        if properties.get("proj:epsg"):
+            if properties.get("proj:bbox"):
+                properties.pop("proj:bbox")
+            if properties.get("proj:transform"):
+                properties.pop("proj:transform")
+
+        out["content"] = orjson.dumps(content).decode()
+
+        return out

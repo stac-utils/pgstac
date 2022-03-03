@@ -1,791 +1,245 @@
-
-SET SEARCH_PATH TO pgstac, public;
-
-CREATE OR REPLACE FUNCTION items_path(
-    IN dotpath text,
-    OUT field text,
-    OUT path text,
-    OUT path_txt text,
-    OUT jsonpath text,
-    OUT eq text
-) RETURNS RECORD AS $$
-DECLARE
-path_elements text[];
-last_element text;
-BEGIN
-dotpath := replace(trim(dotpath), 'properties.', '');
-
-IF dotpath = '' THEN
-    RETURN;
-END IF;
-
-path_elements := string_to_array(dotpath, '.');
-jsonpath := NULL;
-
-IF path_elements[1] IN ('id','geometry','datetime') THEN
-    field := path_elements[1];
-    path_elements := path_elements[2:];
-ELSIF path_elements[1] = 'collection' THEN
-    field := 'collection_id';
-    path_elements := path_elements[2:];
-ELSIF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
-    field := 'content';
-ELSE
-    field := 'content';
-    path_elements := '{properties}'::text[] || path_elements;
-END IF;
-IF cardinality(path_elements)<1 THEN
-    path := field;
-    path_txt := field;
-    jsonpath := '$';
-    eq := NULL;
-    RETURN;
-END IF;
-
-
-last_element := path_elements[cardinality(path_elements)];
-path_elements := path_elements[1:cardinality(path_elements)-1];
-jsonpath := concat(array_to_string('{$}'::text[] || array_map_ident(path_elements), '.'), '.', quote_ident(last_element));
-path_elements := array_map_literal(path_elements);
-path     := format($F$ properties->%s $F$, quote_literal(dotpath));
-path_txt := format($F$ properties->>%s $F$, quote_literal(dotpath));
-eq := format($F$ properties @? '$.%s[*] ? (@ == %%s) '$F$, quote_ident(dotpath));
-
-RAISE NOTICE 'ITEMS PATH -- % % % % %', field, path, path_txt, jsonpath, eq;
-RETURN;
-END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION parse_dtrange(IN _indate jsonb, OUT _tstzrange tstzrange) AS $$
-WITH t AS (
-    SELECT CASE
-        WHEN _indate ? 'timestamp' THEN
-            ARRAY[_indate->>'timestamp', 'infinity']
-        WHEN _indate ? 'interval' THEN
-            textarr(_indate->'interval')
-        WHEN jsonb_typeof(_indate) = 'array' THEN
-            textarr(_indate)
-        ELSE
-            regexp_split_to_array(
-                btrim(_indate::text,'"'),
-                '/'
-            )
-        END AS arr
-)
-, t1 AS (
-    SELECT
-        CASE
-            WHEN array_upper(arr,1) = 1 OR arr[1] = '..' OR arr[1] IS NULL THEN '-infinity'::timestamptz
-            ELSE arr[1]::timestamptz
-        END AS st,
-        CASE
-            WHEN array_upper(arr,1) = 1 THEN arr[1]::timestamptz
-            WHEN arr[2] = '..' OR arr[2] IS NULL THEN 'infinity'::timestamptz
-            ELSE arr[2]::timestamptz
-        END AS et
-    FROM t
-)
+CREATE VIEW partition_steps AS
 SELECT
-    tstzrange(st,et)
-FROM t1;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
-SELECT CASE jsonb_array_length(_bbox)
-    WHEN 4 THEN
-        ST_SetSRID(ST_MakeEnvelope(
-            (_bbox->>0)::float,
-            (_bbox->>1)::float,
-            (_bbox->>2)::float,
-            (_bbox->>3)::float
-        ),4326)
-    WHEN 6 THEN
-    ST_SetSRID(ST_3DMakeBox(
-        ST_MakePoint(
-            (_bbox->>0)::float,
-            (_bbox->>1)::float,
-            (_bbox->>2)::float
-        ),
-        ST_MakePoint(
-            (_bbox->>3)::float,
-            (_bbox->>4)::float,
-            (_bbox->>5)::float
-        )
-    ),4326)
-    ELSE null END;
+    name,
+    date_trunc('month',lower(datetime_range)) as sdate,
+    date_trunc('month', upper(datetime_range)) + '1 month'::interval as edate
+    FROM partitions WHERE datetime_range IS NOT NULL AND datetime_range != 'empty'::tstzrange
+    ORDER BY datetime_range ASC
 ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION cql_and_append(existing jsonb, newfilters jsonb) RETURNS jsonb AS $$
-SELECT CASE WHEN existing ? 'filter' AND newfilters IS NOT NULL THEN
-    jsonb_build_object(
-        'and',
-        jsonb_build_array(
-            existing->'filter',
-            newfilters
-        )
-    )
-ELSE
-    newfilters
-END;
-$$ LANGUAGE SQL;
-
-
--- ADDs base filters (ids, collections, datetime, bbox, intersects) that are
--- added outside of the filter/query in the stac request
-CREATE OR REPLACE FUNCTION add_filters_to_cql(j jsonb) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION chunker(
+    IN _where text,
+    OUT s timestamptz,
+    OUT e timestamptz
+) RETURNS SETOF RECORD AS $$
 DECLARE
-newprop jsonb;
-newprops jsonb := '[]'::jsonb;
+    explain jsonb;
 BEGIN
-IF j ? 'ids' THEN
-    newprop := jsonb_build_object(
-        'in',
-        jsonb_build_array(
-            '{"property":"id"}'::jsonb,
-            j->'ids'
-        )
-    );
-    newprops := jsonb_insert(newprops, '{1}', newprop);
-END IF;
-IF j ? 'collections' THEN
-    newprop := jsonb_build_object(
-        'in',
-        jsonb_build_array(
-            '{"property":"collection"}'::jsonb,
-            j->'collections'
-        )
-    );
-    newprops := jsonb_insert(newprops, '{1}', newprop);
-END IF;
+    IF _where IS NULL THEN
+        _where := ' TRUE ';
+    END IF;
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s;', _where)
+    INTO explain;
 
-IF j ? 'datetime' THEN
-    newprop := format(
-        '{"anyinteracts":[{"property":"datetime"}, %s]}',
-        j->'datetime'
-    );
-    newprops := jsonb_insert(newprops, '{1}', newprop);
-END IF;
-
-IF j ? 'bbox' THEN
-    newprop := format(
-        '{"intersects":[{"property":"geometry"}, %s]}',
-        j->'bbox'
-    );
-    newprops := jsonb_insert(newprops, '{1}', newprop);
-END IF;
-
-IF j ? 'intersects' THEN
-    newprop := format(
-        '{"intersects":[{"property":"geometry"}, %s]}',
-        j->'intersects'
-    );
-    newprops := jsonb_insert(newprops, '{1}', newprop);
-END IF;
-
-RAISE NOTICE 'newprops: %', newprops;
-
-IF newprops IS NOT NULL AND jsonb_array_length(newprops) > 0 THEN
-    return jsonb_set(
-        j,
-        '{filter}',
-        cql_and_append(j, jsonb_build_object('and', newprops))
-    ) - '{ids,collections,datetime,bbox,intersects}'::text[];
-END IF;
-
-return j;
+    RETURN QUERY
+    WITH t AS (
+        SELECT j->>0 as p FROM
+            jsonb_path_query(
+                explain,
+                'strict $.**."Relation Name" ? (@ != null)'
+            ) j
+    ),
+    parts AS (
+        SELECT sdate, edate FROM t JOIN partition_steps ON (t.p = name)
+    ),
+    times AS (
+        SELECT sdate FROM parts
+        UNION
+        SELECT edate FROM parts
+    ),
+    uniq AS (
+        SELECT DISTINCT sdate FROM times ORDER BY sdate
+    ),
+    last AS (
+    SELECT sdate, lead(sdate, 1) over () as edate FROM uniq
+    )
+    SELECT sdate, edate FROM last WHERE edate IS NOT NULL;
 END;
 $$ LANGUAGE PLPGSQL;
 
-
-CREATE OR REPLACE FUNCTION query_to_cqlfilter(j jsonb) RETURNS jsonb AS $$
--- Translates anything passed in through the deprecated "query" into equivalent CQL
-WITH t AS (
-    SELECT key as property, value as ops
-        FROM jsonb_each(j->'query')
-), t2 AS (
-    SELECT property, (jsonb_each(ops)).*
-        FROM t WHERE jsonb_typeof(ops) = 'object'
-    UNION ALL
-    SELECT property, 'eq', ops
-        FROM t WHERE jsonb_typeof(ops) != 'object'
-), t3 AS (
-SELECT
-    jsonb_strip_nulls(jsonb_build_object(
-        'and',
-        jsonb_agg(
-            jsonb_build_object(
-                key,
-                jsonb_build_array(
-                    jsonb_build_object('property',property),
-                    value
-                )
-            )
-        )
-    )) as qcql FROM t2
-)
-SELECT
-    CASE WHEN qcql IS NOT NULL THEN
-        jsonb_set(j, '{filter}', cql_and_append(j, qcql)) - 'query'
-    ELSE j
-    END
-FROM t3
-;
-$$ LANGUAGE SQL;
-
-
-CREATE OR REPLACE FUNCTION base_stac_query(j jsonb) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION partition_queries(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN partitions text[] DEFAULT NULL
+) RETURNS SETOF text AS $$
 DECLARE
-_where text := '';
-dtrange tstzrange;
-geom geometry;
+    query text;
+    sdate timestamptz;
+    edate timestamptz;
 BEGIN
+IF _where IS NULL OR trim(_where) = '' THEN
+    _where = ' TRUE ';
+END IF;
+RAISE NOTICE 'Getting chunks for % %', _where, _orderby;
+IF _orderby ILIKE 'datetime d%' THEN
+    FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 DESC LOOP
+        RETURN NEXT format($q$
+            SELECT * FROM items
+            WHERE
+            datetime >= %L AND datetime < %L
+            AND (%s)
+            ORDER BY %s
+            $q$,
+            sdate,
+            edate,
+            _where,
+            _orderby
+        );
+    END LOOP;
+ELSIF _orderby ILIKE 'datetime a%' THEN
+    FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 ASC LOOP
+        RETURN NEXT format($q$
+            SELECT * FROM items
+            WHERE
+            datetime >= %L AND datetime < %L
+            AND (%s)
+            ORDER BY %s
+            $q$,
+            sdate,
+            edate,
+            _where,
+            _orderby
+        );
+    END LOOP;
+ELSE
+    query := format($q$
+        SELECT * FROM items
+        WHERE %s
+        ORDER BY %s
+    $q$, _where, _orderby
+    );
 
+    RETURN NEXT query;
+    RETURN;
+END IF;
+
+RETURN;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION stac_search_to_where(j jsonb) RETURNS text AS $$
+DECLARE
+    where_segments text[];
+    _where text;
+    dtrange tstzrange;
+    collections text[];
+    geom geometry;
+    sdate timestamptz;
+    edate timestamptz;
+    filterlang text;
+    filter jsonb := j->'filter';
+BEGIN
     IF j ? 'ids' THEN
-        _where := format('%s AND id = ANY (%L) ', _where, textarr(j->'ids'));
+        where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
     END IF;
+
     IF j ? 'collections' THEN
-        _where := format('%s AND collection_id = ANY (%L) ', _where, textarr(j->'collections'));
+        collections := to_text_array(j->'collections');
+        where_segments := where_segments || format('collection = ANY (%L) ', collections);
     END IF;
 
     IF j ? 'datetime' THEN
         dtrange := parse_dtrange(j->'datetime');
-        _where := format('%s AND datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
-            _where,
-            upper(dtrange),
-            lower(dtrange)
+        sdate := lower(dtrange);
+        edate := upper(dtrange);
+
+        where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
+            edate,
+            sdate
         );
     END IF;
 
-    IF j ? 'bbox' THEN
-        geom := bbox_geom(j->'bbox');
-        _where := format('%s AND geometry && %L',
-            _where,
-            geom
-        );
+    geom := stac_geom(j);
+    IF geom IS NOT NULL THEN
+        where_segments := where_segments || format('st_intersects(geometry, %L)',geom);
     END IF;
 
-    IF j ? 'intersects' THEN
-        geom := st_geomfromgeojson(j->>'intersects');
-        _where := format('%s AND st_intersects(geometry, %L)',
-            _where,
-            geom
-        );
+    filterlang := COALESCE(
+        j->>'filter-lang',
+        get_setting('default-filter-lang', j->'conf')
+    );
+    IF NOT filter @? '$.**.op' THEN
+        filterlang := 'cql-json';
     END IF;
 
+    IF filterlang NOT IN ('cql-json','cql2-json') AND j ? 'filter' THEN
+        RAISE EXCEPTION '% is not a supported filter-lang. Please use cql-json or cql2-json.', filterlang;
+    END IF;
+
+    IF j ? 'query' AND j ? 'filter' THEN
+        RAISE EXCEPTION 'Can only use either query or filter at one time.';
+    END IF;
+
+    IF j ? 'query' THEN
+        filter := query_to_cql2(j->'query');
+    ELSIF filterlang = 'cql-json' THEN
+        filter := cql1_to_cql2(filter);
+    END IF;
+    RAISE NOTICE 'FILTER: %', filter;
+    where_segments := where_segments || cql2_query(filter);
+    IF cardinality(where_segments) < 1 THEN
+        RETURN ' TRUE ';
+    END IF;
+
+    _where := array_to_string(array_remove(where_segments, NULL), ' AND ');
+
+    IF _where IS NULL OR BTRIM(_where) = '' THEN
+        RETURN ' TRUE ';
+    END IF;
     RETURN _where;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-CREATE OR REPLACE FUNCTION temporal_op_query(op text, args jsonb) RETURNS text AS $$
-DECLARE
-ll text := 'datetime';
-lh text := 'end_datetime';
-rrange tstzrange;
-rl text;
-rh text;
-outq text;
-BEGIN
-rrange := parse_dtrange(args->1);
-RAISE NOTICE 'Constructing temporal query OP: %, ARGS: %, RRANGE: %', op, args, rrange;
-op := lower(op);
-rl := format('%L::timestamptz', lower(rrange));
-rh := format('%L::timestamptz', upper(rrange));
-outq := CASE op
-    WHEN 't_before'       THEN 'lh < rl'
-    WHEN 't_after'        THEN 'll > rh'
-    WHEN 't_meets'        THEN 'lh = rl'
-    WHEN 't_metby'        THEN 'll = rh'
-    WHEN 't_overlaps'     THEN 'll < rl AND rl < lh < rh'
-    WHEN 't_overlappedby' THEN 'rl < ll < rh AND lh > rh'
-    WHEN 't_starts'       THEN 'll = rl AND lh < rh'
-    WHEN 't_startedby'    THEN 'll = rl AND lh > rh'
-    WHEN 't_during'       THEN 'll > rl AND lh < rh'
-    WHEN 't_contains'     THEN 'll < rl AND lh > rh'
-    WHEN 't_finishes'     THEN 'll > rl AND lh = rh'
-    WHEN 't_finishedby'   THEN 'll < rl AND lh = rh'
-    WHEN 't_equals'       THEN 'll = rl AND lh = rh'
-    WHEN 't_disjoint'     THEN 'NOT (ll <= rh AND lh >= rl)'
-    WHEN 't_intersects'   THEN 'll <= rh AND lh >= rl'
-    WHEN 'anyinteracts'   THEN 'll <= rh AND lh >= rl'
-END;
-outq := regexp_replace(outq, '\mll\M', ll);
-outq := regexp_replace(outq, '\mlh\M', lh);
-outq := regexp_replace(outq, '\mrl\M', rl);
-outq := regexp_replace(outq, '\mrh\M', rh);
-outq := format('(%s)', outq);
-RETURN outq;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION spatial_op_query(op text, args jsonb) RETURNS text AS $$
-DECLARE
-geom text;
-j jsonb := args->1;
-BEGIN
-op := lower(op);
-RAISE NOTICE 'Constructing spatial query OP: %, ARGS: %', op, args;
-IF op NOT IN ('s_equals','s_disjoint','s_touches','s_within','s_overlaps','s_crosses','s_intersects','intersects','s_contains') THEN
-    RAISE EXCEPTION 'Spatial Operator % Not Supported', op;
-END IF;
-op := regexp_replace(op, '^s_', 'st_');
-IF op = 'intersects' THEN
-    op := 'st_intersects';
-END IF;
--- Convert geometry to WKB string
-IF j ? 'type' AND j ? 'coordinates' THEN
-    geom := st_geomfromgeojson(j)::text;
-ELSIF jsonb_typeof(j) = 'array' THEN
-    geom := bbox_geom(j)::text;
-END IF;
-
-RETURN format('%s(geometry, %L::geometry)', op, geom);
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-/* cql_query_op -- Parses a CQL query operation, recursing when necessary
-     IN jsonb -- a subelement from a valid stac query
-     IN text -- the operator being used on elements passed in
-     RETURNS a SQL fragment to be used in a WHERE clause
-*/
-CREATE OR REPLACE FUNCTION cql_query_op(j jsonb, _op text DEFAULT NULL) RETURNS text AS $$
-DECLARE
-jtype text := jsonb_typeof(j);
-op text := lower(_op);
-ops jsonb :=
-    '{
-        "eq": "%s = %s",
-        "lt": "%s < %s",
-        "lte": "%s <= %s",
-        "gt": "%s > %s",
-        "gte": "%s >= %s",
-        "le": "%s <= %s",
-        "ge": "%s >= %s",
-        "=": "%s = %s",
-        "<": "%s < %s",
-        "<=": "%s <= %s",
-        ">": "%s > %s",
-        ">=": "%s >= %s",
-        "like": "%s LIKE %s",
-        "ilike": "%s ILIKE %s",
-        "+": "%s + %s",
-        "-": "%s - %s",
-        "*": "%s * %s",
-        "/": "%s / %s",
-        "in": "%s = ANY (%s)",
-        "not": "NOT (%s)",
-        "between": "%s BETWEEN %s AND %s",
-        "lower":" lower(%s)",
-        "upper":" upper(%s)",
-        "isnull": "%s IS NULL"
-    }'::jsonb;
-ret text;
-args text[] := NULL;
-
-BEGIN
-RAISE NOTICE 'j: %, op: %, jtype: %', j, op, jtype;
-
--- for in, convert value, list to array syntax to match other ops
-IF op = 'in'  and j ? 'value' and j ? 'list' THEN
-    j := jsonb_build_array( j->'value', j->'list');
-    jtype := 'array';
-    RAISE NOTICE 'IN: j: %, jtype: %', j, jtype;
-END IF;
-
-IF op = 'between' and j ? 'value' and j ? 'lower' and j ? 'upper' THEN
-    j := jsonb_build_array( j->'value', j->'lower', j->'upper');
-    jtype := 'array';
-    RAISE NOTICE 'BETWEEN: j: %, jtype: %', j, jtype;
-END IF;
-
-IF op = 'not' AND jtype = 'object' THEN
-    j := jsonb_build_array( j );
-    jtype := 'array';
-    RAISE NOTICE 'NOT: j: %, jtype: %', j, jtype;
-END IF;
-
--- Set Lower Case on Both Arguments When Case Insensitive Flag Set
-IF op in ('eq','lt','lte','gt','gte','like') AND jsonb_typeof(j->2) = 'boolean' THEN
-    IF (j->>2)::boolean THEN
-        RETURN format(concat('(',ops->>op,')'), cql_query_op(jsonb_build_array(j->0), 'lower'), cql_query_op(jsonb_build_array(j->1), 'lower'));
-    END IF;
-END IF;
-
--- Special Case when comparing a property in a jsonb field to a string or number using eq
--- Allows to leverage GIN index on jsonb fields
-IF op = 'eq' THEN
-    IF j->0 ? 'property'
-        AND jsonb_typeof(j->1) IN ('number','string')
-        AND (items_path(j->0->>'property')).eq IS NOT NULL
-    THEN
-        RETURN format((items_path(j->0->>'property')).eq, j->1);
-    END IF;
-END IF;
-
-
-
-IF op ilike 't_%' or op = 'anyinteracts' THEN
-    RETURN temporal_op_query(op, j);
-END IF;
-
-IF op ilike 's_%' or op = 'intersects' THEN
-    RETURN spatial_op_query(op, j);
-END IF;
-
-
-IF jtype = 'object' THEN
-    RAISE NOTICE 'parsing object';
-    IF j ? 'property' THEN
-        -- Convert the property to be used as an identifier
-        return (items_path(j->>'property')).path_txt;
-    ELSIF _op IS NULL THEN
-        -- Iterate to convert elements in an object where the operator has not been set
-        -- Combining with AND
-        SELECT
-            array_to_string(array_agg(cql_query_op(e.value, e.key)), ' AND ')
-        INTO ret
-        FROM jsonb_each(j) e;
-        RETURN ret;
-    END IF;
-END IF;
-
-IF jtype = 'string' THEN
-    RETURN quote_literal(j->>0);
-END IF;
-
-IF jtype ='number' THEN
-    RETURN (j->>0)::numeric;
-END IF;
-
-IF jtype = 'array' AND op IS NULL THEN
-    RAISE NOTICE 'Parsing array into array arg. j: %', j;
-    SELECT format($f$ '{%s}'::text[] $f$, string_agg(e,',')) INTO ret FROM jsonb_array_elements_text(j) e;
-    RETURN ret;
-END IF;
-
-
--- If the type of the passed json is an array
--- Calculate the arguments that will be passed to functions/operators
-IF jtype = 'array' THEN
-    RAISE NOTICE 'Parsing array into args. j: %', j;
-    -- If any argument is numeric, cast any text arguments to numeric
-    IF j @? '$[*] ? (@.type() == "number")' THEN
-        SELECT INTO args
-            array_agg(concat('(',cql_query_op(e),')::numeric'))
-        FROM jsonb_array_elements(j) e;
-    ELSE
-        SELECT INTO args
-            array_agg(cql_query_op(e))
-        FROM jsonb_array_elements(j) e;
-    END IF;
-    --RETURN args;
-END IF;
-RAISE NOTICE 'ARGS after array cleaning: %', args;
-
-IF op IS NULL THEN
-    RETURN args::text[];
-END IF;
-
-IF args IS NULL OR cardinality(args) < 1 THEN
-    RAISE NOTICE 'No Args';
-    RETURN '';
-END IF;
-
-IF op IN ('and','or') THEN
-    SELECT
-        CONCAT(
-            '(',
-            array_to_string(args, UPPER(CONCAT(' ',op,' '))),
-            ')'
-        ) INTO ret
-        FROM jsonb_array_elements(j) e;
-        RETURN ret;
-END IF;
-
--- If the op is in the ops json then run using the template in the json
-IF ops ? op THEN
-    RAISE NOTICE 'ARGS: % MAPPED: %',args, array_map_literal(args);
-
-    RETURN format(concat('(',ops->>op,')'), VARIADIC args);
-END IF;
-
-RETURN j->>0;
 
 END;
-$$ LANGUAGE PLPGSQL;
-
-
-/* cql_query_op -- Parses a CQL query operation, recursing when necessary
-     IN jsonb -- a subelement from a valid stac query
-     IN text -- the operator being used on elements passed in
-     RETURNS a SQL fragment to be used in a WHERE clause
-*/
-DROP FUNCTION IF EXISTS cql2_query;
-CREATE OR REPLACE FUNCTION cql2_query(j jsonb, recursion int DEFAULT 0) RETURNS text AS $$
-DECLARE
-args jsonb := j->'args';
-jtype text := jsonb_typeof(j->'args');
-op text := lower(j->>'op');
-arg jsonb;
-argtext text;
-argstext text[] := '{}'::text[];
-inobj jsonb;
-_numeric text := '';
-ops jsonb :=
-    '{
-        "eq": "%s = %s",
-        "lt": "%s < %s",
-        "lte": "%s <= %s",
-        "gt": "%s > %s",
-        "gte": "%s >= %s",
-        "le": "%s <= %s",
-        "ge": "%s >= %s",
-        "=": "%s = %s",
-        "<": "%s < %s",
-        "<=": "%s <= %s",
-        ">": "%s > %s",
-        ">=": "%s >= %s",
-        "like": "%s LIKE %s",
-        "ilike": "%s ILIKE %s",
-        "+": "%s + %s",
-        "-": "%s - %s",
-        "*": "%s * %s",
-        "/": "%s / %s",
-        "in": "%s = ANY (%s)",
-        "not": "NOT (%s)",
-        "between": "%s BETWEEN (%2$s)[1] AND (%2$s)[2]",
-        "lower":" lower(%s)",
-        "upper":" upper(%s)",
-        "isnull": "%s IS NULL"
-    }'::jsonb;
-ret text;
-
-BEGIN
-RAISE NOTICE 'j: %s', j;
-IF j ? 'filter' THEN
-    RETURN cql2_query(j->'filter');
-END IF;
-
-IF j ? 'upper' THEN
-RAISE NOTICE 'upper %s',jsonb_build_object(
-            'op', 'upper',
-            'args', jsonb_build_array( j-> 'upper')
-        ) ;
-    RETURN cql2_query(
-        jsonb_build_object(
-            'op', 'upper',
-            'args', jsonb_build_array( j-> 'upper')
-        )
-    );
-END IF;
-
-IF j ? 'lower' THEN
-    RETURN cql2_query(
-        jsonb_build_object(
-            'op', 'lower',
-            'args', jsonb_build_array( j-> 'lower')
-        )
-    );
-END IF;
-
-IF j ? 'args' AND jsonb_typeof(args) != 'array' THEN
-    args := jsonb_build_array(args);
-END IF;
--- END Cases where no further nesting is expected
-IF j ? 'op' THEN
-    -- Special case to use JSONB index for equality
-    IF op IN ('eq', '=')
-        AND args->0 ? 'property'
-        AND jsonb_typeof(args->1) IN ('number', 'string')
-        AND (items_path(args->0->>'property')).eq IS NOT NULL
-    THEN
-        RETURN format((items_path(args->0->>'property')).eq, args->1);
-    END IF;
-
-    -- Temporal Query
-    IF op ilike 't_%' or op = 'anyinteracts' THEN
-        RETURN temporal_op_query(op, args);
-    END IF;
-
-    -- Spatial Query
-    IF op ilike 's_%' or op = 'intersects' THEN
-        RETURN spatial_op_query(op, args);
-    END IF;
-
-    -- In Query - separate into separate eq statements so that we can use eq jsonb optimization
-    IF op = 'in' THEN
-        RAISE NOTICE '% IN args: %', repeat('     ', recursion), args;
-        SELECT INTO inobj
-            jsonb_agg(
-                jsonb_build_object(
-                    'op', 'eq',
-                    'args', jsonb_build_array( args->0 , v)
-                )
-            )
-        FROM jsonb_array_elements( args->1) v;
-        RETURN cql2_query(jsonb_build_object('op','or','args',inobj));
-    END IF;
-END IF;
-
-IF j ? 'property' THEN
-    RETURN (items_path(j->>'property')).path_txt;
-END IF;
-
-IF j ? 'timestamp' THEN
-    RETURN quote_literal(j->>'timestamp');
-END IF;
-
-RAISE NOTICE '%jtype: %',repeat('     ', recursion), jtype;
-IF jsonb_typeof(j) = 'number' THEN
-    RETURN format('%L::numeric', j->>0);
-END IF;
-
-IF jsonb_typeof(j) = 'string' THEN
-    RETURN quote_literal(j->>0);
-END IF;
-
-IF jsonb_typeof(j) = 'array' THEN
-    IF j @? '$[*] ? (@.type() == "number")' THEN
-        RETURN CONCAT(quote_literal(textarr(j)::text), '::numeric[]');
-    ELSE
-        RETURN CONCAT(quote_literal(textarr(j)::text), '::text[]');
-    END IF;
-END IF;
-RAISE NOTICE 'ARGS after array cleaning: %', args;
-
-RAISE NOTICE '%beforeargs op: %, args: %',repeat('     ', recursion), op, args;
-IF j ? 'args' THEN
-    FOR arg in SELECT * FROM jsonb_array_elements(args) LOOP
-        argtext := cql2_query(arg, recursion + 1);
-        RAISE NOTICE '%     -- arg: %, argtext: %', repeat('     ', recursion), arg, argtext;
-        argstext := argstext || argtext;
-    END LOOP;
-END IF;
-RAISE NOTICE '%afterargs op: %, argstext: %',repeat('     ', recursion), op, argstext;
-
-
-IF op IN ('and', 'or') THEN
-    RAISE NOTICE 'inand op: %, argstext: %', op, argstext;
-    SELECT
-        concat(' ( ',array_to_string(array_agg(e), concat(' ',op,' ')),' ) ')
-        INTO ret
-        FROM unnest(argstext) e;
-        RETURN ret;
-END IF;
-
-IF ops ? op THEN
-    IF argstext[2] ~* 'numeric' THEN
-        argstext := ARRAY[concat('(',argstext[1],')::numeric')] || argstext[2:3];
-    END IF;
-    RETURN format(concat('(',ops->>op,')'), VARIADIC argstext);
-END IF;
-
-RAISE NOTICE '%op: %, argstext: %',repeat('     ', recursion), op, argstext;
-
-RETURN NULL;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-
-CREATE OR REPLACE FUNCTION cql_to_where(_search jsonb = '{}'::jsonb) RETURNS text AS $$
-DECLARE
-filterlang text;
-search jsonb := _search;
-base_where text;
-_where text;
-BEGIN
-
-RAISE NOTICE 'SEARCH CQL Final: %', search;
-filterlang := COALESCE(
-    search->>'filter-lang',
-    get_setting('default-filter-lang', _search->'conf')
-);
-
-base_where := base_stac_query(search);
-
-IF filterlang = 'cql-json' THEN
-    search := query_to_cqlfilter(search);
-    -- search := add_filters_to_cql(search);
-    _where := cql_query_op(search->'filter');
-ELSE
-    _where := cql2_query(search->'filter');
-END IF;
-
-IF trim(_where) = '' THEN
-    _where := NULL;
-END IF;
-_where := coalesce(_where, ' TRUE ');
-RETURN format('( %s ) %s ', _where, base_where);
-END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL STABLE;
 
 
 CREATE OR REPLACE FUNCTION parse_sort_dir(_dir text, reverse boolean default false) RETURNS text AS $$
-WITH t AS (
-    SELECT COALESCE(upper(_dir), 'ASC') as d
-) SELECT
-    CASE
-        WHEN NOT reverse THEN d
-        WHEN d = 'ASC' THEN 'DESC'
-        WHEN d = 'DESC' THEN 'ASC'
-    END
-FROM t;
+    WITH t AS (
+        SELECT COALESCE(upper(_dir), 'ASC') as d
+    ) SELECT
+        CASE
+            WHEN NOT reverse THEN d
+            WHEN d = 'ASC' THEN 'DESC'
+            WHEN d = 'DESC' THEN 'ASC'
+        END
+    FROM t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION sort_dir_to_op(_dir text, prev boolean default false) RETURNS text AS $$
-WITH t AS (
-    SELECT COALESCE(upper(_dir), 'ASC') as d
-) SELECT
-    CASE
-        WHEN d = 'ASC' AND prev THEN '<='
-        WHEN d = 'DESC' AND prev THEN '>='
-        WHEN d = 'ASC' THEN '>='
-        WHEN d = 'DESC' THEN '<='
-    END
-FROM t;
+    WITH t AS (
+        SELECT COALESCE(upper(_dir), 'ASC') as d
+    ) SELECT
+        CASE
+            WHEN d = 'ASC' AND prev THEN '<='
+            WHEN d = 'DESC' AND prev THEN '>='
+            WHEN d = 'ASC' THEN '>='
+            WHEN d = 'DESC' THEN '<='
+        END
+    FROM t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION field_orderby(p text) RETURNS text AS $$
-WITH t AS (
-    SELECT
-        replace(trim(substring(indexdef from 'btree \((.*)\)')),' ','')as s
-    FROM pg_indexes WHERE schemaname='pgstac' AND tablename='items' AND indexdef ~* 'btree' AND indexdef ~* 'properties'
-) SELECT s FROM t WHERE strpos(s, lower(trim(p)))>0;
-$$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION sort_sqlorderby(
     _search jsonb DEFAULT NULL,
     reverse boolean DEFAULT FALSE
 ) RETURNS text AS $$
-WITH sortby AS (
-    SELECT coalesce(_search->'sortby','[{"field":"datetime", "direction":"desc"}]') as sort
-), withid AS (
-    SELECT CASE
-        WHEN sort @? '$[*] ? (@.field == "id")' THEN sort
-        ELSE sort || '[{"field":"id", "direction":"desc"}]'::jsonb
-        END as sort
-    FROM sortby
-), withid_rows AS (
-    SELECT jsonb_array_elements(sort) as value FROM withid
-),sorts AS (
-    SELECT
-        coalesce(field_orderby((items_path(value->>'field')).path_txt), (items_path(value->>'field')).path) as key,
-        parse_sort_dir(value->>'direction', reverse) as dir
-    FROM withid_rows
-)
-SELECT array_to_string(
-    array_agg(concat(key, ' ', dir)),
-    ', '
-) FROM sorts;
+    WITH sortby AS (
+        SELECT coalesce(_search->'sortby','[{"field":"datetime", "direction":"desc"}]') as sort
+    ), withid AS (
+        SELECT CASE
+            WHEN sort @? '$[*] ? (@.field == "id")' THEN sort
+            ELSE sort || '[{"field":"id", "direction":"desc"}]'::jsonb
+            END as sort
+        FROM sortby
+    ), withid_rows AS (
+        SELECT jsonb_array_elements(sort) as value FROM withid
+    ),sorts AS (
+        SELECT
+            coalesce(
+                -- field_orderby((items_path(value->>'field')).path_txt),
+                (queryable(value->>'field')).expression
+            ) as key,
+            parse_sort_dir(value->>'direction', reverse) as dir
+        FROM withid_rows
+    )
+    SELECT array_to_string(
+        array_agg(concat(key, ' ', dir)),
+        ', '
+    ) FROM sorts;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION get_sort_dir(sort_item jsonb) RETURNS text AS $$
-SELECT CASE WHEN sort_item->>'direction' ILIKE 'desc%' THEN 'DESC' ELSE 'ASC' END;
+    SELECT CASE WHEN sort_item->>'direction' ILIKE 'desc%' THEN 'DESC' ELSE 'ASC' END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
@@ -802,6 +256,7 @@ DECLARE
     output text;
     token_where text;
 BEGIN
+    RAISE NOTICE 'Getting Token Filter. % %', _search, token_rec;
     -- If no token provided return NULL
     IF token_rec IS NULL THEN
         IF NOT (_search ? 'token' AND
@@ -815,9 +270,10 @@ BEGIN
         END IF;
         prev := (_search->>'token' ILIKE 'prev:%');
         token_id := substr(_search->>'token', 6);
-        SELECT to_jsonb(items) INTO token_rec FROM item_by_id(token_id) as items;
+        SELECT to_jsonb(items) INTO token_rec
+        FROM items WHERE id=token_id;
     END IF;
-    RAISE NOTICE 'TOKEN ID: %', token_rec->'id';
+    RAISE NOTICE 'TOKEN ID: % %', token_rec, token_rec->'id';
 
     CREATE TEMP TABLE sorts (
         _row int GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -829,7 +285,7 @@ BEGIN
     -- Make sure we only have distinct columns to sort with taking the first one we get
     INSERT INTO sorts (_field, _dir)
         SELECT
-            (items_path(value->>'field')).path,
+            (queryable(value->>'field')).expression,
             get_sort_dir(value)
         FROM
             jsonb_array_elements(coalesce(_search->'sortby','[{"field":"datetime","direction":"desc"}]'))
@@ -969,26 +425,26 @@ BEGIN
         ;
         RETURN sw;
     END IF;
-    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
-    t := clock_timestamp();
-    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
-    INTO explain_json;
-    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
-    WITH t AS (
-        SELECT j->>0 as p FROM
-            jsonb_path_query(
-                explain_json,
-                'strict $.**."Relation Name" ? (@ != null)'
-            ) j
-    ), ordered AS (
-        SELECT p FROM t ORDER BY p DESC
-        -- SELECT p FROM t JOIN items_partitions
-        --     ON (t.p = items_partitions.partition)
-        -- ORDER BY pstart DESC
-    )
-    SELECT array_agg(p) INTO partitions FROM ordered;
-    i := clock_timestamp() - t;
-    RAISE NOTICE 'Time for explain + join: %', clock_timestamp() - t;
+    -- -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
+    -- t := clock_timestamp();
+    -- EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+    -- INTO explain_json;
+    -- RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
+    -- WITH t AS (
+    --     SELECT j->>0 as p FROM
+    --         jsonb_path_query(
+    --             explain_json,
+    --             'strict $.**."Relation Name" ? (@ != null)'
+    --         ) j
+    -- ), ordered AS (
+    --     --SELECT p FROM t ORDER BY p DESC
+    --     SELECT p FROM t JOIN partitions
+    --         ON (t.p = items_partitions.name)
+    --     ORDER BY pstart DESC
+    -- )
+    -- SELECT array_agg(p) INTO partitions FROM ordered;
+    -- i := clock_timestamp() - t;
+    -- RAISE NOTICE 'Time for explain + join: %', clock_timestamp() - t;
 
 
 
@@ -1046,18 +502,6 @@ END;
 $$ LANGUAGE PLPGSQL ;
 
 
-CREATE OR REPLACE FUNCTION items_count(_where text) RETURNS bigint AS $$
-DECLARE
-cnt bigint;
-BEGIN
-EXECUTE format('SELECT count(*) FROM items WHERE %s', _where) INTO cnt;
-RETURN cnt;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-
-
 
 DROP FUNCTION IF EXISTS search_query;
 CREATE OR REPLACE FUNCTION search_query(
@@ -1071,40 +515,38 @@ DECLARE
     t timestamptz;
     i interval;
 BEGIN
-SELECT * INTO search FROM searches
-WHERE hash=search_hash(_search, _metadata) FOR UPDATE;
+    SELECT * INTO search FROM searches
+    WHERE hash=search_hash(_search, _metadata) FOR UPDATE;
 
--- Calculate the where clause if not already calculated
-IF search._where IS NULL THEN
-    search._where := cql_to_where(_search);
-END IF;
+    -- Calculate the where clause if not already calculated
+    IF search._where IS NULL THEN
+        search._where := stac_search_to_where(_search);
+    END IF;
 
--- Calculate the order by clause if not already calculated
-IF search.orderby IS NULL THEN
-    search.orderby := sort_sqlorderby(_search);
-END IF;
+    -- Calculate the order by clause if not already calculated
+    IF search.orderby IS NULL THEN
+        search.orderby := sort_sqlorderby(_search);
+    END IF;
 
-PERFORM where_stats(search._where, updatestats, _search->'conf');
+    PERFORM where_stats(search._where, updatestats, _search->'conf');
 
-search.lastused := now();
-search.usecount := coalesce(search.usecount, 0) + 1;
-INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
-VALUES (_search, search._where, search.orderby, search.lastused, search.usecount, _metadata)
-ON CONFLICT (hash) DO
-UPDATE SET
-    _where = EXCLUDED._where,
-    orderby = EXCLUDED.orderby,
-    lastused = EXCLUDED.lastused,
-    usecount = EXCLUDED.usecount,
-    metadata = EXCLUDED.metadata
-RETURNING * INTO search
-;
-RETURN search;
+    search.lastused := now();
+    search.usecount := coalesce(search.usecount, 0) + 1;
+    INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
+    VALUES (_search, search._where, search.orderby, search.lastused, search.usecount, _metadata)
+    ON CONFLICT (hash) DO
+    UPDATE SET
+        _where = EXCLUDED._where,
+        orderby = EXCLUDED.orderby,
+        lastused = EXCLUDED.lastused,
+        usecount = EXCLUDED.usecount,
+        metadata = EXCLUDED.metadata
+    RETURNING * INTO search
+    ;
+    RETURN search;
 
 END;
 $$ LANGUAGE PLPGSQL;
-
-
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
@@ -1119,8 +561,8 @@ DECLARE
     curs refcursor;
     cntr int := 0;
     iter_record items%ROWTYPE;
-    first_record items%ROWTYPE;
-    last_record items%ROWTYPE;
+    first_record jsonb;
+    last_record jsonb;
     out_records jsonb := '[]'::jsonb;
     prev_query text;
     next text;
@@ -1147,9 +589,17 @@ CREATE TEMP TABLE results (content jsonb) ON COMMIT DROP;
 -- skip any paging or caching
 -- hard codes ordering in the same order as the array of ids
 IF _search ? 'ids' THEN
-    FOR id IN SELECT jsonb_array_elements_text(_search->'ids') LOOP
-        INSERT INTO results (content) SELECT content FROM item_by_id(id) WHERE content IS NOT NULL;
-    END LOOP;
+    INSERT INTO results
+    SELECT content_hydrate(items, _search->'fields')
+    FROM items WHERE
+        items.id = ANY(to_text_array(_search->'ids'))
+        AND
+            CASE WHEN _search ? 'collections' THEN
+                items.collection = ANY(to_text_array(_search->'collections'))
+            ELSE TRUE
+            END
+    ORDER BY items.datetime desc, items.id desc
+    ;
     SELECT INTO total_count count(*) FROM results;
 ELSE
     searches := search_query(_search);
@@ -1157,8 +607,6 @@ ELSE
     orderby := searches.orderby;
     search_where := where_stats(_where);
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
-
-
 
     IF token_type='prev' THEN
         token_where := get_token_filter(_search, null::jsonb);
@@ -1172,9 +620,6 @@ ELSE
     RAISE NOTICE 'FULL QUERY % %', full_where, clock_timestamp()-timer;
     timer := clock_timestamp();
 
-
-
-
     FOR query IN SELECT partition_queries(full_where, orderby, search_where.partitions) LOOP
         timer := clock_timestamp();
         query := format('%s LIMIT %s', query, _limit + 1);
@@ -1186,14 +631,12 @@ ELSE
             FETCH curs into iter_record;
             EXIT WHEN NOT FOUND;
             cntr := cntr + 1;
-            last_record := iter_record;
+            last_record := content_hydrate(iter_record, _search->'fields');
             IF cntr = 1 THEN
                 first_record := last_record;
             END IF;
             IF cntr <= _limit THEN
-                INSERT INTO results (content) VALUES (last_record.content);
-                -- out_records := out_records || last_record.content;
-
+                INSERT INTO results (content) VALUES (last_record);
             ELSIF cntr > _limit THEN
                 has_next := true;
                 exit_flag := true;
@@ -1201,7 +644,7 @@ ELSE
             END IF;
         END LOOP;
         CLOSE curs;
-        RAISE NOTICE 'Query took %. Total Time %', clock_timestamp()-timer, ftime();
+        RAISE NOTICE 'Query took %.', clock_timestamp()-timer;
         timer := clock_timestamp();
         EXIT WHEN exit_flag;
     END LOOP;
@@ -1226,7 +669,7 @@ IF _search ? 'token' THEN
         concat_ws(
             ' AND ',
             _where,
-            trim(get_token_filter(_search, to_jsonb(first_record)))
+            trim(get_token_filter(_search, to_jsonb(content_dehydrate(first_record))))
         )
     );
     RAISE NOTICE 'Query to get previous record: % --- %', prev_query, first_record;
@@ -1244,21 +687,6 @@ IF has_prev THEN
 END IF;
 IF has_next OR token_type='prev' THEN
     next := out_records->-1->>'id';
-END IF;
-
-
--- include/exclude any fields following fields extension
-IF _search ? 'fields' THEN
-    IF _search->'fields' ? 'exclude' THEN
-        excludes=textarr(_search->'fields'->'exclude');
-    END IF;
-    IF _search->'fields' ? 'include' THEN
-        includes=textarr(_search->'fields'->'include');
-        IF array_length(includes, 1)>0 AND NOT 'id' = ANY (includes) THEN
-            includes = includes || '{id}';
-        END IF;
-    END IF;
-    SELECT jsonb_agg(filter_jsonb(row, includes, excludes)) INTO out_records FROM jsonb_array_elements(out_records) row;
 END IF;
 
 IF context(_search->'conf') != 'off' THEN
@@ -1284,6 +712,4 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL
-SET jit TO off
-;
+$$ LANGUAGE PLPGSQL SET jit TO off;

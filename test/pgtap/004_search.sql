@@ -6,13 +6,13 @@ DELETE FROM collections WHERE id = 'pgstac-test-collection';
 SET pgstac.context TO 'on';
 SET pgstac."default-filter-lang" TO 'cql-json';
 
-SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb','timestamptz']);
 
 
-SELECT results_eq($$ SELECT parse_dtrange('["2020-01-01","2021-01-01"]') $$, $$ SELECT '["2020-01-01 00:00:00+00","2021-01-01 00:00:00+00")'::tstzrange $$, 'daterange passed as array range');
+SELECT results_eq($$ SELECT parse_dtrange('["2020-01-01","2021-01-01"]'::jsonb) $$, $$ SELECT '["2020-01-01 00:00:00+00","2021-01-01 00:00:00+00")'::tstzrange $$, 'daterange passed as array range');
 
 
-SELECT results_eq($$ SELECT parse_dtrange('"2020-01-01/2021-01-01"') $$, $$ SELECT '["2020-01-01 00:00:00+00","2021-01-01 00:00:00+00")'::tstzrange $$, 'date range passed as string range');
+SELECT results_eq($$ SELECT parse_dtrange('"2020-01-01/2021-01-01"'::jsonb) $$, $$ SELECT '["2020-01-01 00:00:00+00","2021-01-01 00:00:00+00")'::tstzrange $$, 'date range passed as string range');
 
 
 SELECT has_function('pgstac'::name, 'bbox_geom', ARRAY['jsonb']);
@@ -24,69 +24,22 @@ SELECT results_eq($$ SELECT bbox_geom('[0,1,2,3]') $$, $$ SELECT 'SRID=4326;POLY
 SELECT results_eq($$ SELECT bbox_geom('[0,1,2,3,4,5]'::jsonb) $$, $$ SELECT '010F0000A0E610000006000000010300008001000000050000000000000000000000000000000000F03F00000000000000400000000000000000000000000000104000000000000000400000000000000840000000000000104000000000000000400000000000000840000000000000F03F00000000000000400000000000000000000000000000F03F0000000000000040010300008001000000050000000000000000000000000000000000F03F00000000000014400000000000000840000000000000F03F00000000000014400000000000000840000000000000104000000000000014400000000000000000000000000000104000000000000014400000000000000000000000000000F03F0000000000001440010300008001000000050000000000000000000000000000000000F03F00000000000000400000000000000000000000000000F03F00000000000014400000000000000000000000000000104000000000000014400000000000000000000000000000104000000000000000400000000000000000000000000000F03F0000000000000040010300008001000000050000000000000000000840000000000000F03F00000000000000400000000000000840000000000000104000000000000000400000000000000840000000000000104000000000000014400000000000000840000000000000F03F00000000000014400000000000000840000000000000F03F0000000000000040010300008001000000050000000000000000000000000000000000F03F00000000000000400000000000000840000000000000F03F00000000000000400000000000000840000000000000F03F00000000000014400000000000000000000000000000F03F00000000000014400000000000000000000000000000F03F000000000000004001030000800100000005000000000000000000000000000000000010400000000000000040000000000000000000000000000010400000000000001440000000000000084000000000000010400000000000001440000000000000084000000000000010400000000000000040000000000000000000000000000010400000000000000040'::geometry $$, '3d bbox');
 
 
-SELECT has_function('pgstac'::name, 'add_filters_to_cql', ARRAY['jsonb']);
-
-SELECT results_eq($$
-    SELECT add_filters_to_cql('{"ids":["a","b"]}'::jsonb);
-    $$,$$
-    SELECT '{"filter":{"and": [{"in": [{"property": "id"}, ["a", "b"]]}]}}'::jsonb;
-    $$,
-    'Test that id gets added to cql filter when cql filter does not exist'
-);
-
-SELECT results_eq($$
-    SELECT add_filters_to_cql('{"ids":["a","b"],"filter":{"and":[{"eq":[1,1]}]}}'::jsonb);
-    $$,$$
-    SELECT '{"filter":{"and": [{"and": [{"eq": [1, 1]}]}, {"and": [{"in": [{"property": "id"}, ["a", "b"]]}]}]}}'::jsonb;
-    $$,
-    'Test that id gets added to cql filter when cql filter does exist'
-);
-
-SELECT results_eq($$
-    SELECT add_filters_to_cql('{"collections":["a","b"]}'::jsonb);
-    $$,$$
-    SELECT '{"filter":{"and": [{"in": [{"property": "collection"}, ["a", "b"]]}]}}'::jsonb;
-    $$,
-    'Test that collections gets added to cql filter when cql filter does not exist'
-);
-
-SELECT results_eq($$
-    SELECT add_filters_to_cql('{"collection":["a","b"]}'::jsonb);
-    $$,$$
-    SELECT '{"collection": ["a", "b"]}'::jsonb;
-    $$,
-    'Test that collection are not added to cql filter'
-);
-
-
-SELECT has_function('pgstac'::name, 'cql_and_append', ARRAY['jsonb','jsonb']);
-
-SELECT has_function('pgstac'::name, 'query_to_cqlfilter', ARRAY['jsonb']);
-
-SELECT results_eq($$
-    SELECT query_to_cqlfilter('{"query":{"a":{"gt":0,"lte":10},"b":"test"}}');
-    $$,$$
-    SELECT '{"filter":{"and": [{"gt": [{"property": "a"}, 0]}, {"lte": [{"property": "a"}, 10]}, {"eq": [{"property": "b"}, "test"]}]}}'::jsonb;
-    $$,
-    'Test that query_to_cqlfilter appropriately converts old style query items to cql filters'
-);
-
 
 SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean']);
 
 SELECT results_eq($$
-    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb);
+    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC,  properties->''eo:cloudcover''  ASC, id DESC';
+    SELECT 'datetime DESC, to_int(content->''properties''->''eo:cloud_cover'') ASC, id DESC';
     $$,
     'Test creation of sort sql'
 );
 
 
 SELECT results_eq($$
-    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloudcover","direction":"asc"}]}'::jsonb, true);
+    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC,  properties->''eo:cloudcover''  DESC, id ASC';
+    SELECT 'datetime ASC, to_int(content->''properties''->''eo:cloud_cover'') DESC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
@@ -168,7 +121,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     select s from search('{"ids":["pgstac-test-item-0097","pgstac-test-item-0003"],"fields":{"include":["id"]}}') s;
     $$,$$
-    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0097"},{"id": "pgstac-test-item-0003"}]}'::jsonb
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0003"},{"id": "pgstac-test-item-0097"}]}'::jsonb
     $$,
     'Test ids search multi'
 );
@@ -227,7 +180,7 @@ SELECT results_eq($$
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql_to_where($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "intersects":
                 {
@@ -242,7 +195,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (  TRUE  )  AND st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340')
+    st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340')
     $r$,E' \n');
     $$, 'Make sure that intersects returns valid query'
 );
@@ -263,7 +216,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     select s from search('{"ids":["pgstac-test-item-0097","pgstac-test-item-0003"],"fields":{"include":["id"]}}') s;
     $$,$$
-    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0097"},{"id": "pgstac-test-item-0003"}]}'::jsonb
+    select '{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 2, "returned": 2}, "features": [{"id": "pgstac-test-item-0003"},{"id": "pgstac-test-item-0097"}]}'::jsonb
     $$,
     'Test ids search multi'
 );
@@ -294,7 +247,7 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter": {
                 "op" : "and",
@@ -313,14 +266,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( (id = 'LC08_L1TP_060247_20180905_20180912_01_T1_L1TP') and (collection_id = 'landsat8_l1tp') )
+    (id = 'LC08_L1TP_060247_20180905_20180912_01_T1_L1TP' AND collection = 'landsat8_l1tp')
     $r$,E' \n');
     $$, 'Test Example 1'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -370,14 +323,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( (collection_id = 'landsat8_l1tp') and ( properties->>'eo:cloud_cover'  <= '10') and (datetime >= '2021-04-08T04:39:23Z') and st_intersects(geometry, '0103000020E6100000010000000B000000894160E5D0CA4540ED9E3C2CD4E253C0849ECDAACFCD4540B37BF2B050DF53C038F8C264AAC8454076E09C11A5DD53C0F5DBD78173CE454085EB51B81ED953C08126C286A7CF4540789CA223B9D453C0C0EC9E3C2CD4454063EE5A423ED453C004560E2DB2E5454001DE02098AC753C063EE5A423EE84540C442AD69DEC953C02FDD240681ED454034A2B437F8CA53C08048BF7D1DE0454037894160E5E853C0894160E5D0CA4540ED9E3C2CD4E253C0'::geometry) )
+    (collection = 'landsat8_l1tp' AND to_int(content->'properties'->'eo:cloud_cover') <= to_int('"10"') AND datetime >= '2021-04-08 04:39:23+00'::timestamptz AND st_intersects(geometry, '0103000020E6100000010000000B000000894160E5D0CA4540ED9E3C2CD4E253C0849ECDAACFCD4540B37BF2B050DF53C038F8C264AAC8454076E09C11A5DD53C0F5DBD78173CE454085EB51B81ED953C08126C286A7CF4540789CA223B9D453C0C0EC9E3C2CD4454063EE5A423ED453C004560E2DB2E5454001DE02098AC753C063EE5A423EE84540C442AD69DEC953C02FDD240681ED454034A2B437F8CA53C08048BF7D1DE0454037894160E5E853C0894160E5D0CA4540ED9E3C2CD4E253C0'::geometry))
     $r$,E' \n');
     $$, 'Test Example 2'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -397,7 +350,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( (( properties->>'sentinel:data_coverage' )::numeric > '50'::numeric) and (( properties->>'eo:cloud_cover' )::numeric < '10'::numeric) )
+    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('50') AND to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
     $r$,E' \n');
     $$, 'Test Example 3'
 );
@@ -405,7 +358,7 @@ SELECT results_eq($$
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -425,7 +378,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( (( properties->>'sentinel:data_coverage' )::numeric > '50'::numeric) or (( properties->>'eo:cloud_cover' )::numeric < '10'::numeric) )
+    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('50') OR to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
     $r$,E' \n');
     $$, 'Test Example 4'
 );
@@ -433,7 +386,7 @@ SELECT results_eq($$
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -447,14 +400,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( properties->>'prop1'  =  properties->>'prop2' )
+    to_text(content->'properties'->'prop1') = to_text(content->'properties'->'prop2')
     $r$,E' \n');
     $$, 'Test Example 5'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
        {
             "filter-lang": "cql2-json",
             "filter": {
@@ -476,7 +429,7 @@ SELECT results_eq($$
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -505,7 +458,7 @@ SELECT results_eq($$
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter": {
                 "op": "or" ,
@@ -544,14 +497,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340'::geometry) or st_intersects(geometry, '0103000020E61000000100000005000000448B6CE7FBC553C014D044D8F064434060E5D022DBC153C014D044D8F064434060E5D022DBC153C0DE718A8EE46A4340448B6CE7FBC553C0DE718A8EE46A4340448B6CE7FBC553C014D044D8F0644340'::geometry) )
+    (st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340'::geometry) OR st_intersects(geometry, '0103000020E61000000100000005000000448B6CE7FBC553C014D044D8F064434060E5D022DBC153C014D044D8F064434060E5D022DBC153C0DE718A8EE46A4340448B6CE7FBC553C0DE718A8EE46A4340448B6CE7FBC553C014D044D8F0644340'::geometry))
     $r$,E' \n');
     $$, 'Test Example 8'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
         {
             "filter-lang": "cql2-json",
             "filter": {
@@ -584,14 +537,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( (( properties->>'sentinel:data_coverage' )::numeric >= '50'::numeric) or (( properties->>'landsat:coverage_percent' )::numeric >= '50'::numeric) or  ( ( properties->>'sentinel:data_coverage'  IS NULL) and ( properties->>'landsat:coverage_percent'  IS NULL) )  )
+    (to_text(content->'properties'->'sentinel:data_coverage') >= to_text('50') OR to_text(content->'properties'->'landsat:coverage_percent') >= to_text('50') OR (to_text(content->'properties'->'sentinel:data_coverage') IS NULL AND to_text(content->'properties'->'landsat:coverage_percent') IS NULL))
     $r$,E' \n');
     $$, 'Test Example 9'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
     {
         "filter-lang": "cql2-json",
         "filter": {
@@ -605,14 +558,14 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (( properties->>'eo:cloud_cover' )::numeric BETWEEN ('{0,50}'::numeric[])[1] AND ('{0,50}'::numeric[])[2])
+    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') and to_int('50')
     $r$,E' \n');
     $$, 'Test Example 10'
 );
 
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
     {
         "filter-lang": "cql2-json",
         "filter": {
@@ -626,47 +579,47 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    ( properties->>'mission'  LIKE 'sentinel%')
+    to_text(content->'properties'->'mission') LIKE to_text('"sentinel%"')
     $r$,E' \n');
     $$, 'Test Example 11'
 );
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
     {
         "filter-lang": "cql2-json",
         "filter": {
             "op": "eq",
             "args": [
             {"upper": { "property": "mission" }},
-            "sentinel"
+            {"upper": "sentinel"}
             ]
         }
     }
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (( upper( properties->>'mission' )) = 'sentinel')
+    upper(to_text(content->'properties'->'mission')) = upper('sentinel')
     $r$,E' \n');
     $$, 'Test upper'
 );
 
 SELECT results_eq($$
-    SELECT BTRIM(cql2_query($q$
+    SELECT BTRIM(stac_search_to_where($q$
     {
         "filter-lang": "cql2-json",
         "filter": {
             "op": "eq",
             "args": [
             {"lower": { "property": "mission" }},
-            "sentinel"
+            {"lower": "sentinel"}
             ]
         }
     }
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (( lower( properties->>'mission' )) = 'sentinel')
+    lower(to_text(content->'properties'->'mission')) = lower('sentinel')
     $r$,E' \n');
     $$, 'Test lower'
 );

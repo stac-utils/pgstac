@@ -2,16 +2,12 @@
 CREATE OR REPLACE FUNCTION stac_geom(value jsonb) RETURNS geometry AS $$
 SELECT
     CASE
-            WHEN value->>'geometry' IS NOT NULL THEN
+            WHEN value ? 'intersects' THEN
+                ST_GeomFromGeoJSON(value->>'intersects')
+            WHEN value ? 'geometry' THEN
                 ST_GeomFromGeoJSON(value->>'geometry')
-            WHEN value->>'bbox' IS NOT NULL THEN
-                ST_MakeEnvelope(
-                    (value->'bbox'->>0)::float,
-                    (value->'bbox'->>1)::float,
-                    (value->'bbox'->>2)::float,
-                    (value->'bbox'->>3)::float,
-                    4326
-                )
+            WHEN value ? 'bbox' THEN
+                bbox_geom(value->'bbox')
             ELSE NULL
         END as geometry
 ;
@@ -33,5 +29,21 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 
 CREATE OR REPLACE FUNCTION stac_daterange(value jsonb) RETURNS tstzrange AS $$
-SELECT tstzrange(stac_datetime(value),stac_end_datetime(value));
+    SELECT tstzrange(stac_datetime(value),stac_end_datetime(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+
+
+CREATE TABLE stac_extensions(
+    name text PRIMARY KEY,
+    url text,
+    enbabled_by_default boolean NOT NULL DEFAULT TRUE,
+    enableable boolean NOT NULL DEFAULT TRUE
+);
+
+INSERT INTO stac_extensions (name, url) VALUES
+    ('fields', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#fields'),
+    ('sort','https://api.stacspec.org/v1.0.0-beta.5/item-search#sort'),
+    ('context','https://api.stacspec.org/v1.0.0-beta.5/item-search#context'),
+    ('filter', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#filter'),
+    ('query', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#query')
+ON CONFLICT (name) DO UPDATE SET url=EXCLUDED.url;
