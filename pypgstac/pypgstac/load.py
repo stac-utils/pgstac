@@ -1,6 +1,7 @@
 """Utilities to bulk load data into pgstac from json/ndjson."""
 from enum import Enum
-from typing import Any, AsyncGenerator, Dict, Iterable, Optional, TypeVar
+import json
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, TypeVar
 
 import asyncpg
 import orjson
@@ -244,3 +245,24 @@ async def load_ndjson(
     with open_file as f:
         async with DB(dsn) as conn:
             await load_iterator(f, table, conn, method)
+
+
+async def bulk_delete_ids(ids: List, conn: asyncpg.Connection) -> None:
+    """Delete all items with IDs present in iterator."""
+    async with conn.transaction():
+        await conn.execute(
+            """
+            DELETE FROM items WHERE id = ANY($1::varchar[])
+            """,
+            ids,
+        )
+
+
+async def delete_ndjson(file: str, dsn: str = None) -> None:
+    typer.echo(f"deleting items matching IDs in {file}")
+    open_file: Any = open(file, "rb")
+
+    with open_file as f:
+        async with DB(dsn) as conn:
+            ids = [json.loads(s)["id"] for s in f.readlines()]
+            await bulk_delete_ids(ids, conn)

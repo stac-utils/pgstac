@@ -78,6 +78,7 @@ Options:
 Commands:
   initversion  Get initial version.
   load         Load STAC data into a pgstac database.
+  deleteitems  Bulk delete items from the pgstac database.
   migrate      Migrate a pgstac database.
   pgready      Wait for a pgstac database to accept connections.
   version      Get version from a pgstac database.
@@ -126,6 +127,12 @@ pypgstac load items --method insert_ignore
 To upsert any records, adding anything new and replacing anything with the same id
 ```
 pypgstac load items --method upsert
+```
+
+Currently, upsert will fail if the `datetime` of an existing record is updated. To work around this issue, you can bulk delete items prior to loading them
+
+```
+pypgstac deleteitems
 ```
 
 ## Contribution & Development

@@ -7,7 +7,8 @@ import asyncpg
 import typer
 
 from .migrate import run_migration, get_version_dsn, get_initial_version
-from .load import loadopt, tables, load_ndjson
+from .load import delete_ndjson, loadopt, tables, load_ndjson
+
 
 app = typer.Typer()
 
@@ -41,6 +42,12 @@ def load(
 ) -> None:
     """Load STAC data into a pgstac database."""
     typer.echo(asyncio.run(load_ndjson(file=file, table=table, dsn=dsn, method=method)))
+
+
+@app.command()
+def deleteitems(file: str, dsn: str = None) -> None:
+    """Bulk delete STAC Items matching IDs in an NDJSON file."""
+    typer.echo(asyncio.run(delete_ndjson(file=file, dsn=dsn)))
 
 
 @app.command()
