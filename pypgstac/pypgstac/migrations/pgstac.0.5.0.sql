@@ -514,7 +514,9 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
+        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name)
+        ON CONFLICT DO NOTHING;
+
         RETURN NEW;
     ELSIF partition_empty THEN
         q := format($q$
@@ -536,7 +538,8 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
+        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name)
+        ON CONFLICT DO NOTHING;
         RETURN NEW;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
@@ -1060,6 +1063,9 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('not', 'NOT (%s)', NULL),
     ('between', '%s BETWEEN (%2$s)[1] AND (%2$s)[2]', NULL),
     ('isnull', '%s IS NULL', NULL)
+ON CONFLICT (op) DO UPDATE
+    SET
+        template = EXCLUDED.template;
 ;
 
 
@@ -1405,18 +1411,22 @@ CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
-
-
-
 CREATE UNLOGGED TABLE items_staging (
+    id text,
+    geometry geometry,
+    collection text,
+    datetime timestamptz,
+    end_datetime timestamptz,
     content JSONB NOT NULL
 );
 CREATE UNLOGGED TABLE items_staging_ignore (
-    content JSONB NOT NULL
+    LIKE items_staging
 );
 CREATE UNLOGGED TABLE items_staging_upsert (
-    content JSONB NOT NULL
+    LIKE items_staging
 );
+
+
 
 CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
@@ -1424,44 +1434,49 @@ DECLARE
     _partitions text[];
     ts timestamptz := clock_timestamp();
 BEGIN
-    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
-    WITH p AS (
+    IF EXISTS (SELECT 1 FROM newdata WHERE id IS NULL LIMIT 1) THEN
+        RAISE NOTICE 'Constructing row from content.';
+        CREATE TEMP TABLE items_data AS
+        SELECT (content_dehydrate(content)).* FROM newdata;
+    ELSE
+        RAISE NOTICE 'Directly using newdata';
+        CREATE TEMP table items_data AS SELECT * FROM newdata;
+
+    END IF;
+    CREATE TEMP VIEW items_pdata AS
         SELECT
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            (partition_name(content->>'collection', date_trunc('month', stac_datetime(content)))).partition_name as name
-        FROM newdata n
-    )
+            collection,
+            datetime,
+            end_datetime,
+            (partition_name(collection, date_trunc('month', datetime))).partition_name as name
+        FROM items_data n;
+
+    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
     INSERT INTO partitions (collection, datetime_range, end_datetime_range)
         SELECT
             collection,
             tstzrange(min(datetime), max(datetime)) as datetime_range,
             tstzrange(min(end_datetime), max(end_datetime)) as end_datetime_range
-        FROM p
+        FROM items_pdata
             GROUP BY collection, name
-        ON CONFLICT (name) DO UPDATE SET
-            datetime_range = EXCLUDED.datetime_range,
-            end_datetime_range = EXCLUDED.end_datetime_range
+    ON CONFLICT (name) DO UPDATE SET
+        datetime_range = EXCLUDED.datetime_range,
+        end_datetime_range = EXCLUDED.end_datetime_range
     ;
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
         INSERT INTO items
-        SELECT
-            (content_dehydrate(content)).*
-        FROM newdata;
+        SELECT * FROM items_data;
         DELETE FROM items_staging;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
-        SELECT
-            (content_dehydrate(content)).*
-        FROM newdata
+        SELECT * FROM items_data
         ON CONFLICT DO NOTHING;
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
-            SELECT (content_dehydrate(content)).* FROM newdata
+            SELECT * FROM items_data
         ), deletes AS (
             DELETE FROM items i USING staging_formatted s
                 WHERE
@@ -1478,6 +1493,9 @@ BEGIN
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+
+    DROP VIEW IF EXISTS items_pdata;
+    DROP TABLE IF EXISTS items_data;
 
     RETURN NULL;
 

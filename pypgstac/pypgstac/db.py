@@ -4,27 +4,35 @@ from typing import Dict, List, Optional, Union
 import orjson
 import psycopg
 from psycopg import Connection, sql
+from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
 import atexit
 import os
 import logging
 import sys
+from pydantic import BaseSettings
 
+
+set_json_dumps(orjson.dumps)
+set_json_loads(orjson.loads)
 
 def pg_notice_handler(notice):
     msg = f"{notice.severity} - {notice.message_primary}"
     logging.info(msg)
 
 
-@dataclass
-class settings:
-    db_min_conn_size = 0
-    db_max_conn_size = 1
-    db_max_queries = 5
-    db_max_idle = 5
-    db_num_workers = 1
-    db_retries = 3
+class Settings(BaseSettings):
+    db_min_conn_size: int = 0
+    db_max_conn_size: int = 1
+    db_max_queries: int = 5
+    db_max_idle: int = 5
+    db_num_workers: int = 1
+    db_retries: int = 3
 
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
 
 class PgstacDB:
     def __init__(
@@ -33,7 +41,7 @@ class PgstacDB:
         pool: Optional[ConnectionPool] = None,
         connection: Optional[Connection] = None,
         commit_on_exit: bool = True,
-        debug: bool = True,
+        debug: bool = False,
     ):
         self.dsn = dsn
         self.pool = pool
@@ -41,6 +49,8 @@ class PgstacDB:
         self.commit_on_exit = commit_on_exit
         self.initial_version = "0.1.9"
         self.debug = debug
+        if self.debug:
+            logging.basicConfig(level=logging.DEBUG)
 
     def get_pool(self):
         if self.pool is None:
@@ -90,7 +100,7 @@ class PgstacDB:
         raise psycopg.errors.CannotConnectNow
 
     def disconnect(self):
-        logging.debug('Disconnecting from pool.')
+        logging.debug("Disconnecting from pool.")
         pool = self.get_pool()
         if self.connection is not None:
             if self.commit_on_exit:
@@ -119,11 +129,13 @@ class PgstacDB:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(query, prepare=False)
-                logging.debug(f"""
+                logging.debug(
+                    f"""
                     {cursor.statusmessage},
                     {cursor.rowcount},
                     {cursor._query}
-                """)
+                """
+                )
         except psycopg.errors.OperationalError as e:
             # If we get an operational error check the pool and retry
             logging.warning(f"OPERATIONAL ERROR: {e}")
@@ -146,6 +158,7 @@ class PgstacDB:
             with self.connection.cursor(row_factory=row_factory) as cursor:
                 rows = cursor.execute(query, args)
                 for row in rows:
+                    logging.debug(row)
                     yield row
         except psycopg.errors.OperationalError as e:
             # If we get an operational error check the pool and retry
@@ -153,14 +166,14 @@ class PgstacDB:
             self.pool.check()
             for row in self.query(query, args, row_factory, attempt + 1, e):
                 yield row
-        # finally:
-        #     if not self._is_context_manager:
-        #         self.disconnect()
 
     def query_one(self, *args, **kwargs) -> Dict:
         """Return results from a query that returns a single row.
         If the result is a single column, only return the value of that column."""
-        r = next(self.query(*args, **kwargs))
+        try:
+            r = next(self.query(*args, **kwargs))
+        except StopIteration:
+            return None
         if r is None:
             return None
         if len(r) == 1:
@@ -194,16 +207,15 @@ class PgstacDB:
             raise Exception("PGStac requires PostgreSQL 13+")
         return version
 
-
     def func(self, function_name: str, *args):
-        placeholders = sql.SQL(', ').join(sql.Placeholder() * len(args))
+        placeholders = sql.SQL(", ").join(sql.Placeholder() * len(args))
         func = sql.Identifier(function_name)
-        base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
+        base_query = sql.SQL("SELECT * FROM {}({});").format(
+            func, placeholders
+        )
         return self.query(base_query, args)
 
-
-
-    def search(self, query: Union[dict, str, None] = '{}'):
+    def search(self, query: Union[dict, str, None] = "{}"):
         if isinstance(query, dict):
             query = psycopg.types.json.Jsonb(query)
         return next(self.func("search", query))[0]

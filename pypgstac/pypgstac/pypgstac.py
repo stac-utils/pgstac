@@ -1,13 +1,11 @@
 """Command utilities for managing pgstac."""
-# import asyncio
-# import time
+
 from typing import Optional
 
-# import asyncpg
-# import typer
 import fire
-from .db import PgstacDB
-from .migrate import Migrate
+from pypgstac.db import PgstacDB
+from pypgstac.migrate import Migrate
+from pypgstac.load import Loader
 import logging
 
 
@@ -15,7 +13,6 @@ class PgstacCLI:
     def __init__(self, dsn: Optional[str] = "", debug: bool = False):
         self.dsn = dsn
         self._db = PgstacDB(dsn=dsn, debug=debug)
-        self.initial_version = "0.1.9"
         if debug:
             logging.basicConfig(level=logging.DEBUG)
 
@@ -39,6 +36,22 @@ class PgstacCLI:
     def migrate(self, toversion: Optional[str] = None):
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)
+
+    def load_collections(self, file: str, insert_mode: str = 'insert'):
+        loader = Loader(db=self._db)
+        return loader.load_collections(file, insert_mode)
+
+    def load_items(self, file: str, insert_mode: str = 'insert'):
+        loader = Loader(db=self._db)
+        return loader.load_items(file, insert_mode)
+
+    def collection_base_item(self, collection: str):
+        loader = Loader(db=self._db)
+        return loader.collection_json(collection)
+
+    def ndjson_to_pgcopy(self, file: Optional[str] = '-', outfile: Optional[str] = '-', minimizeproj: bool = False):
+        loader = Loader(db=self._db, minimizeproj=minimizeproj)
+        return loader.ndjson_to_pgcopy(file, outfile)
 
 
 def cli():
