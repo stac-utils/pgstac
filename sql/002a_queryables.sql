@@ -81,3 +81,34 @@ BEGIN
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
+
+CREATE OR REPLACE FUNCTION create_queryable_indexes() RETURNS VOID AS $$
+DECLARE
+    queryable RECORD;
+    q text;
+BEGIN
+    FOR queryable IN
+        SELECT
+            queryables.id as qid,
+            CASE WHEN collections.key IS NULL THEN 'items' ELSE format('_items_%s',collections.key) END AS part,
+            property_index_type,
+            expression
+            FROM
+            queryables
+            LEFT JOIN collections ON (collections.id = ANY (queryables.collection_ids))
+            JOIN LATERAL queryable(queryables.name) ON (queryables.property_index_type IS NOT NULL)
+        LOOP
+        q := format(
+            $q$
+                CREATE INDEX IF NOT EXISTS %I ON %I USING %s ((%s));
+            $q$,
+            format('%s_%s_idx', queryable.part, queryable.qid),
+            queryable.part,
+            COALESCE(queryable.property_index_type, 'to_text'),
+            queryable.expression
+            );
+        RAISE NOTICE '%',q;
+        EXECUTE q;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;

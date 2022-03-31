@@ -2,8 +2,6 @@ SELECT has_table('pgstac'::name, 'items'::name);
 
 
 SELECT is_indexed('pgstac'::name, 'items'::name, 'geometry');
-SELECT is_indexed('pgstac'::name, 'items'::name, 'datetime');
-SELECT is_indexed('pgstac'::name, 'items'::name, 'end_datetime');
 
 SELECT is_partitioned('pgstac'::name,'items'::name);
 

@@ -51,7 +51,7 @@ DECLARE
     partition_empty boolean := true;
     err_context text;
 BEGIN
-    RAISE NOTICE 'Collection Trigger. % % %', NEW.id, NEW.key, NEW.content;
+    RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
     SELECT relid::text INTO partition_name
     FROM pg_partition_tree('items')
     WHERE relid::text = partition_name;
@@ -65,7 +65,7 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_empty THEN
         q := format($q$
-            DROP TABLE IF EXISTS %I;
+            DROP TABLE IF EXISTS %I CASCADE;
             $q$,
             partition_name
         );
@@ -99,6 +99,7 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
         INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
         RETURN NEW;
     ELSIF partition_empty THEN
@@ -121,7 +122,7 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
         RETURN NEW;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
@@ -174,12 +175,13 @@ BEGIN
     ELSE
         partition_name := parent_name;
         partition_range := tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
-        RETURN;
     END IF;
-    partition_range := tstzrange(
-        date_trunc(c.partition_trunc::text, dt),
-        date_trunc(c.partition_trunc::text, dt) + concat('1 ', c.partition_trunc)::interval
-    );
+    IF partition_range IS NULL THEN
+        partition_range := tstzrange(
+            date_trunc(c.partition_trunc::text, dt),
+            date_trunc(c.partition_trunc::text, dt) + concat('1 ', c.partition_trunc)::interval
+        );
+    END IF;
     RETURN;
 
 END;
@@ -192,25 +194,46 @@ DECLARE
     q text;
     cq text;
     parent_name text;
-    partition_name text;
+    partition_name text := NEW.name;
     partition_exists boolean := false;
     partition_empty boolean := true;
     partition_range tstzrange;
     datetime_range tstzrange;
     end_datetime_range tstzrange;
     err_context text;
+    mindt timestamptz := lower(NEW.datetime_range);
+    maxdt timestamptz := upper(NEW.datetime_range);
+    minedt timestamptz := lower(NEW.end_datetime_range);
+    maxedt timestamptz := upper(NEW.end_datetime_range);
+    t_mindt timestamptz;
+    t_maxdt timestamptz;
+    t_minedt timestamptz;
+    t_maxedt timestamptz;
 BEGIN
+    RAISE NOTICE 'Partitions Trigger. %', NEW;
+
     datetime_range := NEW.datetime_range;
     end_datetime_range := NEW.end_datetime_range;
+
     SELECT format('_items_%s', key) INTO parent_name FROM collections WHERE collections.id = NEW.collection;
-
-    SELECT (partition_name(NEW.collection, lower(datetime_range))).* INTO partition_name, partition_range;
+    SELECT (partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
     NEW.name := partition_name;
-    NEW.partition_range := partition_range;
 
-    IF TG_OP = 'UPDATE' AND upper(NEW.end_datetime_range) <= upper(OLD.end_datetime_range) THEN
-        RETURN NEW;
-    ELSIF TG_OP = 'INSERT' THEN
+    IF partition_range IS NULL OR partition_range = 'empty'::tstzrange THEN
+        partition_range :=  tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
+    END IF;
+
+    NEW.partition_range := partition_range;
+    IF TG_OP = 'UPDATE' THEN
+        mindt := least(mindt, lower(OLD.datetime_range));
+        maxdt := greatest(maxdt, upper(OLD.datetime_range));
+        minedt := least(mindt, lower(OLD.end_datetime_range));
+        maxedt := greatest(maxdt, upper(OLD.end_datetime_range));
+        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
+        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
 
         IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
 
@@ -241,23 +264,69 @@ BEGIN
 
     END IF;
 
-    -- Update constraints if needed
-    IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
+    -- Update constraints
+    EXECUTE format($q$
+        SELECT
+            min(datetime),
+            max(datetime),
+            min(end_datetime),
+            max(end_datetime)
+        FROM %I;
+        $q$, partition_name)
+    INTO t_mindt, t_maxdt, t_minedt, t_maxedt;
+    mindt := least(mindt, t_mindt);
+    maxdt := greatest(maxdt, t_maxdt);
+    minedt := least(minedt, t_minedt);
+    maxedt := greatest(maxedt, t_maxedt);
+
+    IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
+        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
+        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
+
         cq := format($q$
-            ALTER TABLE %I
-                DROP CONSTRAINT IF EXISTS %I,
-                ADD CONSTRAINT %I
-                CHECK ((end_datetime >= %L) AND (end_datetime <= %L)) NOT VALID;
-            ALTER TABLE %I
-                VALIDATE CONSTRAINT %I;
+            ALTER TABLE %7$I
+                DROP CONSTRAINT IF EXISTS %1$I,
+                DROP CONSTRAINT IF EXISTS %2$I,
+                ADD CONSTRAINT %1$I
+                    CHECK ((datetime >= %3$L) AND (datetime <= %4$L)) NOT VALID,
+                ADD CONSTRAINT %2$I
+                    CHECK ((end_datetime >= %5$L) AND (end_datetime <= %6$L)) NOT VALID
+            ;
+            ALTER TABLE %7$I
+                VALIDATE CONSTRAINT %1$I;
+            ALTER TABLE %7$I
+                VALIDATE CONSTRAINT %2$I;
             $q$,
-            partition_name,
+            format('%s_dt', partition_name),
             format('%s_edt', partition_name),
+            date_trunc('month', mindt),
+            date_trunc('month', maxdt) + '1 month'::interval,
+            date_trunc('month', minedt),
+            date_trunc('month', maxedt) + '1 month'::interval,
+            partition_name
+        );
+        EXECUTE cq;
+    ELSE
+        NEW.datetime_range = NULL;
+        NEW.end_datetime_range = NULL;
+
+        cq := format($q$
+            ALTER TABLE %3$I
+                DROP CONSTRAINT IF EXISTS %1$I,
+                DROP CONSTRAINT IF EXISTS %2$I,
+                ADD CONSTRAINT %1$I
+                    CHECK ((datetime IS NULL)) NOT VALID,
+                ADD CONSTRAINT %2$I
+                    CHECK ((end_datetime IS NULL)) NOT VALID
+            ;
+            ALTER TABLE %3$I
+                VALIDATE CONSTRAINT %1$I;
+            ALTER TABLE %3$I
+                VALIDATE CONSTRAINT %2$I;
+            $q$,
+            format('%s_dt', partition_name),
             format('%s_edt', partition_name),
-            lower(partition_range),
-            greatest(upper(partition_range), upper(end_datetime_range)),
-            partition_name,
-            format('%s_edt', partition_name)
+            partition_name
         );
         EXECUTE cq;
     END IF;
@@ -269,6 +338,7 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER partitions_trigger BEFORE INSERT OR UPDATE ON partitions FOR EACH ROW
 EXECUTE FUNCTION partitions_trigger_func();
+
 
 /*
 ---------------------------

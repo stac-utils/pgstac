@@ -107,6 +107,35 @@ RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
+CREATE OR REPLACE FUNCTION partition_query_view(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _limit int DEFAULT 10
+) RETURNS text AS $$
+    WITH p AS (
+        SELECT * FROM partition_queries(_where, _orderby) p
+    )
+    SELECT
+        CASE WHEN EXISTS (SELECT 1 FROM p) THEN
+            (SELECT format($q$
+                SELECT * FROM (
+                    %s
+                ) total LIMIT %s
+                $q$,
+                string_agg(
+                    format($q$ SELECT * FROM ( %s ) AS sub $q$, p),
+                    '
+                    UNION ALL
+                    '
+                ),
+                _limit
+            ))
+        ELSE NULL
+        END FROM p;
+$$ LANGUAGE SQL IMMUTABLE;
+
+
+
 
 CREATE OR REPLACE FUNCTION stac_search_to_where(j jsonb) RETURNS text AS $$
 DECLARE
@@ -681,7 +710,6 @@ IF _search ? 'token' THEN
 END IF;
 has_prev := COALESCE(has_prev, FALSE);
 
-RAISE NOTICE 'token_type: %, has_next: %, has_prev: %', token_type, has_next, has_prev;
 IF has_prev THEN
     prev := out_records->0->>'id';
 END IF;
@@ -712,4 +740,4 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SET jit TO off;
+$$ LANGUAGE PLPGSQL;

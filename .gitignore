@@ -4,3 +4,4 @@ pypgstac/dist
 *.egg-info
 *.eggs
 venv
+.direnv

@@ -385,6 +385,17 @@ test = ["boto3", "google-cloud-storage", "azure-storage-blob", "azure-common", "
 webhdfs = ["requests"]
 
 [[package]]
+name = "tenacity"
+version = "8.0.1"
+description = "Retry code until it succeeds"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[package.extras]
+doc = ["reno", "sphinx", "tornado (>=4.5)"]
+
+[[package]]
 name = "termcolor"
 version = "1.1.0"
 description = "ANSII Color formatting for output in terminal."
@@ -480,7 +491,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytes
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7"
-content-hash = "fdd6c8c7898d117f93a4b7a216362ad77fff64978f9d405bb4d9c3ac589d1112"
+content-hash = "5d1964687df158780dbe3f11b49c4f9cf01c6e146f65281e6bc47691fc23e4f7"
 
 [metadata.files]
 atomicwrites = [
@@ -715,6 +726,10 @@ six = [
 ]
 smart-open = [
     {file = "smart_open-4.2.0.tar.gz", hash = "sha256:d9f5a0f173ccb9bbae528db5a3804f57145815774f77ef755b9b0f3b4b2a9dcb"},
+]
+tenacity = [
+    {file = "tenacity-8.0.1-py3-none-any.whl", hash = "sha256:f78f4ea81b0fabc06728c11dc2a8c01277bfc5181b321a4770471902e3eb844a"},
+    {file = "tenacity-8.0.1.tar.gz", hash = "sha256:43242a20e3e73291a28bcbcacfd6e000b02d3857a9a9fff56b297a27afdc932f"},
 ]
 termcolor = [
     {file = "termcolor-1.1.0.tar.gz", hash = "sha256:1d6d69ce66211143803fbc56652b41d73b4a400a2891d7bf7a1cdf4c02de613b"},

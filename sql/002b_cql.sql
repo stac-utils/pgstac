@@ -179,7 +179,7 @@ DECLARE
     args jsonb;
     ret jsonb;
 BEGIN
-    RAISE NOTICE '%',j;
+    RAISE NOTICE 'CQL1_TO_CQL2: %', j;
     IF j ? 'filter' THEN
         RETURN cql1_to_cql2(j->'filter');
     END IF;
@@ -197,11 +197,16 @@ BEGIN
         RETURN j;
     END IF;
 
-    SELECT jsonb_build_object(
-            'op', key,
-            'args', cql1_to_cql2(value)
-        ) INTO ret FROM jsonb_each(j);
-    RETURN ret;
+    IF jsonb_typeof(j) = 'object' THEN
+        SELECT jsonb_build_object(
+                'op', key,
+                'args', cql1_to_cql2(value)
+            ) INTO ret
+        FROM jsonb_each(j)
+        WHERE j IS NOT NULL;
+        RETURN ret;
+    END IF;
+    RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT;
 
@@ -248,7 +253,7 @@ DECLARE
     cql2op RECORD;
     literal text;
 BEGIN
-    IF j IS NULL THEN
+    IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'CQL2_QUERY: %', j;

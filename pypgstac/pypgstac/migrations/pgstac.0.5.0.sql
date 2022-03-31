@@ -466,7 +466,7 @@ DECLARE
     partition_empty boolean := true;
     err_context text;
 BEGIN
-    RAISE NOTICE 'Collection Trigger. % % %', NEW.id, NEW.key, NEW.content;
+    RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
     SELECT relid::text INTO partition_name
     FROM pg_partition_tree('items')
     WHERE relid::text = partition_name;
@@ -480,7 +480,7 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_empty THEN
         q := format($q$
-            DROP TABLE IF EXISTS %I;
+            DROP TABLE IF EXISTS %I CASCADE;
             $q$,
             partition_name
         );
@@ -514,9 +514,8 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name)
-        ON CONFLICT DO NOTHING;
-
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
         RETURN NEW;
     ELSIF partition_empty THEN
         q := format($q$
@@ -538,8 +537,7 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name)
-        ON CONFLICT DO NOTHING;
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
         RETURN NEW;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
@@ -592,12 +590,13 @@ BEGIN
     ELSE
         partition_name := parent_name;
         partition_range := tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
-        RETURN;
     END IF;
-    partition_range := tstzrange(
-        date_trunc(c.partition_trunc::text, dt),
-        date_trunc(c.partition_trunc::text, dt) + concat('1 ', c.partition_trunc)::interval
-    );
+    IF partition_range IS NULL THEN
+        partition_range := tstzrange(
+            date_trunc(c.partition_trunc::text, dt),
+            date_trunc(c.partition_trunc::text, dt) + concat('1 ', c.partition_trunc)::interval
+        );
+    END IF;
     RETURN;
 
 END;
@@ -610,25 +609,46 @@ DECLARE
     q text;
     cq text;
     parent_name text;
-    partition_name text;
+    partition_name text := NEW.name;
     partition_exists boolean := false;
     partition_empty boolean := true;
     partition_range tstzrange;
     datetime_range tstzrange;
     end_datetime_range tstzrange;
     err_context text;
+    mindt timestamptz := lower(NEW.datetime_range);
+    maxdt timestamptz := upper(NEW.datetime_range);
+    minedt timestamptz := lower(NEW.end_datetime_range);
+    maxedt timestamptz := upper(NEW.end_datetime_range);
+    t_mindt timestamptz;
+    t_maxdt timestamptz;
+    t_minedt timestamptz;
+    t_maxedt timestamptz;
 BEGIN
+    RAISE NOTICE 'Partitions Trigger. %', NEW;
+
     datetime_range := NEW.datetime_range;
     end_datetime_range := NEW.end_datetime_range;
+
     SELECT format('_items_%s', key) INTO parent_name FROM collections WHERE collections.id = NEW.collection;
-
-    SELECT (partition_name(NEW.collection, lower(datetime_range))).* INTO partition_name, partition_range;
+    SELECT (partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
     NEW.name := partition_name;
-    NEW.partition_range := partition_range;
 
-    IF TG_OP = 'UPDATE' AND upper(NEW.end_datetime_range) <= upper(OLD.end_datetime_range) THEN
-        RETURN NEW;
-    ELSIF TG_OP = 'INSERT' THEN
+    IF partition_range IS NULL OR partition_range = 'empty'::tstzrange THEN
+        partition_range :=  tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
+    END IF;
+
+    NEW.partition_range := partition_range;
+    IF TG_OP = 'UPDATE' THEN
+        mindt := least(mindt, lower(OLD.datetime_range));
+        maxdt := greatest(maxdt, upper(OLD.datetime_range));
+        minedt := least(mindt, lower(OLD.end_datetime_range));
+        maxedt := greatest(maxdt, upper(OLD.end_datetime_range));
+        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
+        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
 
         IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
 
@@ -659,23 +679,69 @@ BEGIN
 
     END IF;
 
-    -- Update constraints if needed
-    IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
+    -- Update constraints
+    EXECUTE format($q$
+        SELECT
+            min(datetime),
+            max(datetime),
+            min(end_datetime),
+            max(end_datetime)
+        FROM %I;
+        $q$, partition_name)
+    INTO t_mindt, t_maxdt, t_minedt, t_maxedt;
+    mindt := least(mindt, t_mindt);
+    maxdt := greatest(maxdt, t_maxdt);
+    minedt := least(minedt, t_minedt);
+    maxedt := greatest(maxedt, t_maxedt);
+
+    IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
+        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
+        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
+
         cq := format($q$
-            ALTER TABLE %I
-                DROP CONSTRAINT IF EXISTS %I,
-                ADD CONSTRAINT %I
-                CHECK ((end_datetime >= %L) AND (end_datetime <= %L)) NOT VALID;
-            ALTER TABLE %I
-                VALIDATE CONSTRAINT %I;
+            ALTER TABLE %7$I
+                DROP CONSTRAINT IF EXISTS %1$I,
+                DROP CONSTRAINT IF EXISTS %2$I,
+                ADD CONSTRAINT %1$I
+                    CHECK ((datetime >= %3$L) AND (datetime <= %4$L)) NOT VALID,
+                ADD CONSTRAINT %2$I
+                    CHECK ((end_datetime >= %5$L) AND (end_datetime <= %6$L)) NOT VALID
+            ;
+            ALTER TABLE %7$I
+                VALIDATE CONSTRAINT %1$I;
+            ALTER TABLE %7$I
+                VALIDATE CONSTRAINT %2$I;
             $q$,
-            partition_name,
+            format('%s_dt', partition_name),
             format('%s_edt', partition_name),
+            date_trunc('month', mindt),
+            date_trunc('month', maxdt) + '1 month'::interval,
+            date_trunc('month', minedt),
+            date_trunc('month', maxedt) + '1 month'::interval,
+            partition_name
+        );
+        EXECUTE cq;
+    ELSE
+        NEW.datetime_range = NULL;
+        NEW.end_datetime_range = NULL;
+
+        cq := format($q$
+            ALTER TABLE %3$I
+                DROP CONSTRAINT IF EXISTS %1$I,
+                DROP CONSTRAINT IF EXISTS %2$I,
+                ADD CONSTRAINT %1$I
+                    CHECK ((datetime IS NULL)) NOT VALID,
+                ADD CONSTRAINT %2$I
+                    CHECK ((end_datetime IS NULL)) NOT VALID
+            ;
+            ALTER TABLE %3$I
+                VALIDATE CONSTRAINT %1$I;
+            ALTER TABLE %3$I
+                VALIDATE CONSTRAINT %2$I;
+            $q$,
+            format('%s_dt', partition_name),
             format('%s_edt', partition_name),
-            lower(partition_range),
-            greatest(upper(partition_range), upper(end_datetime_range)),
-            partition_name,
-            format('%s_edt', partition_name)
+            partition_name
         );
         EXECUTE cq;
     END IF;
@@ -687,6 +753,7 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER partitions_trigger BEFORE INSERT OR UPDATE ON partitions FOR EACH ROW
 EXECUTE FUNCTION partitions_trigger_func();
+
 
 /*
 ---------------------------
@@ -828,6 +895,37 @@ BEGIN
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
+
+CREATE OR REPLACE FUNCTION create_queryable_indexes() RETURNS VOID AS $$
+DECLARE
+    queryable RECORD;
+    q text;
+BEGIN
+    FOR queryable IN
+        SELECT
+            queryables.id as qid,
+            CASE WHEN collections.key IS NULL THEN 'items' ELSE format('_items_%s',collections.key) END AS part,
+            property_index_type,
+            expression
+            FROM
+            queryables
+            LEFT JOIN collections ON (collections.id = ANY (queryables.collection_ids))
+            JOIN LATERAL queryable(queryables.name) ON (queryables.property_index_type IS NOT NULL)
+        LOOP
+        q := format(
+            $q$
+                CREATE INDEX IF NOT EXISTS %I ON %I USING %s ((%s));
+            $q$,
+            format('%s_%s_idx', queryable.part, queryable.qid),
+            queryable.part,
+            COALESCE(queryable.property_index_type, 'to_text'),
+            queryable.expression
+            );
+        RAISE NOTICE '%',q;
+        EXECUTE q;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
 CREATE OR REPLACE FUNCTION parse_dtrange(
     _indate jsonb,
     relative_base timestamptz DEFAULT date_trunc('hour', CURRENT_TIMESTAMP)
@@ -1009,7 +1107,7 @@ DECLARE
     args jsonb;
     ret jsonb;
 BEGIN
-    RAISE NOTICE '%',j;
+    RAISE NOTICE 'CQL1_TO_CQL2: %', j;
     IF j ? 'filter' THEN
         RETURN cql1_to_cql2(j->'filter');
     END IF;
@@ -1027,11 +1125,16 @@ BEGIN
         RETURN j;
     END IF;
 
-    SELECT jsonb_build_object(
-            'op', key,
-            'args', cql1_to_cql2(value)
-        ) INTO ret FROM jsonb_each(j);
-    RETURN ret;
+    IF jsonb_typeof(j) = 'object' THEN
+        SELECT jsonb_build_object(
+                'op', key,
+                'args', cql1_to_cql2(value)
+            ) INTO ret
+        FROM jsonb_each(j)
+        WHERE j IS NOT NULL;
+        RETURN ret;
+    END IF;
+    RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT;
 
@@ -1078,7 +1181,7 @@ DECLARE
     cql2op RECORD;
     literal text;
 BEGIN
-    IF j IS NULL THEN
+    IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'CQL2_QUERY: %', j;
@@ -1285,10 +1388,8 @@ CREATE TABLE items (
 PARTITION BY LIST (collection)
 ;
 
-CREATE INDEX "datetime_idx" ON items USING BRIN (datetime);
-CREATE INDEX "end_datetime_idx" ON items USING BRIN (end_datetime);
+CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
-CREATE INDEX "collectionx" ON items (collection);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
@@ -1365,7 +1466,7 @@ BEGIN
     END IF;
     RETURN;
 END;
-$$ LANGUAGE PLPGSQL IMMUTABLE;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item jsonb,
@@ -1376,6 +1477,9 @@ CREATE OR REPLACE FUNCTION content_hydrate(
         jsonb_strip_nulls(jsonb_object_agg(
             key,
             CASE
+                WHEN
+                    c.value IS NULL AND key != 'properties'
+                THEN i.value
                 WHEN
                     jsonb_typeof(c.value) = 'object'
                     OR
@@ -1396,37 +1500,80 @@ CREATE OR REPLACE FUNCTION content_hydrate(
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT
-        content_hydrate(
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+    geom jsonb;
+    bbox jsonb;
+    output jsonb;
+    content jsonb;
+    base_item jsonb := collection_base_item(_item.collection);
+BEGIN
+    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
+        geom := ST_ASGeoJson(_item.geometry)::json;
+    END IF;
+
+    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
+        geom := geom_bbox(_item.geometry)::json;
+    END IF;
+
+    output := content_hydrate(
             jsonb_build_object(
-                'id', id,
-                'geometry', ST_ASGeoJson(geometry),
-                'bbox', geom_bbox(geometry),
-                'collection', collection
-            ) || content,
-            collection_base_item(collection),
+                'id', _item.id,
+                'geometry', geom,
+                'bbox',bbox,
+                'collection', _item.collection
+            ) || _item.content,
+            collection_base_item(_item.collection),
             fields
-        )
-    FROM (SELECT (_item).* ) as i;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+        );
+
+    RETURN output;
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+    geom jsonb;
+    bbox jsonb;
+    output jsonb;
+    content jsonb;
+BEGIN
+    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
+        geom := ST_ASGeoJson(_item.geometry)::json;
+    END IF;
+
+    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
+        geom := geom_bbox(_item.geometry)::json;
+    END IF;
+
+    output := content_hydrate(
+            jsonb_build_object(
+                'id', _item.id,
+                'geometry', geom,
+                'bbox',bbox,
+                'collection', _item.collection
+            ) || _item.content,
+            _collection.base_item,
+            fields
+        );
+
+    RETURN output;
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 
 CREATE UNLOGGED TABLE items_staging (
-    id text,
-    geometry geometry,
-    collection text,
-    datetime timestamptz,
-    end_datetime timestamptz,
     content JSONB NOT NULL
 );
 CREATE UNLOGGED TABLE items_staging_ignore (
-    LIKE items_staging
+    content JSONB NOT NULL
 );
 CREATE UNLOGGED TABLE items_staging_upsert (
-    LIKE items_staging
+    content JSONB NOT NULL
 );
-
-
 
 CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
@@ -1434,49 +1581,44 @@ DECLARE
     _partitions text[];
     ts timestamptz := clock_timestamp();
 BEGIN
-    IF EXISTS (SELECT 1 FROM newdata WHERE id IS NULL LIMIT 1) THEN
-        RAISE NOTICE 'Constructing row from content.';
-        CREATE TEMP TABLE items_data AS
-        SELECT (content_dehydrate(content)).* FROM newdata;
-    ELSE
-        RAISE NOTICE 'Directly using newdata';
-        CREATE TEMP table items_data AS SELECT * FROM newdata;
-
-    END IF;
-    CREATE TEMP VIEW items_pdata AS
-        SELECT
-            collection,
-            datetime,
-            end_datetime,
-            (partition_name(collection, date_trunc('month', datetime))).partition_name as name
-        FROM items_data n;
-
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+    WITH p AS (
+        SELECT
+            content->>'collection' as collection,
+            stac_datetime(content) as datetime,
+            stac_end_datetime(content) as end_datetime,
+            (partition_name(content->>'collection', date_trunc('month', stac_datetime(content)))).partition_name as name
+        FROM newdata n
+    )
     INSERT INTO partitions (collection, datetime_range, end_datetime_range)
         SELECT
             collection,
             tstzrange(min(datetime), max(datetime)) as datetime_range,
             tstzrange(min(end_datetime), max(end_datetime)) as end_datetime_range
-        FROM items_pdata
+        FROM p
             GROUP BY collection, name
-    ON CONFLICT (name) DO UPDATE SET
-        datetime_range = EXCLUDED.datetime_range,
-        end_datetime_range = EXCLUDED.end_datetime_range
+        ON CONFLICT (name) DO UPDATE SET
+            datetime_range = EXCLUDED.datetime_range,
+            end_datetime_range = EXCLUDED.end_datetime_range
     ;
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
         INSERT INTO items
-        SELECT * FROM items_data;
+        SELECT
+            (content_dehydrate(content)).*
+        FROM newdata;
         DELETE FROM items_staging;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
-        SELECT * FROM items_data
+        SELECT
+            (content_dehydrate(content)).*
+        FROM newdata
         ON CONFLICT DO NOTHING;
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
-            SELECT * FROM items_data
+            SELECT (content_dehydrate(content)).* FROM newdata
         ), deletes AS (
             DELETE FROM items i USING staging_formatted s
                 WHERE
@@ -1493,9 +1635,6 @@ BEGIN
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
-
-    DROP VIEW IF EXISTS items_pdata;
-    DROP TABLE IF EXISTS items_data;
 
     RETURN NULL;
 
@@ -1711,6 +1850,35 @@ END IF;
 RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION partition_query_view(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _limit int DEFAULT 10
+) RETURNS text AS $$
+    WITH p AS (
+        SELECT * FROM partition_queries(_where, _orderby) p
+    )
+    SELECT
+        CASE WHEN EXISTS (SELECT 1 FROM p) THEN
+            (SELECT format($q$
+                SELECT * FROM (
+                    %s
+                ) total LIMIT %s
+                $q$,
+                string_agg(
+                    format($q$ SELECT * FROM ( %s ) AS sub $q$, p),
+                    '
+                    UNION ALL
+                    '
+                ),
+                _limit
+            ))
+        ELSE NULL
+        END FROM p;
+$$ LANGUAGE SQL IMMUTABLE;
+
+
 
 
 CREATE OR REPLACE FUNCTION stac_search_to_where(j jsonb) RETURNS text AS $$
@@ -2286,7 +2454,6 @@ IF _search ? 'token' THEN
 END IF;
 has_prev := COALESCE(has_prev, FALSE);
 
-RAISE NOTICE 'token_type: %, has_next: %, has_prev: %', token_type, has_next, has_prev;
 IF has_prev THEN
     prev := out_records->0->>'id';
 END IF;
@@ -2317,7 +2484,7 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SET jit TO off;
+$$ LANGUAGE PLPGSQL;
 SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION tileenvelope(zoom int, x int, y int) RETURNS geometry AS $$

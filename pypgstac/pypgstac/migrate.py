@@ -3,7 +3,6 @@ import glob
 import os
 from collections import defaultdict
 from typing import Optional, Dict, List, Iterator, Any
-import psycopg
 from smart_open import open
 import logging
 
@@ -17,7 +16,7 @@ migrations_dir = os.path.join(dirname, "migrations")
 class MigrationPath:
     """Calculate path from migration files to get from one version to the next."""
 
-    def __init__(self, path: str, f: str, t: str):
+    def __init__(self, path: str, f: str, t: str) -> None:
         """Initialize MigrationPath."""
         self.path = path
         if f is None:
@@ -102,7 +101,10 @@ def get_sql(file: str) -> str:
 
 
 class Migrate:
-    def __init__(self, db: PgstacDB, schema: str = 'pgstac'):
+    """Utilities for migrating pgstac database."""
+
+    def __init__(self, db: PgstacDB, schema: str = "pgstac"):
+        """Prepare for migration."""
         print("migrate init")
         self.db = db
         self.schema = schema
@@ -120,12 +122,8 @@ class Migrate:
             logging.info(f"Target database already at version: {toversion}")
             return toversion
         if oldversion is None:
-            logging.info(
-                f"No pgstac version set, installing {toversion} from scratch."
-            )
-            files.append(
-                os.path.join(migrations_dir, f"pgstac.{toversion}.sql")
-            )
+            logging.info(f"No pgstac version set, installing {toversion} from scratch.")
+            files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
         else:
             logging.info(f"Migrating from {oldversion} to {toversion}.")
             m = MigrationPath(migrations_dir, oldversion, toversion)
@@ -134,15 +132,23 @@ class Migrate:
         if len(files) < 1:
             raise Exception("Could not find migration files")
 
+        conn = self.db.connect()
+
         for file in files:
             migration_sql = get_sql(file)
-            self.db.exec(migration_sql)
+            conn.execute(migration_sql)
+
+        logging.debug(f"Database migrated to {toversion}")
+
         newversion = self.db.version
-        if newversion == toversion:
-            self.db.connection.commit()
-        else:
-            self.db.connection.rollback()
-            raise Exception('Migration failed, database rolled back to previous state.')
+        if conn is not None:
+            if newversion == toversion:
+                conn.commit()
+            else:
+                conn.rollback()
+                raise Exception(
+                    "Migration failed, database rolled back to previous state."
+                )
 
         logging.debug(f"New Version: {newversion}")
 

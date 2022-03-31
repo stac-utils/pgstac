@@ -9,10 +9,8 @@ CREATE TABLE items (
 PARTITION BY LIST (collection)
 ;
 
-CREATE INDEX "datetime_idx" ON items USING BRIN (datetime);
-CREATE INDEX "end_datetime_idx" ON items USING BRIN (end_datetime);
+CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
-CREATE INDEX "collectionx" ON items (collection);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
@@ -89,7 +87,7 @@ BEGIN
     END IF;
     RETURN;
 END;
-$$ LANGUAGE PLPGSQL IMMUTABLE;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item jsonb,
@@ -100,6 +98,9 @@ CREATE OR REPLACE FUNCTION content_hydrate(
         jsonb_strip_nulls(jsonb_object_agg(
             key,
             CASE
+                WHEN
+                    c.value IS NULL AND key != 'properties'
+                THEN i.value
                 WHEN
                     jsonb_typeof(c.value) = 'object'
                     OR
@@ -120,22 +121,69 @@ CREATE OR REPLACE FUNCTION content_hydrate(
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT
-        content_hydrate(
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+    geom jsonb;
+    bbox jsonb;
+    output jsonb;
+    content jsonb;
+    base_item jsonb := collection_base_item(_item.collection);
+BEGIN
+    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
+        geom := ST_ASGeoJson(_item.geometry)::json;
+    END IF;
+
+    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
+        geom := geom_bbox(_item.geometry)::json;
+    END IF;
+
+    output := content_hydrate(
             jsonb_build_object(
-                'id', id,
-                'geometry', ST_ASGeoJson(geometry),
-                'bbox', geom_bbox(geometry),
-                'collection', collection
-            ) || content,
-            collection_base_item(collection),
+                'id', _item.id,
+                'geometry', geom,
+                'bbox',bbox,
+                'collection', _item.collection
+            ) || _item.content,
+            collection_base_item(_item.collection),
             fields
-        )
-    FROM (SELECT (_item).* ) as i;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+        );
 
+    RETURN output;
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+    geom jsonb;
+    bbox jsonb;
+    output jsonb;
+    content jsonb;
+BEGIN
+    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
+        geom := ST_ASGeoJson(_item.geometry)::json;
+    END IF;
 
+    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
+        geom := geom_bbox(_item.geometry)::json;
+    END IF;
+
+    output := content_hydrate(
+            jsonb_build_object(
+                'id', _item.id,
+                'geometry', geom,
+                'bbox',bbox,
+                'collection', _item.collection
+            ) || _item.content,
+            _collection.base_item,
+            fields
+        );
+
+    RETURN output;
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 
 CREATE UNLOGGED TABLE items_staging (
