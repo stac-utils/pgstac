@@ -50,7 +50,9 @@ class PgstacCLI:
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)
 
-    def load(self, table: Tables, file: str, method: Methods) -> None:
+    def load(
+        self, table: Tables, file: str, method: Optional[Methods] = Methods.insert
+    ) -> None:
         """Load collections or items into PGStac."""
         loader = Loader(db=self._db)
         if table == "collections":

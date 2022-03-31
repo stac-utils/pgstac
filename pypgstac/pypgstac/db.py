@@ -126,13 +126,20 @@ class PgstacDB:
 
     def disconnect(self) -> None:
         """Disconnect from database."""
-        pool = self.get_pool()
-        if self.connection is not None:
+        try:
             if self.commit_on_exit:
-                self.connection.commit()
-            pool.putconn(self.connection)
-            self.connection = None
-            self.pool = None
+                if self.connection is not None:
+                    self.connection.commit()
+        except:
+            pass
+        try:
+            if self.pool is not None and self.connection is not None:
+                self.pool.putconn(self.connection)
+        except:
+            pass
+
+        self.connection = None
+        self.pool = None
 
     def __enter__(self) -> Any:
         """Enter used for context."""

@@ -143,9 +143,7 @@ def read_json(file: str) -> Iterable:
                 yield orjson.loads(line)
         except JSONDecodeError:
             # If reading first line as json fails, try reading entire file
-            logging.info(
-                "First line could not be parsed as json, trying full file."
-            )
+            logging.info("First line could not be parsed as json, trying full file.")
             try:
                 f.seek(0)
                 json = orjson.loads(f.read())
@@ -186,7 +184,7 @@ class Loader:
     def load_collections(
         self,
         file: Optional[str] = "stdin",
-        insert_mode: Methods = Methods.insert,
+        insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
         if file is None:
@@ -196,23 +194,22 @@ class Loader:
             with conn.transaction():
                 cur.execute(
                     """
+                    DROP TABLE IF EXISTS tmp_collections;
                     CREATE TEMP TABLE tmp_collections
                     (content jsonb) ON COMMIT DROP;
                     """
                 )
-                with cur.copy(
-                    "COPY tmp_collections (content) FROM stdin;"
-                ) as copy:
+                with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
                     for collection in read_json(file):
                         copy.write_row((orjson.dumps(collection).decode(),))
-                if insert_mode == "insert":
+                if insert_mode is None or insert_mode == "insert":
                     cur.execute(
                         """
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections;
                         """
                     )
-                elif insert_mode == "insert_ignore" or insert_mode == "ignore":
+                elif insert_mode in ("insert_ignore", "ignore"):
                     cur.execute(
                         """
                         INSERT INTO collections (content)
@@ -231,7 +228,7 @@ class Loader:
                     )
                 else:
                     raise Exception(
-                        "Available modes are insert, ignore_dupes, and upsert."
+                        "Available modes are insert, ignore, and upsert."
                         f"You entered {insert_mode}."
                     )
 
@@ -245,7 +242,10 @@ class Loader:
         reraise=True,
     )
     def load_partition(
-        self, partition: dict, items: Iterable, insert_mode: Methods
+        self,
+        partition: dict,
+        items: Iterable,
+        insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load items data for a single partition."""
         conn = self.db.connect()
@@ -282,7 +282,7 @@ class Loader:
                     f"Adding partition {partition} took {time.perf_counter() - t}s"
                 )
                 t = time.perf_counter()
-                if insert_mode == "insert":
+                if insert_mode is None or insert_mode == "insert":
                     with cur.copy(
                         sql.SQL(
                             """
@@ -299,10 +299,11 @@ class Loader:
                     "ignore_dupes",
                     "upsert",
                     "delsert",
-                    "insert",
+                    "ignore",
                 ):
                     cur.execute(
                         """
+                        DROP TABLE IF EXISTS items_ingest_temp;
                         CREATE TEMP TABLE items_ingest_temp
                         ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
                         """
@@ -379,12 +380,11 @@ class Loader:
         logging.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
-        conn.commit()
 
     def load_items(
         self,
         file: Optional[str] = "stdin",
-        insert_mode: Methods = Methods.insert,
+        insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load items json records."""
         if file is None:
@@ -408,16 +408,10 @@ class Loader:
             )
             partition["partition"] = item["partition"]
             partition["collection"] = item["collection"]
-            if (
-                partition["mindt"] is None
-                or item["datetime"] < partition["mindt"]
-            ):
+            if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
                 partition["mindt"] = item["datetime"]
 
-            if (
-                partition["maxdt"] is None
-                or item["datetime"] > partition["maxdt"]
-            ):
+            if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
                 partition["maxdt"] = item["datetime"]
 
             if (
@@ -459,9 +453,7 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc = self.collection_json(
-            item["collection"]
-        )
+        base_item, key, partition_trunc = self.collection_json(item["collection"])
 
         out["id"] = item.pop("id")
         out["collection"] = item.pop("collection")
