@@ -23,7 +23,6 @@ import psycopg
 from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
-from pyproj import CRS
 from smart_open import open
 from tenacity import (
     retry,
@@ -133,20 +132,6 @@ def dict_minus(a: dict, b: dict) -> dict:
     return out
 
 
-@lru_cache
-def get_epsg_from_wkt(wkt: str) -> Optional[int]:
-    """Get srid from a wkt string."""
-    crs = CRS(wkt)
-    if crs:
-        auths = crs.list_authority()
-        if auths and len(auths) >= 1:
-            for auth in auths:
-                authcrs = CRS.from_authority(auth.auth_name, auth.code)
-                if crs.equals(authcrs):
-                    return int(auth.code)
-    return None
-
-
 def read_json(file: str) -> Iterable:
     """Load data from an ndjson or json file."""
     open_file: Any = open_std(file, "r")
@@ -158,7 +143,9 @@ def read_json(file: str) -> Iterable:
                 yield orjson.loads(line)
         except JSONDecodeError:
             # If reading first line as json fails, try reading entire file
-            logging.info("First line could not be parsed as json, trying full file.")
+            logging.info(
+                "First line could not be parsed as json, trying full file."
+            )
             try:
                 f.seek(0)
                 json = orjson.loads(f.read())
@@ -213,7 +200,9 @@ class Loader:
                     (content jsonb) ON COMMIT DROP;
                     """
                 )
-                with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
+                with cur.copy(
+                    "COPY tmp_collections (content) FROM stdin;"
+                ) as copy:
                     for collection in read_json(file):
                         copy.write_row((orjson.dumps(collection).decode(),))
                 if insert_mode == "insert":
@@ -419,10 +408,16 @@ class Loader:
             )
             partition["partition"] = item["partition"]
             partition["collection"] = item["collection"]
-            if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
+            if (
+                partition["mindt"] is None
+                or item["datetime"] < partition["mindt"]
+            ):
                 partition["mindt"] = item["datetime"]
 
-            if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
+            if (
+                partition["maxdt"] is None
+                or item["datetime"] > partition["maxdt"]
+            ):
                 partition["maxdt"] = item["datetime"]
 
             if (
@@ -452,19 +447,6 @@ class Loader:
             f"Adding data to database took {time.perf_counter() - t} seconds."
         )
 
-    @lru_cache
-    def get_epsg(self, wkt: str) -> Optional[int]:
-        """Get srid from a wkt string."""
-        crs = CRS(wkt)
-        if crs:
-            auths = crs.list_authority()
-            if auths and len(auths) >= 1:
-                for auth in auths:
-                    authcrs = CRS.from_authority(auth.auth_name, auth.code)
-                    if crs.equals(authcrs):
-                        return int(auth.code)
-        return None
-
     def format_item(self, _item: Union[str, dict]) -> dict:
         """Format an item to insert into a record."""
         out = {}
@@ -477,7 +459,9 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc = self.collection_json(item["collection"])
+        base_item, key, partition_trunc = self.collection_json(
+            item["collection"]
+        )
 
         out["id"] = item.pop("id")
         out["collection"] = item.pop("collection")
