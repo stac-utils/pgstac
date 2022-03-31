@@ -294,7 +294,7 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(item.values())
+                            copy.write_row(list(item.values()))
                 elif insert_mode in (
                     "ignore_dupes",
                     "upsert",
@@ -317,7 +317,7 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(item.values())
+                            copy.write_row(list(item.values()))
                     cur.execute(
                         sql.SQL(
                             """
