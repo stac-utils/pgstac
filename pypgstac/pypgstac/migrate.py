@@ -105,7 +105,6 @@ class Migrate:
 
     def __init__(self, db: PgstacDB, schema: str = "pgstac"):
         """Prepare for migration."""
-        print("migrate init")
         self.db = db
         self.schema = schema
 
@@ -134,11 +133,15 @@ class Migrate:
 
         conn = self.db.connect()
 
-        for file in files:
-            migration_sql = get_sql(file)
-            conn.execute(migration_sql)
+        with conn.cursor() as cur:
+            for file in files:
+                logging.debug(f"Running migration file {file}.")
+                migration_sql = get_sql(file)
+                cur.execute(migration_sql)
+                logging.debug(cur.statusmessage)
+                logging.debug(cur.rowcount)
 
-        logging.debug(f"Database migrated to {toversion}")
+            logging.debug(f"Database migrated to {toversion}")
 
         newversion = self.db.version
         if conn is not None:

@@ -1,5 +1,3 @@
-DROP TABLE IF EXISTS queryables CASCADE;
-
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text UNIQUE NOT NULL,
@@ -13,8 +11,6 @@ CREATE INDEX queryables_name_idx ON queryables (name);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
 
-
-
 INSERT INTO queryables (name, definition) VALUES
 ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
 ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}')
@@ -23,8 +19,7 @@ ON CONFLICT DO NOTHING;
 
 
 INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE'),
-('platform','{}','to_text','BTREE')
+('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
 ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
@@ -110,5 +105,20 @@ BEGIN
         RAISE NOTICE '%',q;
         EXECUTE q;
     END LOOP;
+    RETURN;
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+PERFORM create_queryable_indexes();
+RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
+
+CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();

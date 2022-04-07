@@ -7,33 +7,52 @@ SELECT
             WHEN value ? 'geometry' THEN
                 ST_GeomFromGeoJSON(value->>'geometry')
             WHEN value ? 'bbox' THEN
-                bbox_geom(value->'bbox')
+                pgstac.bbox_geom(value->'bbox')
             ELSE NULL
         END as geometry
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+
+
+CREATE OR REPLACE FUNCTION stac_daterange(
+    value jsonb
+) RETURNS tstzrange AS $$
+DECLARE
+    props jsonb := value;
+    dt timestamptz;
+    edt timestamptz;
+BEGIN
+    IF props ? 'properties' THEN
+        props := props->'properties';
+    END IF;
+    IF props ? 'start_datetime' AND props ? 'end_datetime' THEN
+        dt := props->'start_datetime';
+        edt := props->'end_datetime';
+        IF dt > edt THEN
+            RAISE EXCEPTION 'start_datetime must be < end_datetime';
+        END IF;
+    ELSE
+        dt := props->'datetime';
+        edt := props->'datetime';
+    END IF;
+    IF dt is NULL OR edt IS NULL THEN
+        RAISE EXCEPTION 'Either datetime or both start_datetime and end_datetime must be set.';
+    END IF;
+    RETURN tstzrange(dt, edt, '[]');
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+
 CREATE OR REPLACE FUNCTION stac_datetime(value jsonb) RETURNS timestamptz AS $$
-SELECT COALESCE(
-    (value->'properties'->>'datetime')::timestamptz,
-    (value->'properties'->>'start_datetime')::timestamptz
-);
+    SELECT lower(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS $$
-SELECT COALESCE(
-    (value->'properties'->>'datetime')::timestamptz,
-    (value->'properties'->>'end_datetime')::timestamptz
-);
+    SELECT upper(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 
-CREATE OR REPLACE FUNCTION stac_daterange(value jsonb) RETURNS tstzrange AS $$
-    SELECT tstzrange(stac_datetime(value),stac_end_datetime(value));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
-
-
-CREATE TABLE stac_extensions(
+CREATE TABLE IF NOT EXISTS stac_extensions(
     name text PRIMARY KEY,
     url text,
     enbabled_by_default boolean NOT NULL DEFAULT TRUE,

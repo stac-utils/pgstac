@@ -34,23 +34,23 @@ SET ROLE pgstac_admin;
 SET SEARCH_PATH TO pgstac, public;
 
 
-CREATE TABLE migrations (
+CREATE TABLE IF NOT EXISTS migrations (
   version text PRIMARY KEY,
   datetime timestamptz DEFAULT clock_timestamp() NOT NULL
 );
 
 CREATE OR REPLACE FUNCTION get_version() RETURNS text AS $$
-  SELECT version FROM migrations ORDER BY datetime DESC, version DESC LIMIT 1;
+  SELECT version FROM pgstac.migrations ORDER BY datetime DESC, version DESC LIMIT 1;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
-  INSERT INTO migrations (version) VALUES ($1)
+  INSERT INTO pgstac.migrations (version) VALUES ($1)
   ON CONFLICT DO NOTHING
   RETURNING version;
 $$ LANGUAGE SQL;
 
 
-CREATE TABLE pgstac_settings (
+CREATE TABLE IF NOT EXISTS pgstac_settings (
   name text PRIMARY KEY,
   value text NOT NULL
 );
@@ -58,7 +58,7 @@ CREATE TABLE pgstac_settings (
 INSERT INTO pgstac_settings (name, value) VALUES
   ('context', 'off'),
   ('context_estimated_count', '100000'),
-  ('context_estimated_cost', '1000000'),
+  ('context_estimated_cost', '100000'),
   ('context_stats_ttl', '1 day'),
   ('default-filter-lang', 'cql2-json'),
   ('additional_properties', 'true')
@@ -70,26 +70,26 @@ CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT N
 SELECT COALESCE(
   conf->>_setting,
   current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac_settings WHERE name=_setting)
+  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
 );
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
-  SELECT get_setting('context', conf);
+  SELECT pgstac.get_setting('context', conf);
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION context_estimated_count(conf jsonb DEFAULT NULL) RETURNS int AS $$
-  SELECT get_setting('context_estimated_count', conf)::int;
+  SELECT pgstac.get_setting('context_estimated_count', conf)::int;
 $$ LANGUAGE SQL;
 
 DROP FUNCTION IF EXISTS context_estimated_cost();
 CREATE OR REPLACE FUNCTION context_estimated_cost(conf jsonb DEFAULT NULL) RETURNS float AS $$
-  SELECT get_setting('context_estimated_cost', conf)::float;
+  SELECT pgstac.get_setting('context_estimated_cost', conf)::float;
 $$ LANGUAGE SQL;
 
 DROP FUNCTION IF EXISTS context_stats_ttl();
 CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS interval AS $$
-  SELECT get_setting('context_stats_ttl', conf)::interval;
+  SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
 
@@ -201,169 +201,6 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 CREATE OR REPLACE FUNCTION flip_jsonb_array(j jsonb) RETURNS jsonb AS $$
     SELECT jsonb_agg(value) FROM (SELECT value FROM jsonb_array_elements(j) WITH ORDINALITY ORDER BY ordinality DESC) as t;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-/*
-CREATE OR REPLACE FUNCTION jsonb_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
-SETOF RECORD AS $$
-with recursive extract_all as
-(
-    select
-        ARRAY[key]::text[] as path,
-        value
-    FROM jsonb_each(jdata)
-union all
-    select
-        path || coalesce(obj_key, (arr_key- 1)::text),
-        coalesce(obj_value, arr_value)
-    from extract_all
-    left join lateral
-        jsonb_each(case jsonb_typeof(value) when 'object' then value end)
-        as o(obj_key, obj_value)
-        on jsonb_typeof(value) = 'object'
-    left join lateral
-        jsonb_array_elements(case jsonb_typeof(value) when 'array' then value end)
-        with ordinality as a(arr_value, arr_key)
-        on jsonb_typeof(value) = 'array'
-    where obj_key is not null or arr_key is not null
-)
-select *
-from extract_all;
-$$ LANGUAGE SQL IMMUTABLE STRICT;
-
-CREATE OR REPLACE FUNCTION jsonb_obj_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
-SETOF RECORD AS $$
-with recursive extract_all as
-(
-    select
-        ARRAY[key]::text[] as path,
-        value
-    FROM jsonb_each(jdata)
-union all
-    select
-        path || obj_key,
-        obj_value
-    from extract_all
-    left join lateral
-        jsonb_each(case jsonb_typeof(value) when 'object' then value end)
-        as o(obj_key, obj_value)
-        on jsonb_typeof(value) = 'object'
-    where obj_key is not null
-)
-select *
-from extract_all;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION jsonb_val_paths (IN jdata jsonb, OUT path text[], OUT value jsonb) RETURNS
-SETOF RECORD AS $$
-SELECT * FROM jsonb_obj_paths(jdata) WHERE jsonb_typeof(value) not in  ('object','array');
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION path_includes(IN path text[], IN includes text[]) RETURNS BOOLEAN AS $$
-WITH t AS (SELECT unnest(includes) i)
-SELECT EXISTS (
-    SELECT 1 FROM t WHERE path @> string_to_array(trim(i), '.')
-);
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION path_excludes(IN path text[], IN excludes text[]) RETURNS BOOLEAN AS $$
-WITH t AS (SELECT unnest(excludes) e)
-SELECT NOT EXISTS (
-    SELECT 1 FROM t WHERE path @> string_to_array(trim(e), '.')
-);
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION jsonb_obj_paths_filtered (
-    IN jdata jsonb,
-    IN includes text[] DEFAULT ARRAY[]::text[],
-    IN excludes text[] DEFAULT ARRAY[]::text[],
-    OUT path text[],
-    OUT value jsonb
-) RETURNS
-SETOF RECORD AS $$
-SELECT path, value
-FROM jsonb_obj_paths(jdata)
-WHERE
-    CASE WHEN cardinality(includes) > 0 THEN path_includes(path, includes) ELSE TRUE END
-    AND
-    path_excludes(path, excludes)
-
-;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION filter_jsonb(
-    IN jdata jsonb,
-    IN includes text[] DEFAULT ARRAY[]::text[],
-    IN excludes text[] DEFAULT ARRAY[]::text[]
-) RETURNS jsonb AS $$
-DECLARE
-    rec RECORD;
-    outj jsonb := '{}'::jsonb;
-    created_paths text[] := '{}'::text[];
-BEGIN
-
-    IF empty_arr(includes) AND empty_arr(excludes) THEN
-        RAISE NOTICE 'no filter';
-        RETURN jdata;
-    END IF;
-    FOR rec in
-        SELECT * FROM jsonb_obj_paths_filtered(jdata, includes, excludes)
-        WHERE jsonb_typeof(value) != 'object'
-    LOOP
-        IF array_length(rec.path,1)>1 THEN
-            FOR i IN 1..(array_length(rec.path,1)-1) LOOP
-            IF NOT array_to_string(rec.path[1:i],'.') = ANY (created_paths) THEN
-                outj := jsonb_set(outj, rec.path[1:i],'{}', true);
-                created_paths := created_paths || array_to_string(rec.path[1:i],'.');
-            END IF;
-            END LOOP;
-        END IF;
-        outj := jsonb_set(outj, rec.path, rec.value, true);
-        created_paths := created_paths || array_to_string(rec.path,'.');
-    END LOOP;
-    RETURN outj;
-END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
-
-
-
-
-
-CREATE OR REPLACE FUNCTION jsonb_recursive_merge(A jsonb, B jsonb)
-RETURNS jsonb AS $$
-    SELECT
-        jsonb_object_agg(coalesce(ka, kb),
-            CASE
-                WHEN va isnull THEN vb
-                WHEN vb isnull THEN va
-                WHEN jsonb_typeof(va) <> 'object'
-                    OR jsonb_typeof(vb) <> 'object' THEN vb
-                ELSE jsonb_recursive_merge(va, vb)
-            END
-        )
-    FROM jsonb_each(A) temptable1(ka, va)
-    FULL JOIN jsonb_each(B) temptable2(kb, vb) ON ka = kb;
-$$ LANGUAGE SQL IMMUTABLE;
-
-CREATE OR REPLACE FUNCTION jsonb_minus ( arg1 jsonb, arg2 jsonb )
-RETURNS jsonb AS $$
-    SELECT
-        COALESCE(json_object_agg(
-            key,
-            CASE -- if the value is an object and the value of the second argument is not null, we do a recursion
-            WHEN jsonb_typeof(value) = 'object' AND arg2 -> key IS NOT NULL
-                THEN jsonb_minus(value, arg2 -> key) -- for all the other types, we just return the value
-            ELSE value
-            END ), '{}')::jsonb
-    FROM jsonb_each(arg1)
-    WHERE
-        arg1 -> key <> arg2 -> key
-        OR
-        arg2 -> key IS NULL
-    ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-*/
 /* looks for a geometry in a stac item first from geometry and falling back to bbox */
 CREATE OR REPLACE FUNCTION stac_geom(value jsonb) RETURNS geometry AS $$
 SELECT
@@ -373,33 +210,52 @@ SELECT
             WHEN value ? 'geometry' THEN
                 ST_GeomFromGeoJSON(value->>'geometry')
             WHEN value ? 'bbox' THEN
-                bbox_geom(value->'bbox')
+                pgstac.bbox_geom(value->'bbox')
             ELSE NULL
         END as geometry
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+
+
+CREATE OR REPLACE FUNCTION stac_daterange(
+    value jsonb
+) RETURNS tstzrange AS $$
+DECLARE
+    props jsonb := value;
+    dt timestamptz;
+    edt timestamptz;
+BEGIN
+    IF props ? 'properties' THEN
+        props := props->'properties';
+    END IF;
+    IF props ? 'start_datetime' AND props ? 'end_datetime' THEN
+        dt := props->'start_datetime';
+        edt := props->'end_datetime';
+        IF dt > edt THEN
+            RAISE EXCEPTION 'start_datetime must be < end_datetime';
+        END IF;
+    ELSE
+        dt := props->'datetime';
+        edt := props->'datetime';
+    END IF;
+    IF dt is NULL OR edt IS NULL THEN
+        RAISE EXCEPTION 'Either datetime or both start_datetime and end_datetime must be set.';
+    END IF;
+    RETURN tstzrange(dt, edt, '[]');
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+
 CREATE OR REPLACE FUNCTION stac_datetime(value jsonb) RETURNS timestamptz AS $$
-SELECT COALESCE(
-    (value->'properties'->>'datetime')::timestamptz,
-    (value->'properties'->>'start_datetime')::timestamptz
-);
+    SELECT lower(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS $$
-SELECT COALESCE(
-    (value->'properties'->>'datetime')::timestamptz,
-    (value->'properties'->>'end_datetime')::timestamptz
-);
+    SELECT upper(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 
-CREATE OR REPLACE FUNCTION stac_daterange(value jsonb) RETURNS tstzrange AS $$
-    SELECT tstzrange(stac_datetime(value),stac_end_datetime(value));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
-
-
-CREATE TABLE stac_extensions(
+CREATE TABLE IF NOT EXISTS stac_extensions(
     name text PRIMARY KEY,
     url text,
     enbabled_by_default boolean NOT NULL DEFAULT TRUE,
@@ -420,26 +276,25 @@ CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS 
     SELECT jsonb_build_object(
         'type', 'Feature',
         'stac_version', content->'stac_version',
-        'stac_extensions', content->'stac_extensions',
-        'links', content->'links',
         'assets', content->'item_assets',
-        'collection', content->'id'
+        'collection', content->'id',
+        'links', '[]'::jsonb
     );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE TYPE partition_trunc_strategy AS ENUM ('year', 'month');
 
-CREATE TABLE collections (
+CREATE TABLE IF NOT EXISTS collections (
     key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE,
     content JSONB NOT NULL,
-    base_item jsonb GENERATED ALWAYS AS (collection_base_item(content)) STORED,
+    base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
     partition_trunc partition_trunc_strategy
 );
 
 
 CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
-    SELECT collection_base_item(content) FROM collections WHERE id = cid LIMIT 1;
+    SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
@@ -485,6 +340,9 @@ BEGIN
             partition_name
         );
         EXECUTE q;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS NOT DISTINCT FROM OLD.partition_trunc THEN
+        RETURN NEW;
     END IF;
     IF NEW.partition_trunc IS NULL AND partition_empty THEN
         RAISE NOTICE '% % % %',
@@ -544,14 +402,14 @@ BEGIN
     END IF;
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 
 CREATE TRIGGER collections_trigger AFTER INSERT OR UPDATE ON collections FOR EACH ROW
 EXECUTE FUNCTION collections_trigger_func();
 
 
 
-CREATE TABLE partitions (
+CREATE TABLE IF NOT EXISTS partitions (
     collection text REFERENCES collections(id),
     name text PRIMARY KEY,
     partition_range tstzrange NOT NULL DEFAULT tstzrange('-infinity'::timestamptz,'infinity'::timestamptz, '[]'),
@@ -576,7 +434,7 @@ DECLARE
     c RECORD;
     parent_name text;
 BEGIN
-    SELECT * INTO c FROM collections WHERE id=collection;
+    SELECT * INTO c FROM pgstac.collections WHERE id=collection;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Collection % does not exist', collection;
     END IF;
@@ -626,12 +484,12 @@ DECLARE
     t_maxedt timestamptz;
 BEGIN
     RAISE NOTICE 'Partitions Trigger. %', NEW;
-
+    RAISE NOTICE 'I % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
     datetime_range := NEW.datetime_range;
     end_datetime_range := NEW.end_datetime_range;
 
-    SELECT format('_items_%s', key) INTO parent_name FROM collections WHERE collections.id = NEW.collection;
-    SELECT (partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
+    SELECT format('_items_%s', key) INTO parent_name FROM pgstac.collections WHERE collections.id = NEW.collection;
+    SELECT (pgstac.partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
     NEW.name := partition_name;
 
     IF partition_range IS NULL OR partition_range = 'empty'::tstzrange THEN
@@ -642,12 +500,12 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
         mindt := least(mindt, lower(OLD.datetime_range));
         maxdt := greatest(maxdt, upper(OLD.datetime_range));
-        minedt := least(mindt, lower(OLD.end_datetime_range));
-        maxedt := greatest(maxdt, upper(OLD.end_datetime_range));
+        minedt := least(minedt, lower(OLD.end_datetime_range));
+        maxedt := greatest(maxedt, upper(OLD.end_datetime_range));
         NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
         NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
     END IF;
-
+    RAISE NOTICE 'U % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
     IF TG_OP = 'INSERT' THEN
 
         IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
@@ -693,34 +551,42 @@ BEGIN
     maxdt := greatest(maxdt, t_maxdt);
     minedt := least(minedt, t_minedt);
     maxedt := greatest(maxedt, t_maxedt);
+    RAISE NOTICE 'F % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
 
     IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
         NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
         NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
-
-        cq := format($q$
-            ALTER TABLE %7$I
-                DROP CONSTRAINT IF EXISTS %1$I,
-                DROP CONSTRAINT IF EXISTS %2$I,
-                ADD CONSTRAINT %1$I
-                    CHECK ((datetime >= %3$L) AND (datetime <= %4$L)) NOT VALID,
-                ADD CONSTRAINT %2$I
-                    CHECK ((end_datetime >= %5$L) AND (end_datetime <= %6$L)) NOT VALID
-            ;
-            ALTER TABLE %7$I
-                VALIDATE CONSTRAINT %1$I;
-            ALTER TABLE %7$I
-                VALIDATE CONSTRAINT %2$I;
-            $q$,
-            format('%s_dt', partition_name),
-            format('%s_edt', partition_name),
-            date_trunc('month', mindt),
-            date_trunc('month', maxdt) + '1 month'::interval,
-            date_trunc('month', minedt),
-            date_trunc('month', maxedt) + '1 month'::interval,
-            partition_name
-        );
-        EXECUTE cq;
+        IF
+            TG_OP='UPDATE'
+            AND OLD.datetime_range @> NEW.datetime_range
+            AND OLD.end_datetime_range @> NEW.end_datetime_range THEN
+            RAISE NOTICE 'Range unchanged, not updating constraints.';
+        ELSE
+            cq := format($q$
+                ALTER TABLE %7$I
+                    DROP CONSTRAINT IF EXISTS %1$I,
+                    DROP CONSTRAINT IF EXISTS %2$I,
+                    ADD CONSTRAINT %1$I
+                        CHECK ((datetime >= %3$L) AND (datetime <= %4$L)) NOT VALID,
+                    ADD CONSTRAINT %2$I
+                        CHECK ((end_datetime >= %5$L) AND (end_datetime <= %6$L)) NOT VALID
+                ;
+                ALTER TABLE %7$I
+                    VALIDATE CONSTRAINT %1$I;
+                ALTER TABLE %7$I
+                    VALIDATE CONSTRAINT %2$I;
+                $q$,
+                format('%s_dt', partition_name),
+                format('%s_edt', partition_name),
+                date_trunc('month', mindt),
+                date_trunc('month', maxdt) + '1 month'::interval,
+                date_trunc('month', minedt),
+                date_trunc('month', maxedt) + '1 month'::interval,
+                partition_name
+            );
+            RAISE NOTICE 'Altering Constraints. %', cq;
+            EXECUTE cq;
+        END IF;
     ELSE
         NEW.datetime_range = NULL;
         NEW.end_datetime_range = NULL;
@@ -753,21 +619,6 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER partitions_trigger BEFORE INSERT OR UPDATE ON partitions FOR EACH ROW
 EXECUTE FUNCTION partitions_trigger_func();
-
-
-/*
----------------------------
-TRUNCATE pgstac.collections CASCADE;
-INSERT INTO pgstac.collections (content) SELECT content FROM pgstac_test.collections;
-UPDATE pgstac.collections SET partition_trunc='year' WHERE id IN ('aster-l1t', 'landsat-8-c2-l2', 'naip');
-UPDATE pgstac.collections SET partition_trunc='month' WHERE id IN ('goes-cmi','sentinel-2-l2a');
-
-
-
------------------------------
-
-*/
-
 
 
 CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
@@ -812,8 +663,6 @@ CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
     SELECT jsonb_agg(content) FROM collections;
 ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
-DROP TABLE IF EXISTS queryables CASCADE;
-
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text UNIQUE NOT NULL,
@@ -827,8 +676,6 @@ CREATE INDEX queryables_name_idx ON queryables (name);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
 
-
-
 INSERT INTO queryables (name, definition) VALUES
 ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
 ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}')
@@ -837,8 +684,7 @@ ON CONFLICT DO NOTHING;
 
 
 INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE'),
-('platform','{}','to_text','BTREE')
+('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
 ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
@@ -924,8 +770,23 @@ BEGIN
         RAISE NOTICE '%',q;
         EXECUTE q;
     END LOOP;
+    RETURN;
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+PERFORM create_queryable_indexes();
+RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
+
+CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 CREATE OR REPLACE FUNCTION parse_dtrange(
     _indate jsonb,
     relative_base timestamptz DEFAULT date_trunc('hour', CURRENT_TIMESTAMP)
@@ -1436,37 +1297,65 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
 $$ LANGUAGE SQL STABLE;
 
 
+CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+BEGIN
+    IF f IS NULL THEN
+        RETURN NULL;
+    ELSIF jsonb_array_length(includes)>0 AND includes ? f THEN
+        RETURN TRUE;
+    ELSIF jsonb_array_length(excludes)>0 AND excludes ? f THEN
+        RETURN FALSE;
+    ELSIF jsonb_array_length(includes)>0 AND NOT includes ? f THEN
+        RETURN FALSE;
+    END IF;
+    RETURN TRUE;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE;
+
+
 CREATE OR REPLACE FUNCTION key_filter(IN k text, IN val jsonb, INOUT kf jsonb, OUT include boolean) AS $$
 DECLARE
     includes jsonb := coalesce(kf->'includes', kf->'include', '[]'::jsonb);
     excludes jsonb := coalesce(kf->'excludes', kf->'exclude', '[]'::jsonb);
 BEGIN
+    RAISE NOTICE '% % %', k, val, kf;
+
     include := TRUE;
     IF k = 'properties' AND NOT excludes ? 'properties' THEN
-        RETURN;
-    ELSIF
-        k = 'assets'
-        AND NOT excludes ? k
-        AND (jsonb_array_length(includes) = 0 OR includes ? k)
-        AND NOT val @? '$.*.href'
-    THEN
-        include := FALSE;
-        RETURN;
+        RAISE NOTICE 'Properties and not excluded';
+        excludes := excludes || '["properties"]';
+        include := TRUE;
+        RAISE NOTICE 'Prop include %', include;
     ELSIF
         jsonb_array_length(excludes)>0 AND excludes ? k THEN
+        RAISE NOTICE 'Excludes set and key is in excludes.';
         include := FALSE;
-        RETURN;
     ELSIF
         jsonb_array_length(includes)>0 AND NOT includes ? k THEN
+        RAISE NOTICE 'Includes set and key is not in includes.';
         include := FALSE;
-        RETURN;
     ELSIF
         jsonb_array_length(includes)>0 AND includes ? k THEN
-        kf := kf - '{includes,include}'::text[];
+        RAISE NOTICE 'Includes set and key is in includes';
+        includes := includes - k;
+        -- kf := kf - '{includes,include}'::text[];
+        RAISE NOTICE 'KF: %', kf;
     END IF;
+    kf := jsonb_build_object('includes', includes, 'excludes', excludes);
+    RAISE NOTICE 'INCLUDE: %, KF: %', include, kf;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION strip_assets(a jsonb) RETURNS jsonb AS $$
+    WITH t AS (SELECT * FROM jsonb_each(a))
+    SELECT jsonb_object_agg(key, value) FROM t
+    WHERE value ? 'href';
+$$ LANGUAGE SQL IMMUTABLE STRICT;
 
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item jsonb,
@@ -1477,12 +1366,23 @@ CREATE OR REPLACE FUNCTION content_hydrate(
         jsonb_strip_nulls(jsonb_object_agg(
             key,
             CASE
+                WHEN key = 'properties' AND include_field('properties', fields) THEN
+                    i.value
+                WHEN key = 'properties' THEN
+                    content_hydrate(i.value, c.value, kf)
                 WHEN
                     c.value IS NULL AND key != 'properties'
                 THEN i.value
                 WHEN
+                    key = 'assets'
+                    AND
                     jsonb_typeof(c.value) = 'object'
-                    OR
+                    AND
+                    jsonb_typeof(i.value) = 'object'
+                THEN strip_assets(content_hydrate(i.value, c.value, kf))
+                WHEN
+                    jsonb_typeof(c.value) = 'object'
+                    AND
                     jsonb_typeof(i.value) = 'object'
                 THEN content_hydrate(i.value, c.value, kf)
                 ELSE coalesce(i.value, c.value)
@@ -1499,56 +1399,22 @@ CREATE OR REPLACE FUNCTION content_hydrate(
     ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-DECLARE
-    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
-    geom jsonb;
-    bbox jsonb;
-    output jsonb;
-    content jsonb;
-    base_item jsonb := collection_base_item(_item.collection);
-BEGIN
-    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
-        geom := ST_ASGeoJson(_item.geometry)::json;
-    END IF;
 
-    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
-        geom := geom_bbox(_item.geometry)::json;
-    END IF;
-
-    output := content_hydrate(
-            jsonb_build_object(
-                'id', _item.id,
-                'geometry', geom,
-                'bbox',bbox,
-                'collection', _item.collection
-            ) || _item.content,
-            collection_base_item(_item.collection),
-            fields
-        );
-
-    RETURN output;
-END;
-$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
-    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
     geom jsonb;
     bbox jsonb;
     output jsonb;
     content jsonb;
+    base_item jsonb := _collection.base_item;
 BEGIN
-    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
-        geom := ST_ASGeoJson(_item.geometry)::json;
+    IF include_field('geometry', fields) THEN
+        geom := ST_ASGeoJson(_item.geometry)::jsonb;
     END IF;
-
-    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
-        geom := geom_bbox(_item.geometry)::json;
+    IF include_field('bbox', fields) THEN
+        bbox := geom_bbox(_item.geometry)::jsonb;
     END IF;
-
     output := content_hydrate(
             jsonb_build_object(
                 'id', _item.id,
@@ -1563,6 +1429,14 @@ BEGIN
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+    SELECT content_hydrate(
+        _item,
+        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
+        fields
+    );
+$$ LANGUAGE SQL STABLE;
 
 
 CREATE UNLOGGED TABLE items_staging (
@@ -1582,19 +1456,27 @@ DECLARE
     ts timestamptz := clock_timestamp();
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
-    WITH p AS (
+    WITH ranges AS (
         SELECT
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            (partition_name(content->>'collection', date_trunc('month', stac_datetime(content)))).partition_name as name
+            n.content->>'collection' as collection,
+            stac_daterange(n.content->'properties') as dtr
         FROM newdata n
+    ), p AS (
+        SELECT
+            collection,
+            lower(dtr) as datetime,
+            upper(dtr) as end_datetime,
+            (partition_name(
+                collection,
+                lower(dtr)
+            )).partition_name as name
+        FROM ranges
     )
     INSERT INTO partitions (collection, datetime_range, end_datetime_range)
         SELECT
             collection,
-            tstzrange(min(datetime), max(datetime)) as datetime_range,
-            tstzrange(min(end_datetime), max(end_datetime)) as end_datetime_range
+            tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
+            tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
         FROM p
             GROUP BY collection, name
         ON CONFLICT (name) DO UPDATE SET
@@ -1662,11 +1544,11 @@ BEGIN
     SELECT * INTO i FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection) LIMIT 1;
     RETURN i;
 END;
-$$ LANGUAGE PLPGSQL STABLE;
+$$ LANGUAGE PLPGSQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text, _collection text DEFAULT NULL) RETURNS jsonb AS $$
     SELECT content_hydrate(items) FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection);
-$$ LANGUAGE SQL STABLE;
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION delete_item(_id text, _collection text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
@@ -1676,7 +1558,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE;
 
-
+--/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
     INSERT INTO items_staging (content) VALUES (data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
@@ -1684,19 +1566,11 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION update_item(content jsonb) RETURNS VOID AS $$
 DECLARE
+    old items %ROWTYPE;
     out items%ROWTYPE;
 BEGIN
-    UPDATE items
-    SET
-        geometry = stac_geom(content),
-        datetime = stac_datetime(content),
-        end_datetime = stac_end_datetime(content),
-        content = content_slim(content)
-    WHERE
-        id = content->>'id'
-        AND
-        collection = content->>'collection'
-    RETURNING * INTO STRICT out;
+    SELECT delete_item(content->>'id', content->>'collection');
+    SELECT create_item(content);
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
@@ -2167,18 +2041,27 @@ DECLARE
     partitions text[];
     sw search_wheres%ROWTYPE;
     inwhere_hash text := md5(inwhere);
+    _context text := lower(context(conf));
+    _stats_ttl interval := context_stats_ttl(conf);
+    _estimated_cost float := context_estimated_cost(conf);
+    _estimated_count int := context_estimated_count(conf);
 BEGIN
-    SELECT * INTO sw FROM search_wheres WHERE _where=inwhere_hash FOR UPDATE;
+    IF _context = 'off' THEN
+        sw._where := inwhere;
+        return sw;
+    END IF;
+
+    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
 
     -- Update statistics if explicitly set, if statistics do not exist, or statistics ttl has expired
     IF NOT updatestats THEN
-        RAISE NOTICE 'Checking if update is needed.';
+        RAISE NOTICE 'Checking if update is needed for: % .', inwhere;
         RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
-        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(conf), now() - sw.statslastupdated;
-        RAISE NOTICE 'Context: %, Existing Total: %', context(conf), sw.total_count;
+        RAISE NOTICE 'TTL: %, Age: %', _stats_ttl, now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', _context, sw.total_count;
         IF
             sw.statslastupdated IS NULL
-            OR (now() - sw.statslastupdated) > context_stats_ttl(conf)
+            OR (now() - sw.statslastupdated) > _stats_ttl
             OR (context(conf) != 'off' AND sw.total_count IS NULL)
         THEN
             updatestats := TRUE;
@@ -2193,49 +2076,36 @@ BEGIN
         UPDATE search_wheres SET
             lastused = sw.lastused,
             usecount = sw.usecount
-        WHERE _where = inwhere_hash
+        WHERE md5(_where) = inwhere_hash
         RETURNING * INTO sw
         ;
         RETURN sw;
     END IF;
-    -- -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
-    -- t := clock_timestamp();
-    -- EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
-    -- INTO explain_json;
-    -- RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
-    -- WITH t AS (
-    --     SELECT j->>0 as p FROM
-    --         jsonb_path_query(
-    --             explain_json,
-    --             'strict $.**."Relation Name" ? (@ != null)'
-    --         ) j
-    -- ), ordered AS (
-    --     --SELECT p FROM t ORDER BY p DESC
-    --     SELECT p FROM t JOIN partitions
-    --         ON (t.p = items_partitions.name)
-    --     ORDER BY pstart DESC
-    -- )
-    -- SELECT array_agg(p) INTO partitions FROM ordered;
-    -- i := clock_timestamp() - t;
-    -- RAISE NOTICE 'Time for explain + join: %', clock_timestamp() - t;
 
-
+    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
+    t := clock_timestamp();
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+    INTO explain_json;
+    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
+    i := clock_timestamp() - t;
 
     sw.statslastupdated := now();
     sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
     sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
     sw.time_to_estimate := extract(epoch from i);
-    sw.partitions := partitions;
+
+    RAISE NOTICE 'ESTIMATED_COUNT: % < %', sw.estimated_count, _estimated_count;
+    RAISE NOTICE 'ESTIMATED_COST: % < %', sw.estimated_cost, _estimated_cost;
 
     -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
     IF
-        context(conf) = 'on'
+        _context = 'on'
         OR
-        ( context(conf) = 'auto' AND
+        ( _context = 'auto' AND
             (
-                sw.estimated_count < context_estimated_count(conf)
-                OR
-                sw.estimated_cost < context_estimated_cost(conf)
+                sw.estimated_count < _estimated_count
+                AND
+                sw.estimated_cost < _estimated_cost
             )
         )
     THEN
@@ -2266,7 +2136,6 @@ BEGIN
             estimated_count = sw.estimated_count,
             estimated_cost = sw.estimated_cost,
             time_to_estimate = sw.time_to_estimate,
-            partitions = sw.partitions,
             total_count = sw.total_count,
             time_to_count = sw.time_to_count
     ;
@@ -2484,6 +2353,44 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+
+
+CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$
+DECLARE
+    curs refcursor;
+    searches searches%ROWTYPE;
+    _where text;
+    _orderby text;
+    q text;
+
+BEGIN
+    searches := search_query(_search);
+    _where := searches._where;
+    _orderby := searches.orderby;
+
+    OPEN curs FOR
+        WITH p AS (
+            SELECT * FROM partition_queries(_where, _orderby) p
+        )
+        SELECT
+            CASE WHEN EXISTS (SELECT 1 FROM p) THEN
+                (SELECT format($q$
+                    SELECT * FROM (
+                        %s
+                    ) total
+                    $q$,
+                    string_agg(
+                        format($q$ SELECT * FROM ( %s ) AS sub $q$, p),
+                        '
+                        UNION ALL
+                        '
+                    )
+                ))
+            ELSE NULL
+            END FROM p;
+    RETURN curs;
+END;
 $$ LANGUAGE PLPGSQL;
 SET SEARCH_PATH TO pgstac, public;
 
@@ -2600,6 +2507,7 @@ BEGIN
             scancounter := scancounter + 1;
 
         END LOOP;
+        CLOSE curs;
         EXIT WHEN exit_flag;
         remaining_limit := _scanlimit - scancounter;
     END LOOP;
@@ -2660,4 +2568,17 @@ CREATE OR REPLACE FUNCTION xyzsearch(
         skipcovered
     );
 $$ LANGUAGE SQL;
+GRANT USAGE ON SCHEMA pgstac to pgstac_read;
+GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
+GRANT ALL ON SCHEMA pgstac to pgstac_admin;
+
+-- pgstac_read role limited to using function apis
+GRANT EXECUTE ON FUNCTION search TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
+GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
+GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
+
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
+GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 SELECT set_version('0.5.0');

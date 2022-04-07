@@ -423,18 +423,27 @@ DECLARE
     partitions text[];
     sw search_wheres%ROWTYPE;
     inwhere_hash text := md5(inwhere);
+    _context text := lower(context(conf));
+    _stats_ttl interval := context_stats_ttl(conf);
+    _estimated_cost float := context_estimated_cost(conf);
+    _estimated_count int := context_estimated_count(conf);
 BEGIN
-    SELECT * INTO sw FROM search_wheres WHERE _where=inwhere_hash FOR UPDATE;
+    IF _context = 'off' THEN
+        sw._where := inwhere;
+        return sw;
+    END IF;
+
+    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
 
     -- Update statistics if explicitly set, if statistics do not exist, or statistics ttl has expired
     IF NOT updatestats THEN
-        RAISE NOTICE 'Checking if update is needed.';
+        RAISE NOTICE 'Checking if update is needed for: % .', inwhere;
         RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
-        RAISE NOTICE 'TTL: %, Age: %', context_stats_ttl(conf), now() - sw.statslastupdated;
-        RAISE NOTICE 'Context: %, Existing Total: %', context(conf), sw.total_count;
+        RAISE NOTICE 'TTL: %, Age: %', _stats_ttl, now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', _context, sw.total_count;
         IF
             sw.statslastupdated IS NULL
-            OR (now() - sw.statslastupdated) > context_stats_ttl(conf)
+            OR (now() - sw.statslastupdated) > _stats_ttl
             OR (context(conf) != 'off' AND sw.total_count IS NULL)
         THEN
             updatestats := TRUE;
@@ -449,49 +458,36 @@ BEGIN
         UPDATE search_wheres SET
             lastused = sw.lastused,
             usecount = sw.usecount
-        WHERE _where = inwhere_hash
+        WHERE md5(_where) = inwhere_hash
         RETURNING * INTO sw
         ;
         RETURN sw;
     END IF;
-    -- -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
-    -- t := clock_timestamp();
-    -- EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
-    -- INTO explain_json;
-    -- RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
-    -- WITH t AS (
-    --     SELECT j->>0 as p FROM
-    --         jsonb_path_query(
-    --             explain_json,
-    --             'strict $.**."Relation Name" ? (@ != null)'
-    --         ) j
-    -- ), ordered AS (
-    --     --SELECT p FROM t ORDER BY p DESC
-    --     SELECT p FROM t JOIN partitions
-    --         ON (t.p = items_partitions.name)
-    --     ORDER BY pstart DESC
-    -- )
-    -- SELECT array_agg(p) INTO partitions FROM ordered;
-    -- i := clock_timestamp() - t;
-    -- RAISE NOTICE 'Time for explain + join: %', clock_timestamp() - t;
 
-
+    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
+    t := clock_timestamp();
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+    INTO explain_json;
+    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
+    i := clock_timestamp() - t;
 
     sw.statslastupdated := now();
     sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
     sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
     sw.time_to_estimate := extract(epoch from i);
-    sw.partitions := partitions;
+
+    RAISE NOTICE 'ESTIMATED_COUNT: % < %', sw.estimated_count, _estimated_count;
+    RAISE NOTICE 'ESTIMATED_COST: % < %', sw.estimated_cost, _estimated_cost;
 
     -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
     IF
-        context(conf) = 'on'
+        _context = 'on'
         OR
-        ( context(conf) = 'auto' AND
+        ( _context = 'auto' AND
             (
-                sw.estimated_count < context_estimated_count(conf)
-                OR
-                sw.estimated_cost < context_estimated_cost(conf)
+                sw.estimated_count < _estimated_count
+                AND
+                sw.estimated_cost < _estimated_cost
             )
         )
     THEN
@@ -522,7 +518,6 @@ BEGIN
             estimated_count = sw.estimated_count,
             estimated_cost = sw.estimated_cost,
             time_to_estimate = sw.time_to_estimate,
-            partitions = sw.partitions,
             total_count = sw.total_count,
             time_to_count = sw.time_to_count
     ;
@@ -739,5 +734,43 @@ collection := jsonb_build_object(
 );
 
 RETURN collection;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+
+
+CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$
+DECLARE
+    curs refcursor;
+    searches searches%ROWTYPE;
+    _where text;
+    _orderby text;
+    q text;
+
+BEGIN
+    searches := search_query(_search);
+    _where := searches._where;
+    _orderby := searches.orderby;
+
+    OPEN curs FOR
+        WITH p AS (
+            SELECT * FROM partition_queries(_where, _orderby) p
+        )
+        SELECT
+            CASE WHEN EXISTS (SELECT 1 FROM p) THEN
+                (SELECT format($q$
+                    SELECT * FROM (
+                        %s
+                    ) total
+                    $q$,
+                    string_agg(
+                        format($q$ SELECT * FROM ( %s ) AS sub $q$, p),
+                        '
+                        UNION ALL
+                        '
+                    )
+                ))
+            ELSE NULL
+            END FROM p;
+    RETURN curs;
 END;
 $$ LANGUAGE PLPGSQL;

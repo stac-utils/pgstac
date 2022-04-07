@@ -9,7 +9,9 @@ from functools import lru_cache
 from typing import (
     Any,
     BinaryIO,
+    Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Tuple,
@@ -132,29 +134,40 @@ def dict_minus(a: dict, b: dict) -> dict:
     return out
 
 
-def read_json(file: str) -> Iterable:
+def read_json(file: Union[str, Iterator[Any]] = "stdin") -> Iterable:
     """Load data from an ndjson or json file."""
-    open_file: Any = open_std(file, "r")
-    with open_file as f:
-        # Try reading line by line as ndjson
-        try:
-            for line in f:
-                line = line.strip().replace("\\\\", "\\").replace("\\\\", "\\")
-                yield orjson.loads(line)
-        except JSONDecodeError:
-            # If reading first line as json fails, try reading entire file
-            logging.info("First line could not be parsed as json, trying full file.")
+    if file is None:
+        file = "stdin"
+    if isinstance(file, str):
+        open_file: Any = open_std(file, "r")
+        with open_file as f:
+            # Try reading line by line as ndjson
             try:
-                f.seek(0)
-                json = orjson.loads(f.read())
-                if isinstance(json, list):
-                    for record in json:
-                        yield record
-                else:
-                    yield json
+                for line in f:
+                    line = line.strip().replace("\\\\", "\\").replace("\\\\", "\\")
+                    yield orjson.loads(line)
             except JSONDecodeError:
-                logging.info("File cannot be read as json")
-                raise
+                # If reading first line as json fails, try reading entire file
+                logging.info(
+                    "First line could not be parsed as json, trying full file."
+                )
+                try:
+                    f.seek(0)
+                    json = orjson.loads(f.read())
+                    if isinstance(json, list):
+                        for record in json:
+                            yield record
+                    else:
+                        yield json
+                except JSONDecodeError:
+                    logging.info("File cannot be read as json")
+                    raise
+    elif isinstance(file, Iterable):
+        for line in file:
+            if isinstance(line, Dict):
+                yield line
+            else:
+                yield orjson.loads(line)
 
 
 @dataclass
@@ -162,7 +175,6 @@ class Loader:
     """Utilities for loading data."""
 
     db: PgstacDB
-    minimizeproj: Optional[bool] = False
 
     @lru_cache
     def collection_json(self, collection_id: str) -> Tuple[dict, int, str]:
@@ -209,6 +221,8 @@ class Loader:
                         SELECT content FROM tmp_collections;
                         """
                     )
+                    logging.debug(cur.statusmessage)
+                    logging.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in ("insert_ignore", "ignore"):
                     cur.execute(
                         """
@@ -217,6 +231,8 @@ class Loader:
                         ON CONFLICT DO NOTHING;
                         """
                     )
+                    logging.debug(cur.statusmessage)
+                    logging.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode == "upsert":
                     cur.execute(
                         """
@@ -226,6 +242,8 @@ class Loader:
                         UPDATE SET content=EXCLUDED.content;
                         """
                     )
+                    logging.debug(cur.statusmessage)
+                    logging.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, and upsert."
@@ -295,6 +313,8 @@ class Loader:
                         for item in items:
                             item.pop("partition")
                             copy.write_row(list(item.values()))
+                    logging.debug(cur.statusmessage)
+                    logging.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
                     "ignore_dupes",
                     "upsert",
@@ -318,6 +338,9 @@ class Loader:
                         for item in items:
                             item.pop("partition")
                             copy.write_row(list(item.values()))
+                    logging.debug(cur.statusmessage)
+                    logging.debug(f"Copied rows: {cur.rowcount}")
+
                     cur.execute(
                         sql.SQL(
                             """
@@ -335,11 +358,13 @@ class Loader:
                                 """
                             ).format(sql.Identifier(partition["partition"]))
                         )
+                        logging.debug(cur.statusmessage)
+                        logging.debug(f"Rows affected: {cur.rowcount}")
                     elif insert_mode == "upsert":
                         cur.execute(
                             sql.SQL(
                                 """
-                                INSERT INTO {} SELECT * FROM items_ingest_temp
+                                INSERT INTO {} AS t SELECT * FROM items_ingest_temp
                                 ON CONFLICT (id) DO UPDATE
                                 SET
                                     datetime = EXCLUDED.datetime,
@@ -347,10 +372,13 @@ class Loader:
                                     geometry = EXCLUDED.geometry,
                                     collection = EXCLUDED.collection,
                                     content = EXCLUDED.content
+                                WHERE t IS DISTINCT FROM EXCLUDED
                                 ;
                             """
                             ).format(sql.Identifier(partition["partition"]))
                         )
+                        logging.debug(cur.statusmessage)
+                        logging.debug(f"Rows affected: {cur.rowcount}")
                     elif insert_mode == "delsert":
                         cur.execute(
                             sql.SQL(
@@ -372,6 +400,8 @@ class Loader:
                             """
                             ).format(sql.Identifier(partition["partition"]))
                         )
+                        logging.debug(cur.statusmessage)
+                        logging.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, upsert, and delsert."
@@ -463,8 +493,14 @@ class Loader:
         edt = properties.get("end_datetime")
         sdt = properties.get("start_datetime")
 
-        out["datetime"] = min(p for p in [dt, edt, sdt] if p is not None)
-        out["end_datetime"] = max(p for p in [dt, edt, sdt] if p is not None)
+        if edt is not None and sdt is not None:
+            out["datetime"] = sdt
+            out["end_datetime"] = edt
+        elif dt is not None:
+            out["datetime"] = dt
+            out["end_datetime"] = dt
+        else:
+            raise Exception("Invalid datetime encountered")
 
         if out["datetime"] is None or out["end_datetime"] is None:
             raise Exception(

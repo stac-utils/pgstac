@@ -174,10 +174,10 @@ def test_partition_loads_month(loader: Loader) -> None:
         str(TEST_COLLECTIONS_JSON),
         insert_mode=Methods.ignore,
     )
-
-    loader.db.connection.execute('''
-        UPDATE collections SET partition_trunc='month';
-    ''')
+    if loader.db.connection is not None:
+        loader.db.connection.execute('''
+            UPDATE collections SET partition_trunc='month';
+        ''')
 
     loader.load_items(
         str(TEST_ITEMS),
@@ -197,10 +197,10 @@ def test_partition_loads_year(loader: Loader) -> None:
         str(TEST_COLLECTIONS_JSON),
         insert_mode=Methods.ignore,
     )
-
-    loader.db.connection.execute('''
-        UPDATE collections SET partition_trunc='year';
-    ''')
+    if loader.db.connection is not None:
+        loader.db.connection.execute('''
+            UPDATE collections SET partition_trunc='year';
+        ''')
 
     loader.load_items(
         str(TEST_ITEMS),

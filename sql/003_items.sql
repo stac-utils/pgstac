@@ -57,37 +57,65 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
 $$ LANGUAGE SQL STABLE;
 
 
+CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
+DECLARE
+    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
+    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+BEGIN
+    IF f IS NULL THEN
+        RETURN NULL;
+    ELSIF jsonb_array_length(includes)>0 AND includes ? f THEN
+        RETURN TRUE;
+    ELSIF jsonb_array_length(excludes)>0 AND excludes ? f THEN
+        RETURN FALSE;
+    ELSIF jsonb_array_length(includes)>0 AND NOT includes ? f THEN
+        RETURN FALSE;
+    END IF;
+    RETURN TRUE;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE;
+
+
 CREATE OR REPLACE FUNCTION key_filter(IN k text, IN val jsonb, INOUT kf jsonb, OUT include boolean) AS $$
 DECLARE
     includes jsonb := coalesce(kf->'includes', kf->'include', '[]'::jsonb);
     excludes jsonb := coalesce(kf->'excludes', kf->'exclude', '[]'::jsonb);
 BEGIN
+    RAISE NOTICE '% % %', k, val, kf;
+
     include := TRUE;
     IF k = 'properties' AND NOT excludes ? 'properties' THEN
-        RETURN;
-    ELSIF
-        k = 'assets'
-        AND NOT excludes ? k
-        AND (jsonb_array_length(includes) = 0 OR includes ? k)
-        AND NOT val @? '$.*.href'
-    THEN
-        include := FALSE;
-        RETURN;
+        RAISE NOTICE 'Properties and not excluded';
+        excludes := excludes || '["properties"]';
+        include := TRUE;
+        RAISE NOTICE 'Prop include %', include;
     ELSIF
         jsonb_array_length(excludes)>0 AND excludes ? k THEN
+        RAISE NOTICE 'Excludes set and key is in excludes.';
         include := FALSE;
-        RETURN;
     ELSIF
         jsonb_array_length(includes)>0 AND NOT includes ? k THEN
+        RAISE NOTICE 'Includes set and key is not in includes.';
         include := FALSE;
-        RETURN;
     ELSIF
         jsonb_array_length(includes)>0 AND includes ? k THEN
-        kf := kf - '{includes,include}'::text[];
+        RAISE NOTICE 'Includes set and key is in includes';
+        includes := includes - k;
+        -- kf := kf - '{includes,include}'::text[];
+        RAISE NOTICE 'KF: %', kf;
     END IF;
+    kf := jsonb_build_object('includes', includes, 'excludes', excludes);
+    RAISE NOTICE 'INCLUDE: %, KF: %', include, kf;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION strip_assets(a jsonb) RETURNS jsonb AS $$
+    WITH t AS (SELECT * FROM jsonb_each(a))
+    SELECT jsonb_object_agg(key, value) FROM t
+    WHERE value ? 'href';
+$$ LANGUAGE SQL IMMUTABLE STRICT;
 
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item jsonb,
@@ -98,12 +126,23 @@ CREATE OR REPLACE FUNCTION content_hydrate(
         jsonb_strip_nulls(jsonb_object_agg(
             key,
             CASE
+                WHEN key = 'properties' AND include_field('properties', fields) THEN
+                    i.value
+                WHEN key = 'properties' THEN
+                    content_hydrate(i.value, c.value, kf)
                 WHEN
                     c.value IS NULL AND key != 'properties'
                 THEN i.value
                 WHEN
+                    key = 'assets'
+                    AND
                     jsonb_typeof(c.value) = 'object'
-                    OR
+                    AND
+                    jsonb_typeof(i.value) = 'object'
+                THEN strip_assets(content_hydrate(i.value, c.value, kf))
+                WHEN
+                    jsonb_typeof(c.value) = 'object'
+                    AND
                     jsonb_typeof(i.value) = 'object'
                 THEN content_hydrate(i.value, c.value, kf)
                 ELSE coalesce(i.value, c.value)
@@ -120,56 +159,22 @@ CREATE OR REPLACE FUNCTION content_hydrate(
     ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-DECLARE
-    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
-    geom jsonb;
-    bbox jsonb;
-    output jsonb;
-    content jsonb;
-    base_item jsonb := collection_base_item(_item.collection);
-BEGIN
-    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
-        geom := ST_ASGeoJson(_item.geometry)::json;
-    END IF;
 
-    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
-        geom := geom_bbox(_item.geometry)::json;
-    END IF;
-
-    output := content_hydrate(
-            jsonb_build_object(
-                'id', _item.id,
-                'geometry', geom,
-                'bbox',bbox,
-                'collection', _item.collection
-            ) || _item.content,
-            collection_base_item(_item.collection),
-            fields
-        );
-
-    RETURN output;
-END;
-$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
-    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
     geom jsonb;
     bbox jsonb;
     output jsonb;
     content jsonb;
+    base_item jsonb := _collection.base_item;
 BEGIN
-    IF includes ? 'geometry' AND NOT excludes ? 'geometry' THEN
-        geom := ST_ASGeoJson(_item.geometry)::json;
+    IF include_field('geometry', fields) THEN
+        geom := ST_ASGeoJson(_item.geometry)::jsonb;
     END IF;
-
-    IF includes ? 'bbox' AND NOT excludes ? 'bbox' THEN
-        geom := geom_bbox(_item.geometry)::json;
+    IF include_field('bbox', fields) THEN
+        bbox := geom_bbox(_item.geometry)::jsonb;
     END IF;
-
     output := content_hydrate(
             jsonb_build_object(
                 'id', _item.id,
@@ -184,6 +189,14 @@ BEGIN
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+    SELECT content_hydrate(
+        _item,
+        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
+        fields
+    );
+$$ LANGUAGE SQL STABLE;
 
 
 CREATE UNLOGGED TABLE items_staging (
@@ -203,19 +216,27 @@ DECLARE
     ts timestamptz := clock_timestamp();
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
-    WITH p AS (
+    WITH ranges AS (
         SELECT
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            (partition_name(content->>'collection', date_trunc('month', stac_datetime(content)))).partition_name as name
+            n.content->>'collection' as collection,
+            stac_daterange(n.content->'properties') as dtr
         FROM newdata n
+    ), p AS (
+        SELECT
+            collection,
+            lower(dtr) as datetime,
+            upper(dtr) as end_datetime,
+            (partition_name(
+                collection,
+                lower(dtr)
+            )).partition_name as name
+        FROM ranges
     )
     INSERT INTO partitions (collection, datetime_range, end_datetime_range)
         SELECT
             collection,
-            tstzrange(min(datetime), max(datetime)) as datetime_range,
-            tstzrange(min(end_datetime), max(end_datetime)) as end_datetime_range
+            tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
+            tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
         FROM p
             GROUP BY collection, name
         ON CONFLICT (name) DO UPDATE SET
@@ -283,11 +304,11 @@ BEGIN
     SELECT * INTO i FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection) LIMIT 1;
     RETURN i;
 END;
-$$ LANGUAGE PLPGSQL STABLE;
+$$ LANGUAGE PLPGSQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text, _collection text DEFAULT NULL) RETURNS jsonb AS $$
     SELECT content_hydrate(items) FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection);
-$$ LANGUAGE SQL STABLE;
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION delete_item(_id text, _collection text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
@@ -297,7 +318,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE;
 
-
+--/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
     INSERT INTO items_staging (content) VALUES (data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
@@ -305,19 +326,11 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 CREATE OR REPLACE FUNCTION update_item(content jsonb) RETURNS VOID AS $$
 DECLARE
+    old items %ROWTYPE;
     out items%ROWTYPE;
 BEGIN
-    UPDATE items
-    SET
-        geometry = stac_geom(content),
-        datetime = stac_datetime(content),
-        end_datetime = stac_end_datetime(content),
-        content = content_slim(content)
-    WHERE
-        id = content->>'id'
-        AND
-        collection = content->>'collection'
-    RETURNING * INTO STRICT out;
+    SELECT delete_item(content->>'id', content->>'collection');
+    SELECT create_item(content);
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 

@@ -91,6 +91,7 @@ BEGIN
             scancounter := scancounter + 1;
 
         END LOOP;
+        CLOSE curs;
         EXIT WHEN exit_flag;
         remaining_limit := _scanlimit - scancounter;
     END LOOP;

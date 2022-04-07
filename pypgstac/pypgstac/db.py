@@ -91,12 +91,10 @@ class PgstacDB:
 
     def open(self) -> None:
         """Open database pool connection."""
-        print("open")
         self.get_pool()
 
     def close(self) -> None:
         """Close database pool connection."""
-        print("close")
         if self.pool is not None:
             self.pool.close()
 
@@ -112,7 +110,6 @@ class PgstacDB:
 
     def wait(self) -> None:
         """Block until database connection is ready."""
-        print("wait")
         cnt: int = 0
         while cnt < 60:
             try:
@@ -130,6 +127,8 @@ class PgstacDB:
             if self.commit_on_exit:
                 if self.connection is not None:
                     self.connection.commit()
+                if self.connection is not None:
+                    self.connection.rollback()
         except:
             pass
         try:
@@ -219,6 +218,8 @@ class PgstacDB:
                 return version
         except psycopg.errors.UndefinedTable:
             logging.debug("PGStac is not installed.")
+            if self.connection is not None:
+                self.connection.rollback()
         return None
 
     @property
@@ -235,6 +236,8 @@ class PgstacDB:
                 raise Exception("PGStac requires PostgreSQL 13+")
             return version
         else:
+            if self.connection is not None:
+                self.connection.rollback()
             raise Exception("Could not find PG version.")
 
     def func(self, function_name: str, *args: Any) -> Generator:
