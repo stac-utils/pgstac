@@ -195,7 +195,7 @@ class Loader:
 
     def load_collections(
         self,
-        file: Optional[str] = "stdin",
+        file: Union[str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
@@ -413,7 +413,7 @@ class Loader:
 
     def load_items(
         self,
-        file: Optional[str] = "stdin",
+        file: Union[str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load items json records."""
