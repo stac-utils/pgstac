@@ -161,9 +161,11 @@ def test_partition_loads_default(loader: Loader) -> None:
         insert_mode=Methods.insert,
     )
 
-    partitions = loader.db.query_one('''
+    partitions = loader.db.query_one(
+        """
         SELECT count(*) from partitions;
-    ''')
+    """
+    )
 
     assert partitions == 1
 
@@ -175,18 +177,22 @@ def test_partition_loads_month(loader: Loader) -> None:
         insert_mode=Methods.ignore,
     )
     if loader.db.connection is not None:
-        loader.db.connection.execute('''
+        loader.db.connection.execute(
+            """
             UPDATE collections SET partition_trunc='month';
-        ''')
+        """
+        )
 
     loader.load_items(
         str(TEST_ITEMS),
         insert_mode=Methods.insert,
     )
 
-    partitions = loader.db.query_one('''
+    partitions = loader.db.query_one(
+        """
         SELECT count(*) from partitions;
-    ''')
+    """
+    )
 
     assert partitions == 2
 
@@ -198,17 +204,21 @@ def test_partition_loads_year(loader: Loader) -> None:
         insert_mode=Methods.ignore,
     )
     if loader.db.connection is not None:
-        loader.db.connection.execute('''
+        loader.db.connection.execute(
+            """
             UPDATE collections SET partition_trunc='year';
-        ''')
+        """
+        )
 
     loader.load_items(
         str(TEST_ITEMS),
         insert_mode=Methods.insert,
     )
 
-    partitions = loader.db.query_one('''
+    partitions = loader.db.query_one(
+        """
         SELECT count(*) from partitions;
-    ''')
+    """
+    )
 
     assert partitions == 1

@@ -28,7 +28,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     flake8 pypgstac/pypgstac pypgstac/tests
 
     echo "Running unit tests..."
-    python -m unittest discover pypgstac/tests
+    pytest pypgstac/tests
 
     echo "Checking if there are any staged migrations."
     find /opt/src/pypgstac/pypgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }

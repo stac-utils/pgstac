@@ -25,7 +25,7 @@ tenacity = "^8.0.1"
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
 flake8 = "^3.9.2"
-black = "^21.7b0"
+black = ">=21.7b0"
 mypy = "^0.910"
 types-orjson = "^0.1.1"
 
