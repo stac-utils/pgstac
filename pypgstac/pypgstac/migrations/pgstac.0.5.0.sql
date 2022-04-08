@@ -320,6 +320,7 @@ DECLARE
     partition_exists boolean := false;
     partition_empty boolean := true;
     err_context text;
+    loadtemp boolean := FALSE;
 BEGIN
     RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
     SELECT relid::text INTO partition_name
@@ -340,6 +341,19 @@ BEGIN
             partition_name
         );
         EXECUTE q;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_exists AND NOT partition_empty THEN
+        q := format($q$
+            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+            DROP TABLE IF EXISTS %I CASCADE;
+            $q$,
+            partition_name,
+            partition_name
+        );
+        EXECUTE q;
+        loadtemp := TRUE;
+        partition_empty := TRUE;
+        partition_exists := FALSE;
     END IF;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS NOT DISTINCT FROM OLD.partition_trunc THEN
         RETURN NEW;
@@ -374,7 +388,6 @@ BEGIN
         END;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
         INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
-        RETURN NEW;
     ELSIF partition_empty THEN
         q := format($q$
             CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L)
@@ -396,18 +409,51 @@ BEGIN
             RAISE INFO 'Error Context:%', err_context;
         END;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
-        RETURN NEW;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
     END IF;
-    RETURN NULL;
+    IF loadtemp THEN
+        RAISE NOTICE 'Moving data into new partitions.';
+         q := format($q$
+            WITH p AS (
+                SELECT
+                    collection,
+                    datetime as datetime,
+                    end_datetime as end_datetime,
+                    (partition_name(
+                        collection,
+                        datetime
+                    )).partition_name as name
+                FROM changepartitionstaging
+            )
+            INSERT INTO partitions (collection, datetime_range, end_datetime_range)
+                SELECT
+                    collection,
+                    tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
+                    tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
+                FROM p
+                    GROUP BY collection, name
+                ON CONFLICT (name) DO UPDATE SET
+                    datetime_range = EXCLUDED.datetime_range,
+                    end_datetime_range = EXCLUDED.end_datetime_range
+            ;
+            INSERT INTO %I SELECT * FROM changepartitionstaging;
+            DROP TABLE IF EXISTS changepartitionstaging;
+            $q$,
+            partition_name
+        );
+        EXECUTE q;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 
 CREATE TRIGGER collections_trigger AFTER INSERT OR UPDATE ON collections FOR EACH ROW
 EXECUTE FUNCTION collections_trigger_func();
 
-
+CREATE OR REPLACE FUNCTION partition_collection(collection text, strategy partition_trunc_strategy) RETURNS text AS $$
+    UPDATE collections SET partition_trunc=strategy WHERE id=collection RETURNING partition_trunc;
+$$ LANGUAGE SQL;
 
 CREATE TABLE IF NOT EXISTS partitions (
     collection text REFERENCES collections(id),
@@ -467,6 +513,7 @@ DECLARE
     q text;
     cq text;
     parent_name text;
+    partition_trunc text;
     partition_name text := NEW.name;
     partition_exists boolean := false;
     partition_empty boolean := true;
@@ -484,11 +531,17 @@ DECLARE
     t_maxedt timestamptz;
 BEGIN
     RAISE NOTICE 'Partitions Trigger. %', NEW;
-    RAISE NOTICE 'I % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
     datetime_range := NEW.datetime_range;
     end_datetime_range := NEW.end_datetime_range;
 
-    SELECT format('_items_%s', key) INTO parent_name FROM pgstac.collections WHERE collections.id = NEW.collection;
+    SELECT
+        format('_items_%s', key),
+        c.partition_trunc::text
+    INTO
+        parent_name,
+        partition_trunc
+    FROM pgstac.collections c
+    WHERE c.id = NEW.collection;
     SELECT (pgstac.partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
     NEW.name := partition_name;
 
@@ -505,7 +558,6 @@ BEGIN
         NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
         NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
     END IF;
-    RAISE NOTICE 'U % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
     IF TG_OP = 'INSERT' THEN
 
         IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
@@ -549,9 +601,14 @@ BEGIN
     INTO t_mindt, t_maxdt, t_minedt, t_maxedt;
     mindt := least(mindt, t_mindt);
     maxdt := greatest(maxdt, t_maxdt);
-    minedt := least(minedt, t_minedt);
-    maxedt := greatest(maxedt, t_maxedt);
-    RAISE NOTICE 'F % % % % % % % %', mindt, t_mindt, maxdt, t_maxdt, minedt, t_minedt, maxedt, t_maxedt;
+    minedt := least(mindt, minedt, t_minedt);
+    maxedt := greatest(maxdt, maxedt, t_maxedt);
+
+    mindt := date_trunc(coalesce(partition_trunc, 'year'), mindt);
+    maxdt := date_trunc(coalesce(partition_trunc, 'year'), maxdt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
+    minedt := date_trunc(coalesce(partition_trunc, 'year'), minedt);
+    maxedt := date_trunc(coalesce(partition_trunc, 'year'), maxedt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
+
 
     IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
         NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
@@ -559,31 +616,59 @@ BEGIN
         IF
             TG_OP='UPDATE'
             AND OLD.datetime_range @> NEW.datetime_range
-            AND OLD.end_datetime_range @> NEW.end_datetime_range THEN
+            AND OLD.end_datetime_range @> NEW.end_datetime_range
+        THEN
             RAISE NOTICE 'Range unchanged, not updating constraints.';
         ELSE
-            cq := format($q$
-                ALTER TABLE %7$I
-                    DROP CONSTRAINT IF EXISTS %1$I,
-                    DROP CONSTRAINT IF EXISTS %2$I,
-                    ADD CONSTRAINT %1$I
-                        CHECK ((datetime >= %3$L) AND (datetime <= %4$L)) NOT VALID,
-                    ADD CONSTRAINT %2$I
-                        CHECK ((end_datetime >= %5$L) AND (end_datetime <= %6$L)) NOT VALID
-                ;
-                ALTER TABLE %7$I
-                    VALIDATE CONSTRAINT %1$I;
-                ALTER TABLE %7$I
-                    VALIDATE CONSTRAINT %2$I;
-                $q$,
-                format('%s_dt', partition_name),
-                format('%s_edt', partition_name),
-                date_trunc('month', mindt),
-                date_trunc('month', maxdt) + '1 month'::interval,
-                date_trunc('month', minedt),
-                date_trunc('month', maxedt) + '1 month'::interval,
-                partition_name
-            );
+
+            RAISE NOTICE '
+                SETTING CONSTRAINTS
+                    mindt:  %, maxdt:  %
+                    minedt: %, maxedt: %
+                ', mindt, maxdt, minedt, maxedt;
+            IF partition_trunc IS NULL THEN
+                cq := format($q$
+                    ALTER TABLE %7$I
+                        DROP CONSTRAINT IF EXISTS %1$I,
+                        DROP CONSTRAINT IF EXISTS %2$I,
+                        ADD CONSTRAINT %1$I
+                            CHECK (
+                                (datetime >= %3$L)
+                                AND (datetime <= %4$L)
+                                AND (end_datetime >= %5$L)
+                                AND (end_datetime <= %6$L)
+                            ) NOT VALID
+                    ;
+                    ALTER TABLE %7$I
+                        VALIDATE CONSTRAINT %1$I;
+                    $q$,
+                    format('%s_dt', partition_name),
+                    format('%s_edt', partition_name),
+                    mindt,
+                    maxdt,
+                    minedt,
+                    maxedt,
+                    partition_name
+                );
+            ELSE
+                cq := format($q$
+                    ALTER TABLE %5$I
+                        DROP CONSTRAINT IF EXISTS %1$I,
+                        DROP CONSTRAINT IF EXISTS %2$I,
+                        ADD CONSTRAINT %2$I
+                            CHECK ((end_datetime >= %3$L) AND (end_datetime <= %4$L)) NOT VALID
+                    ;
+                    ALTER TABLE %5$I
+                        VALIDATE CONSTRAINT %2$I;
+                    $q$,
+                    format('%s_dt', partition_name),
+                    format('%s_edt', partition_name),
+                    minedt,
+                    maxedt,
+                    partition_name
+                );
+
+            END IF;
             RAISE NOTICE 'Altering Constraints. %', cq;
             EXECUTE cq;
         END IF;
@@ -596,14 +681,10 @@ BEGIN
                 DROP CONSTRAINT IF EXISTS %1$I,
                 DROP CONSTRAINT IF EXISTS %2$I,
                 ADD CONSTRAINT %1$I
-                    CHECK ((datetime IS NULL)) NOT VALID,
-                ADD CONSTRAINT %2$I
-                    CHECK ((end_datetime IS NULL)) NOT VALID
+                    CHECK ((datetime IS NULL AND end_datetime IS NULL)) NOT VALID
             ;
             ALTER TABLE %3$I
                 VALIDATE CONSTRAINT %1$I;
-            ALTER TABLE %3$I
-                VALIDATE CONSTRAINT %2$I;
             $q$,
             format('%s_dt', partition_name),
             format('%s_edt', partition_name),
@@ -1325,27 +1406,21 @@ BEGIN
 
     include := TRUE;
     IF k = 'properties' AND NOT excludes ? 'properties' THEN
-        RAISE NOTICE 'Properties and not excluded';
         excludes := excludes || '["properties"]';
         include := TRUE;
         RAISE NOTICE 'Prop include %', include;
     ELSIF
         jsonb_array_length(excludes)>0 AND excludes ? k THEN
-        RAISE NOTICE 'Excludes set and key is in excludes.';
         include := FALSE;
     ELSIF
         jsonb_array_length(includes)>0 AND NOT includes ? k THEN
-        RAISE NOTICE 'Includes set and key is not in includes.';
         include := FALSE;
     ELSIF
         jsonb_array_length(includes)>0 AND includes ? k THEN
-        RAISE NOTICE 'Includes set and key is in includes';
         includes := includes - k;
-        -- kf := kf - '{includes,include}'::text[];
         RAISE NOTICE 'KF: %', kf;
     END IF;
     kf := jsonb_build_object('includes', includes, 'excludes', excludes);
-    RAISE NOTICE 'INCLUDE: %, KF: %', include, kf;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;

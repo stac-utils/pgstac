@@ -85,27 +85,21 @@ BEGIN
 
     include := TRUE;
     IF k = 'properties' AND NOT excludes ? 'properties' THEN
-        RAISE NOTICE 'Properties and not excluded';
         excludes := excludes || '["properties"]';
         include := TRUE;
         RAISE NOTICE 'Prop include %', include;
     ELSIF
         jsonb_array_length(excludes)>0 AND excludes ? k THEN
-        RAISE NOTICE 'Excludes set and key is in excludes.';
         include := FALSE;
     ELSIF
         jsonb_array_length(includes)>0 AND NOT includes ? k THEN
-        RAISE NOTICE 'Includes set and key is not in includes.';
         include := FALSE;
     ELSIF
         jsonb_array_length(includes)>0 AND includes ? k THEN
-        RAISE NOTICE 'Includes set and key is in includes';
         includes := includes - k;
-        -- kf := kf - '{includes,include}'::text[];
         RAISE NOTICE 'KF: %', kf;
     END IF;
     kf := jsonb_build_object('includes', includes, 'excludes', excludes);
-    RAISE NOTICE 'INCLUDE: %, KF: %', include, kf;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
