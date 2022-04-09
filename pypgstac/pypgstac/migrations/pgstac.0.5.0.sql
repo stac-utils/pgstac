@@ -1417,7 +1417,7 @@ BEGIN
         include := FALSE;
     ELSIF
         jsonb_array_length(includes)>0 AND includes ? k THEN
-        includes := includes - k;
+        includes := '[]'::jsonb;
         RAISE NOTICE 'KF: %', kf;
     END IF;
     kf := jsonb_build_object('includes', includes, 'excludes', excludes);
