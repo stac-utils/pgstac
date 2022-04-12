@@ -105,7 +105,7 @@ class PgstacDB:
             self.connection = pool.getconn()
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
-        atexit.register(self.disconnect)
+            atexit.register(self.disconnect)
         return self.connection
 
     def wait(self) -> None:
