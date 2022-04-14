@@ -19,6 +19,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     docker-compose \
         -f docker-compose.yml \
         run --rm dev \
-        bash -c "pypgstac pgready && pypgstac migrate"
+        bash -c "pypgstac pgready && pypgstac migrate --debug"
 
 fi

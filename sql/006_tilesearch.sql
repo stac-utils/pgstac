@@ -17,7 +17,7 @@ DECLARE
     _where text;
     query text;
     iter_record items%ROWTYPE;
-    out_records jsonb[] := '{}'::jsonb[];
+    out_records jsonb := '{}'::jsonb[];
     exit_flag boolean := FALSE;
     counter int := 1;
     scancounter int := 1;
@@ -31,6 +31,9 @@ DECLARE
     includes text[];
 
 BEGIN
+    DROP TABLE IF EXISTS pgstac_results;
+    CREATE TEMP TABLE pgstac_results (content jsonb) ON COMMIT DROP;
+
     -- If skipcovered is true then you will always want to exit when the passed in geometry is full
     IF skipcovered THEN
         exitwhenfull := TRUE;
@@ -45,26 +48,11 @@ BEGIN
     tilearea := st_area(geom);
     _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
 
-    IF fields IS NOT NULL THEN
-        IF fields ? 'fields' THEN
-            fields := fields->'fields';
-        END IF;
-        IF fields ? 'exclude' THEN
-            excludes=textarr(fields->'exclude');
-        END IF;
-        IF fields ? 'include' THEN
-            includes=textarr(fields->'include');
-            IF array_length(includes, 1)>0 AND NOT 'id' = ANY (includes) THEN
-                includes = includes || '{id}';
-            END IF;
-        END IF;
-    END IF;
-    RAISE NOTICE 'fields: %, includes: %, excludes: %', fields, includes, excludes;
 
     FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
         query := format('%s LIMIT %L', query, remaining_limit);
         RAISE NOTICE '%', query;
-        curs = create_cursor(query);
+        OPEN curs FOR EXECUTE query;
         LOOP
             FETCH curs INTO iter_record;
             EXIT WHEN NOT FOUND;
@@ -88,12 +76,9 @@ BEGIN
 
                 RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             END IF;
+            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
+            INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
 
-            IF fields IS NOT NULL THEN
-                out_records := out_records || filter_jsonb(iter_record.content, includes, excludes);
-            ELSE
-                out_records := out_records || iter_record.content;
-            END IF;
             IF counter >= _limit
                 OR scancounter > _scanlimit
                 OR ftime() > _timelimit
@@ -106,13 +91,16 @@ BEGIN
             scancounter := scancounter + 1;
 
         END LOOP;
+        CLOSE curs;
         EXIT WHEN exit_flag;
         remaining_limit := _scanlimit - scancounter;
     END LOOP;
 
+    SELECT jsonb_agg(content) INTO out_records FROM pgstac_results WHERE content IS NOT NULL;
+
     RETURN jsonb_build_object(
         'type', 'FeatureCollection',
-        'features', array_to_json(out_records)::jsonb
+        'features', coalesce(out_records, '[]'::jsonb)
     );
 END;
 $$ LANGUAGE PLPGSQL;

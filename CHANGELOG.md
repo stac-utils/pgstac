@@ -1,4 +1,32 @@
 # Changelog
+## [v0.5.0]
+Version 0.5.0 is a major refactor of how data is stored. It is recommended to start a new database from scratch and to move data over rather than to use the inbuilt migration which will be very slow for larger amounts of data.
+
+### Fixed
+
+### Changed
+ - The partition layout has been changed from being hardcoded to a partition to week to using nested partitions. The first level is by collection, for each collection, there is an attribute partition_trunc which can be set to NULL (no temporal partitions), month, or year.
+
+ - CQL1 and Query Code have been refactored to translate to CQL2 to reduce duplicated code in query parsing.
+
+ - Unused functions have been stripped from the project.
+
+ - Pypgstac has been changed to use Fire rather than Typo.
+
+ - Pypgstac has been changed to use Psycopg3 rather than Asyncpg to enable easier use as both sync and async.
+
+ - Indexing has been reworked to eliminate indexes that from logs were not being used. The global json index on properties has been removed. Indexes on individual properties can be added either globally or per collection using the new queryables table.
+
+ - Triggers for maintaining partitions have been updated to reduce lock contention and to reflect the new data layout.
+
+ - The data pager which optimizes "order by datetime" searches has been updated to get time periods from the new partition layout and partition metadata.
+
+ - Tests have been updated to reflect the many changes.
+
+### Added
+
+ - On ingest, the content in an item is compared to the metadata available at the collection level and duplicate information is stripped out (this is primarily data in the item_assets property). Logic is added in to merge this data back in on data usage.
+
 ## [v0.4.5]
 
 ### Fixed

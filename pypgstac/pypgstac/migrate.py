@@ -3,12 +3,11 @@ import glob
 import os
 from collections import defaultdict
 from typing import Optional, Dict, List, Iterator, Any
-
-import asyncpg
-import typer
 from smart_open import open
+import logging
 
-from pypgstac import __version__ as version
+from .db import PgstacDB
+from . import __version__
 
 dirname = os.path.dirname(__file__)
 migrations_dir = os.path.join(dirname, "migrations")
@@ -17,7 +16,7 @@ migrations_dir = os.path.join(dirname, "migrations")
 class MigrationPath:
     """Calculate path from migration files to get from one version to the next."""
 
-    def __init__(self, path: str, f: str, t: str):
+    def __init__(self, path: str, f: str, t: str) -> None:
         """Initialize MigrationPath."""
         self.path = path
         if f is None:
@@ -78,7 +77,7 @@ class MigrationPath:
         path = self.build_path()
         if path is None:
             raise Exception(
-                "Could not determine path to get f %s to %s.", self.f, self.t
+                f"Could not determine path to get from {self.f} to {self.t}."
             )
         if len(path) == 1:
             return [f"pgstac.{path[0]}.sql"]
@@ -101,89 +100,59 @@ def get_sql(file: str) -> str:
     return "\n".join(sqlstrs)
 
 
-def get_initial_version() -> str:
-    """Get initial version available in migrations."""
-    return "0.1.9"
+class Migrate:
+    """Utilities for migrating pgstac database."""
 
+    def __init__(self, db: PgstacDB, schema: str = "pgstac"):
+        """Prepare for migration."""
+        self.db = db
+        self.schema = schema
 
-async def get_version(conn: asyncpg.Connection) -> str:
-    """Get the current version number from a pgstac database."""
-    async with conn.transaction():
-        try:
-            version = await conn.fetchval(
-                """
-                SELECT version from pgstac.migrations
-                order by datetime desc, version desc limit 1;
-                """
-            )
-        except asyncpg.exceptions.UndefinedTableError:
-            version = None
-    return version
+    def run_migration(self, toversion: Optional[str] = None) -> str:
+        """Migrate a pgstac database to current version."""
+        if toversion is None:
+            toversion = __version__
+        files = []
 
-
-async def check_pg_version(conn: asyncpg.Connection) -> str:
-    """Get the current pg version number from a pgstac database."""
-    async with conn.transaction():
-        version = await conn.fetchval(
-            """
-            SHOW server_version;
-            """
-        )
-        if int(version.split(".")[0]) < 13:
-            raise Exception("PGStac requires PostgreSQL 13+")
-        return version
-
-
-async def get_version_dsn(dsn: Optional[str] = None) -> str:
-    """Get current version from a specified database."""
-    conn = await asyncpg.connect(dsn=dsn)
-    version = await get_version(conn)
-    await conn.close()
-    return version
-
-
-async def run_migration(
-    dsn: Optional[str] = None, toversion: Optional[str] = None
-) -> str:
-    """Migrate a pgstac database to current version."""
-    if toversion is None:
-        toversion = version
-    files = []
-
-    conn = await asyncpg.connect(dsn=dsn)
-    pgversion = await check_pg_version(conn)
-    typer.echo(f"Migrating PGStac on PostgreSQL Version {pgversion}")
-    oldversion = await get_version(conn)
-    try:
+        pg_version = self.db.pg_version
+        logging.info(f"Migrating PGStac on PostgreSQL Version {pg_version}")
+        oldversion = self.db.version
         if oldversion == toversion:
-            typer.echo(f"Target database already at version: {toversion}")
-            await conn.close()
+            logging.info(f"Target database already at version: {toversion}")
             return toversion
         if oldversion is None:
-            typer.echo(
-                "**** You can ignore error above that says relation "
-                "pgstac.migrations does not exist *****"
-            )
-            typer.echo(f"No pgstac version set, installing {toversion} from scratch.")
+            logging.info(f"No pgstac version set, installing {toversion} from scratch.")
             files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
         else:
-            typer.echo(f"Migrating from {oldversion} to {toversion}.")
+            logging.info(f"Migrating from {oldversion} to {toversion}.")
             m = MigrationPath(migrations_dir, oldversion, toversion)
             files = m.migrations()
 
         if len(files) < 1:
             raise Exception("Could not find migration files")
 
-        typer.echo(f"Running migrations for {files}.")
+        conn = self.db.connect()
 
-        for file in files:
-            migration_sql = get_sql(file)
-            async with conn.transaction():
-                await conn.execute(migration_sql)
+        with conn.cursor() as cur:
+            for file in files:
+                logging.debug(f"Running migration file {file}.")
+                migration_sql = get_sql(file)
+                cur.execute(migration_sql)
+                logging.debug(cur.statusmessage)
+                logging.debug(cur.rowcount)
 
-        newversion = await get_version(conn)
-        await conn.close()
+            logging.debug(f"Database migrated to {toversion}")
+
+        newversion = self.db.version
+        if conn is not None:
+            if newversion == toversion:
+                conn.commit()
+            else:
+                conn.rollback()
+                raise Exception(
+                    "Migration failed, database rolled back to previous state."
+                )
+
+        logging.debug(f"New Version: {newversion}")
 
         return newversion
-    finally:
-        await conn.close()
