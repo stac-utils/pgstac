@@ -1,5 +1,15 @@
 # Changelog
 ## [v0.5.0]
+
+### Fixed
+
+### Changed
+
+### Added
+
+ - Add conf item to search to allow returning results without hydrating. This allows an application using pgstac to shift the CPU load of rehydrating items from the database onto the application server.
+
+## [v0.5.0]
 Version 0.5.0 is a major refactor of how data is stored. It is recommended to start a new database from scratch and to move data over rather than to use the inbuilt migration which will be very slow for larger amounts of data.
 
 ### Fixed

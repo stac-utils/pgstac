@@ -89,6 +89,17 @@ ALTER ROLE <username> SET pgstac.context_estimated_cost TO '<estimated query cos
 ALTER ROLE <username> SET pgstac.context_stats_ttl TO '<an interval string ie "1 day" after which pgstac search will force recalculation of it's estimates>>';
 ```
 
+#### Runtime Configurations
+
+Runtime configuration of variables can be made with search by passing in configuration in the search json "conf" item.
+
+Runtime configuration is available for context, context_estimated_count, context_estimated_cost, context_stats_ttl, and nohydrate.
+
+The nohydrate conf item returns an unhydrated item bypassing the CPU intensive step of rehydrating data with data from the collection metadata. When using the nohydrate conf, the only fields that are respected in the fields extension are geometry and bbox.
+```sql
+SELECT search('{"conf":{"nohydrate"=true}}');
+```
+
 #### PGStac Partitioning
 By default PGStac partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
 ```sql
