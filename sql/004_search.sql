@@ -614,7 +614,12 @@ CREATE TEMP TABLE results (content jsonb) ON COMMIT DROP;
 -- hard codes ordering in the same order as the array of ids
 IF _search ? 'ids' THEN
     INSERT INTO results
-    SELECT content_hydrate(items, _search->'fields')
+    SELECT
+        CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
+            content_nonhydrated(items, _search->'fields');
+        ELSE
+            content_hydrate(items, _search->'fields');
+        END
     FROM items WHERE
         items.id = ANY(to_text_array(_search->'ids'))
         AND
@@ -655,7 +660,12 @@ ELSE
             FETCH curs into iter_record;
             EXIT WHEN NOT FOUND;
             cntr := cntr + 1;
-            last_record := content_hydrate(iter_record, _search->'fields');
+
+            IF _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
+                last_record := content_nonhydrated(iter_record, _search->'fields');
+            ELSE
+                last_record := content_hydrate(iter_record, _search->'fields');
+            END IF;
             IF cntr = 1 THEN
                 first_record := last_record;
             END IF;
