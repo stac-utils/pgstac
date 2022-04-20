@@ -616,9 +616,9 @@ IF _search ? 'ids' THEN
     INSERT INTO results
     SELECT
         CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
-            content_nonhydrated(items, _search->'fields');
+            content_nonhydrated(items, _search->'fields')
         ELSE
-            content_hydrate(items, _search->'fields');
+            content_hydrate(items, _search->'fields')
         END
     FROM items WHERE
         items.id = ANY(to_text_array(_search->'ids'))
