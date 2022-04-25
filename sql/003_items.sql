@@ -184,6 +184,31 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION content_nonhydrated(
+    _item items,
+    fields jsonb DEFAULT '{}'::jsonb
+) RETURNS jsonb AS $$
+DECLARE
+    geom jsonb;
+    bbox jsonb;
+    output jsonb;
+BEGIN
+    IF include_field('geometry', fields) THEN
+        geom := ST_ASGeoJson(_item.geometry)::jsonb;
+    END IF;
+    IF include_field('bbox', fields) THEN
+        bbox := geom_bbox(_item.geometry)::jsonb;
+    END IF;
+    output := jsonb_build_object(
+                'id', _item.id,
+                'geometry', geom,
+                'bbox',bbox,
+                'collection', _item.collection
+            ) || _item.content;
+    RETURN output;
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
     SELECT content_hydrate(
         _item,
