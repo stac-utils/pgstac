@@ -335,7 +335,7 @@ out items%ROWTYPE;
 BEGIN
     DELETE FROM items WHERE id = _id AND (_collection IS NULL OR collection=_collection) RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL STABLE;
+$$ LANGUAGE PLPGSQL;
 
 --/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
