@@ -6,7 +6,6 @@ with open("README.md") as f:
     desc = f.read()
 
 install_requires = [
-    "python>=3.7",
     "smart-open==4.2.*",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
@@ -39,7 +38,7 @@ setup(
         "Intended Audience :: Developers",
         "Intended Audience :: Information Technology",
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.7",
         "License :: OSI Approved :: MIT License",
     ],
     keywords="stac, postgres",
