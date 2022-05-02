@@ -2,6 +2,7 @@
 import contextlib
 import itertools
 import logging
+from pathlib import Path
 import sys
 import time
 from dataclasses import dataclass
@@ -134,7 +135,7 @@ def dict_minus(a: dict, b: dict) -> dict:
     return out
 
 
-def read_json(file: Union[str, Iterator[Any]] = "stdin") -> Iterable:
+def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
     """Load data from an ndjson or json file."""
     if file is None:
         file = "stdin"
@@ -195,7 +196,7 @@ class Loader:
 
     def load_collections(
         self,
-        file: Union[str, Iterator[Any]] = "stdin",
+        file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
@@ -413,7 +414,7 @@ class Loader:
 
     def load_items(
         self,
-        file: Union[str, Iterator[Any]] = "stdin",
+        file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load items json records."""
@@ -471,13 +472,13 @@ class Loader:
             f"Adding data to database took {time.perf_counter() - t} seconds."
         )
 
-    def format_item(self, _item: Union[str, dict]) -> dict:
+    def format_item(self, _item: Union[Path, str, dict]) -> dict:
         """Format an item to insert into a record."""
         out = {}
         item: dict
         if not isinstance(_item, dict):
             try:
-                item = orjson.loads(_item.replace("\\\\", "\\"))
+                item = orjson.loads(str(_item).replace("\\\\", "\\"))
             except:
                 raise Exception(f"Could not load {_item}")
         else:
@@ -521,7 +522,7 @@ class Loader:
         bbox = item.pop("bbox")
         geojson = item.pop("geometry")
         if geojson is None and bbox is not None:
-            pass
+            geometry = None
         else:
             geometry = str(Geometry.from_geojson(geojson).wkb)
         out["geometry"] = geometry

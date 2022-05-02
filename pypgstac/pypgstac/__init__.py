@@ -1,2 +1,4 @@
 """PyPGStac Version."""
-__version__ = "0.5.1"
+from pypgstac.version import __version__
+
+__all__ = ["__version__"]
