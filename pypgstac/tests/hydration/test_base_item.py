@@ -11,7 +11,7 @@ LANDSAT_COLLECTION = (
 )
 
 
-def test_lansat_c2_l1(loader: Loader) -> None:
+def test_landsat_c2_l1(loader: Loader) -> None:
     """Test that a base item is created when a collection is loaded and that it
     is equal to the item_assets of the collection"""
     with open(LANDSAT_COLLECTION) as f:

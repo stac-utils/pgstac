@@ -1,10 +1,11 @@
 from copy import deepcopy
 from typing import Any, Dict
 
-DO_NOT_MERGE_MARKER = "do-not-merge"
+# Marker value to indicate that a key should not be rehydrated
+DO_NOT_MERGE_MARKER = "𒍟※"
 
 
-def hydrate(item: Dict[str, Any], base_item: Dict[str, Any]) -> Dict[str, Any]:
+def hydrate(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
     """Hydrate item in-place with base_item properties.
 
     This will not perform a deep copy; values of the original item will be referenced
@@ -32,7 +33,12 @@ def hydrate(item: Dict[str, Any], base_item: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                 else:
                     # Key exists on item but isn't a dict or list, keep item value
-                    continue
+                    if i[key] == DO_NOT_MERGE_MARKER:
+                        # Key was marked as do-not-merge, drop it from the item
+                        del i[key]
+                    else:
+                        # Keep the item value
+                        continue
 
             else:
                 # Keys in base item that are not in item are simply copied over

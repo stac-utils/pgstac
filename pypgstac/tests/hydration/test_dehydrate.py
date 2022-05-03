@@ -16,15 +16,17 @@ LANDSAT_ITEM = (
     / ".."
     / "data-files"
     / "hydration"
-    / "items"
+    / "raw-items"
     / "landsat-c2-l1"
     / "LM04_L1GS_001001_19830527_02_T2.json"
 )
 
 
-def test_lansat_c2_l1(loader: Loader) -> None:
-    """Test that a base item is created when a collection is loaded and that it
-    is equal to the item_assets of the collection"""
+def test_landsat_c2_l1(loader: Loader) -> None:
+    """
+    Test that a dehydrated item is created properly from a raw item against a
+    base item from a collection
+    """
     with open(LANDSAT_COLLECTION) as f:
         collection = json.load(f)
     loader.load_collections(str(LANDSAT_COLLECTION))
@@ -135,8 +137,8 @@ def test_equal_len_list_of_mixed_types() -> None:
     assert dehydrated["a"] == [{"b3": 3}, "far", {"c3": 3}, "boo"]
 
 
-def test_unequal_list() -> None:
-    """Test that unequal lists preserve the item value exactly"""
+def test_unequal_len_list() -> None:
+    """Test that unequal length lists preserve the item value exactly"""
     base_item = {"a": [{"b1": 1}, {"c1": 1}, {"d1": 1}]}
     item = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
 

@@ -92,51 +92,6 @@ def open_std(
                 pass
 
 
-def name_array_asdict(na: List) -> dict:
-    """Create a dict from a list with key from name field."""
-    out = {}
-    for i in na:
-        out[i["name"]] = i
-    return out
-
-
-# def name_array_diff(a: List, b: List) -> List:
-#     """Diff an array by name attribute."""
-#     diff = dict_minus(name_array_asdict(a), name_array_asdict(b))
-#     vals = diff.values()
-#     return [v for v in vals if v != {}]
-
-
-# def dict_minus(a: dict, b: dict) -> dict:
-#     """Get a recursive difference between two dicts."""
-#     out: dict = {}
-#     for key, value in b.items():
-#         if isinstance(value, list):
-#             try:
-#                 arraydiff = name_array_diff(a[key], value)
-#                 if arraydiff is not None and arraydiff != []:
-#                     out[key] = arraydiff
-#                 continue
-#             except KeyError:
-#                 pass
-#             except TypeError:
-#                 pass
-
-#         if value is None or value == []:
-#             continue
-#         if a is None or key not in a:
-#             out[key] = value
-#             continue
-
-#         if a.get(key) != value:
-#             if isinstance(value, dict):
-#                 out[key] = dict_minus(a[key], value)
-#                 continue
-#             out[key] = value
-
-#     return out
-
-
 def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
     """Load data from an ndjson or json file."""
     if file is None:
