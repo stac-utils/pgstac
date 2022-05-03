@@ -441,7 +441,6 @@ class Loader:
         else:
             item = _item
 
-        print(item.keys())
         base_item, key, partition_trunc = self.collection_json(item["collection"])
 
         out["id"] = item.pop("id")
