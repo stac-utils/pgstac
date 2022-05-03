@@ -10,8 +10,6 @@ install_requires = [
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
-    "psycopg[binary]==3.0.*",
-    "psycopg-pool==3.1.*",
     "plpygis==0.2.*",
     "pydantic[dotenv]==1.9.*",
     "tenacity==8.0.*",
@@ -25,6 +23,10 @@ extra_reqs = {
         "mypy>=0.910",
         "types-orjson==0.1.1",
     ],
+    "psycopg": [
+     "psycopg[binary]==3.0.*",
+     "psycopg-pool==3.1.*",
+    ]
 }
 
 
@@ -50,6 +52,6 @@ setup(
     package_data={"": ["py.typed"], "migrations": ["pypgstac/migrations/pgstac*.sql"]},
     zip_safe=False,
     install_requires=install_requires,
-    tests_require=extra_reqs["dev"],
+    tests_require=[extra_reqs["dev"], extra_reqs["psycopg"]],
     extras_require=extra_reqs,
 )

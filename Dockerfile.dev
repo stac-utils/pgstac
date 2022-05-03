@@ -17,9 +17,8 @@ RUN mkdir -p /opt/src/pypgstac
 
 WORKDIR /opt/src/pypgstac
 
-
 COPY pypgstac /opt/src/pypgstac
-RUN pip3 install -e /opt/src/pypgstac[dev]
+RUN pip3 install -e /opt/src/pypgstac[dev,psycopg]
 
 ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
 

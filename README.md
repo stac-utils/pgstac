@@ -129,12 +129,18 @@ PyPGStac is available on PyPI
 ```
 pip install pypgstac
 ```
-Or can be built locally using Poetry
+
+By default, PyPGStac does not install the `psycopg` dependency. If you want the database driver installed, use:
+
+```
+pip install pypgstac[psycopg]
+```
+
+Or can be built locally
 ```
 git clone https://github.com/stac-utils/pgstac
 cd pgstac/pypgstac
-poetry build pypgstac
-pip install dist/pypgstac-[version]-py3-none-any.whl
+pip install .
 ```
 
 ```
