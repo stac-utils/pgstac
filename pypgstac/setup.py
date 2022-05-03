@@ -30,7 +30,7 @@ extra_reqs = {
 
 setup(
     name="pypgstac",
-    description="Planetary Computer Tasks framework.",
+    description="Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL",
     long_description=desc,
     long_description_content_type="text/markdown",
     python_requires=">=3.7",
@@ -44,7 +44,7 @@ setup(
     keywords="stac, postgres",
     author="David Bitner",
     author_email="bitner@dbspatial.com",
-    url="https://github.com/Microsoft/planetary-computer",
+    url="https://github.com/stac-utils/pgstac",
     license="MIT",
     packages=find_namespace_packages(exclude=["tests", "scripts"]),
     package_data={"": ["py.typed"], "migrations": ["pypgstac/migrations/pgstac*.sql"]},
