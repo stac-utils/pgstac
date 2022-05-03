@@ -209,7 +209,13 @@ pypgstac load items --method upsert
 
 ## Contribution & Development
 
-PGStac uses a dockerized development environment. You can set this up using:
+PGStac uses a dockerized development environment. However,
+it still needs a local install of pypgstac to allow an editable
+install inside the docker container. This is installed automatically
+if you have set up a virtual environment for the project. Otherwise
+you'll need to install a local copy yourself by running `scripts/install`.
+
+To build the docker images and set up the test database, use:
 
 ```bash
 scripts/setup
