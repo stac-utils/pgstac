@@ -348,8 +348,8 @@ DECLARE
     old items %ROWTYPE;
     out items%ROWTYPE;
 BEGIN
-    SELECT delete_item(content->>'id', content->>'collection');
-    SELECT create_item(content);
+    PERFORM delete_item(content->>'id', content->>'collection');
+    PERFORM create_item(content);
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 

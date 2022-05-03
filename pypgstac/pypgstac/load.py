@@ -35,6 +35,7 @@ from tenacity import (
 
 from .db import PgstacDB
 from enum import Enum
+import csv
 
 
 class Tables(str, Enum):
@@ -144,7 +145,11 @@ def read_json(file: Union[str, Iterator[Any]] = "stdin") -> Iterable:
             # Try reading line by line as ndjson
             try:
                 for line in f:
-                    line = line.strip().replace("\\\\", "\\").replace("\\\\", "\\")
+                    line = (
+                        line.strip()
+                        .replace("\\\\", "\\")
+                        .replace("\\\\", "\\")
+                    )
                     yield orjson.loads(line)
             except JSONDecodeError:
                 # If reading first line as json fails, try reading entire file
@@ -211,7 +216,9 @@ class Loader:
                     (content jsonb) ON COMMIT DROP;
                     """
                 )
-                with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
+                with cur.copy(
+                    "COPY tmp_collections (content) FROM stdin;"
+                ) as copy:
                     for collection in read_json(file):
                         copy.write_row((orjson.dumps(collection).decode(),))
                 if insert_mode is None or insert_mode == "insert":
@@ -438,10 +445,16 @@ class Loader:
             )
             partition["partition"] = item["partition"]
             partition["collection"] = item["collection"]
-            if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
+            if (
+                partition["mindt"] is None
+                or item["datetime"] < partition["mindt"]
+            ):
                 partition["mindt"] = item["datetime"]
 
-            if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
+            if (
+                partition["maxdt"] is None
+                or item["datetime"] > partition["maxdt"]
+            ):
                 partition["maxdt"] = item["datetime"]
 
             if (
@@ -483,7 +496,9 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc = self.collection_json(item["collection"])
+        base_item, key, partition_trunc = self.collection_json(
+            item["collection"]
+        )
 
         out["id"] = item.pop("id")
         out["collection"] = item.pop("collection")
@@ -531,6 +546,106 @@ class Loader:
         out["content"] = orjson.dumps(content).decode()
 
         return out
+
+    def dump_dehydrated_items(
+        self,
+        infile: str = "stdin",
+        outfile: str = "stdout",
+    ) -> None:
+        """Load items json records."""
+        if infile is None:
+            infile = "stdin"
+        if outfile is None:
+            outfile = "stdout"
+        for line in read_json(infile):
+            with open_std(outfile, "w") as f:
+                fields = [
+                    "id",
+                    "geometry",
+                    "collection",
+                    "datetime",
+                    "end_datetime",
+                    "content",
+                ]
+                csvwriter = csv.DictWriter(f, fields)
+                csvwriter.writerow(self.format_item(line))
+
+    def load_dehydrated_items(
+        self,
+        file: str = "stdin",
+        insert_mode: Optional[Methods] = Methods.insert,
+    ) -> None:
+        """Load items json records."""
+        if file is None:
+            file = "stdin"
+        t = time.perf_counter()
+        items: List = []
+        partitions: dict = {}
+        with open_std(file) as f:
+            fields = [
+                "id",
+                "geometry",
+                "collection",
+                "datetime",
+                "end_datetime",
+                "content",
+            ]
+            csvreader = csv.DictReader(f, fields)
+            for item in csvreader:
+                items.append(item)
+                partition = partitions.get(
+                    item["partition"],
+                    {
+                        "partition": None,
+                        "collection": None,
+                        "mindt": None,
+                        "maxdt": None,
+                        "minedt": None,
+                        "maxedt": None,
+                    },
+                )
+                partition["partition"] = item["partition"]
+                partition["collection"] = item["collection"]
+                if (
+                    partition["mindt"] is None
+                    or item["datetime"] < partition["mindt"]
+                ):
+                    partition["mindt"] = item["datetime"]
+
+                if (
+                    partition["maxdt"] is None
+                    or item["datetime"] > partition["maxdt"]
+                ):
+                    partition["maxdt"] = item["datetime"]
+
+                if (
+                    partition["minedt"] is None
+                    or item["end_datetime"] < partition["minedt"]
+                ):
+                    partition["minedt"] = item["end_datetime"]
+
+                if (
+                    partition["maxedt"] is None
+                    or item["end_datetime"] > partition["maxedt"]
+                ):
+                    partition["maxedt"] = item["end_datetime"]
+                partitions[item["partition"]] = partition
+            logging.debug(
+                f"Loading and parsing data took {time.perf_counter() - t} seconds."
+            )
+            t = time.perf_counter()
+            items.sort(key=lambda x: x["partition"])
+            logging.debug(
+                f"Sorting data took {time.perf_counter() - t} seconds."
+            )
+            t = time.perf_counter()
+
+            for k, g in itertools.groupby(items, lambda x: x["partition"]):
+                self.load_partition(partitions[k], g, insert_mode)
+
+            logging.debug(
+                f"Adding data to database took {time.perf_counter() - t} seconds."
+            )
 
     def __hash__(self) -> int:
         """Return hash so that the LRU deocrator can cache without the class."""
