@@ -34,7 +34,9 @@ from tenacity import (
     wait_random_exponential,
 )
 
+
 from .db import PgstacDB
+from .hydration import dehydrate
 from enum import Enum
 
 
@@ -98,41 +100,41 @@ def name_array_asdict(na: List) -> dict:
     return out
 
 
-def name_array_diff(a: List, b: List) -> List:
-    """Diff an array by name attribute."""
-    diff = dict_minus(name_array_asdict(a), name_array_asdict(b))
-    vals = diff.values()
-    return [v for v in vals if v != {}]
+# def name_array_diff(a: List, b: List) -> List:
+#     """Diff an array by name attribute."""
+#     diff = dict_minus(name_array_asdict(a), name_array_asdict(b))
+#     vals = diff.values()
+#     return [v for v in vals if v != {}]
 
 
-def dict_minus(a: dict, b: dict) -> dict:
-    """Get a recursive difference between two dicts."""
-    out: dict = {}
-    for key, value in b.items():
-        if isinstance(value, list):
-            try:
-                arraydiff = name_array_diff(a[key], value)
-                if arraydiff is not None and arraydiff != []:
-                    out[key] = arraydiff
-                continue
-            except KeyError:
-                pass
-            except TypeError:
-                pass
+# def dict_minus(a: dict, b: dict) -> dict:
+#     """Get a recursive difference between two dicts."""
+#     out: dict = {}
+#     for key, value in b.items():
+#         if isinstance(value, list):
+#             try:
+#                 arraydiff = name_array_diff(a[key], value)
+#                 if arraydiff is not None and arraydiff != []:
+#                     out[key] = arraydiff
+#                 continue
+#             except KeyError:
+#                 pass
+#             except TypeError:
+#                 pass
 
-        if value is None or value == []:
-            continue
-        if a is None or key not in a:
-            out[key] = value
-            continue
+#         if value is None or value == []:
+#             continue
+#         if a is None or key not in a:
+#             out[key] = value
+#             continue
 
-        if a.get(key) != value:
-            if isinstance(value, dict):
-                out[key] = dict_minus(a[key], value)
-                continue
-            out[key] = value
+#         if a.get(key) != value:
+#             if isinstance(value, dict):
+#                 out[key] = dict_minus(a[key], value)
+#                 continue
+#             out[key] = value
 
-    return out
+#     return out
 
 
 def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
@@ -484,6 +486,7 @@ class Loader:
         else:
             item = _item
 
+        print(item.keys())
         base_item, key, partition_trunc = self.collection_json(item["collection"])
 
         out["id"] = item.pop("id")
@@ -527,7 +530,7 @@ class Loader:
             geometry = str(Geometry.from_geojson(geojson).wkb)
         out["geometry"] = geometry
 
-        content = dict_minus(base_item, item)
+        content = dehydrate(base_item, item)
 
         out["content"] = orjson.dumps(content).decode()
 
