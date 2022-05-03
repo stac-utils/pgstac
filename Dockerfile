@@ -48,7 +48,7 @@ WORKDIR /opt/src/pypgstac
 
 COPY pypgstac /opt/src/pypgstac
 
-RUN pip3 install -e /opt/src/pypgstac
+RUN python3 -m pip install -e /opt/src/pypgstac
 
 ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
 
