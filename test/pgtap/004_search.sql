@@ -1,6 +1,5 @@
 -- CREATE fixtures for testing search - as tests are run within a transaction, these will not persist
-DELETE FROM collections WHERE id = 'pgstac-test-collection';
-\copy collections (content) FROM 'test/testdata/collections.ndjson'
+
 \copy items_staging (content) FROM 'test/testdata/items.ndjson'
 
 SET pgstac.context TO 'on';
