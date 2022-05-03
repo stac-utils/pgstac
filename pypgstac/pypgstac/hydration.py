@@ -12,7 +12,7 @@ def hydrate(item: Dict[str, Any], base_item: Dict[str, Any]) -> Dict[str, Any]:
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
-    def merge(b: Dict[str, Any], i: Dict[str, Any]):
+    def merge(b: Dict[str, Any], i: Dict[str, Any]) -> None:
         for key in b:
             if key in i:
                 if isinstance(b[key], dict) and isinstance(i.get(key), dict):
@@ -39,5 +39,3 @@ def hydrate(item: Dict[str, Any], base_item: Dict[str, Any]) -> Dict[str, Any]:
 
     merge(base_item, item)
     return item
-
-
