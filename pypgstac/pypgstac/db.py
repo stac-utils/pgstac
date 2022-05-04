@@ -214,6 +214,8 @@ class PgstacDB:
                 """
             )
             logging.debug(f"VERSION: {version}")
+            if isinstance(version, bytes):
+                version = version.decode()
             if isinstance(version, str):
                 return version
         except psycopg.errors.UndefinedTable:
@@ -231,6 +233,8 @@ class PgstacDB:
             """
         )
         logging.debug(f"PG VERSION: {version}.")
+        if isinstance(version, bytes):
+            version = version.decode()
         if isinstance(version, str):
             if int(version.split(".")[0]) < 13:
                 raise Exception("PGStac requires PostgreSQL 13+")
