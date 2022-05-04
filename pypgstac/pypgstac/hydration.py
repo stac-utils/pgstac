@@ -57,51 +57,55 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
     key should not be rehydrated with the corresponding base item value. This will allow
     collection item-assets to contain keys that may not be present on individual items.
     """
-    out: dict = {}
-    for key, value in full_item.items():
-        if base_item is None or key not in base_item:
-            # Nothing to dehyrate from, preserve item value
-            out[key] = value
-            continue
 
-        if base_item[key] == value:
-            # Equal values, no need to dehydrate
-            continue
-
-        if isinstance(base_item[key], list) and isinstance(value, list):
-            if len(base_item[key]) == len(value):
-                # Equal length lists dehydrate dicts at each matching index
-                # and use incoming item values for other types
-                out[key] = []
-                for bv, v in zip(base_item[key], value):
-                    if isinstance(bv, dict) and isinstance(v, dict):
-                        dehydrated = dehydrate(bv, v)
-                        apply_marked_keys(bv, v, dehydrated)
-                        out[key].append(dehydrated)
-                    else:
-                        out[key].append(v)
-            else:
-                # Unequal length lists are not dehydrated and just use the
-                # incoming item value
+    def strip(base_value: Dict[str, Any], item_value: Dict[str, Any]) -> Dict[str, Any]:
+        out: dict = {}
+        for key, value in item_value.items():
+            if base_value is None or key not in base_value:
+                # Nothing on base; preserve item value in the dehydrated item
                 out[key] = value
-            continue
+                continue
 
-        if value is None or value == []:
-            # Don't keep empty values
-            continue
+            if base_value[key] == value:
+                # Equal values; do not include in the dehydrated item
+                continue
 
-        if isinstance(value, dict):
-            # After dehdrating a dict, mark any keys that are present on the
-            # base item but not in the incoming item as `do-not-merge` during
-            # rehydration
-            dehydrated = dehydrate(base_item[key], value)
-            apply_marked_keys(base_item[key], value, dehydrated)
-            out[key] = dehydrated
-            continue
-        else:
-            # Unequal non-dict values are copied over from the incoming item
-            out[key] = value
-    return out
+            if isinstance(base_value[key], list) and isinstance(value, list):
+                if len(base_value[key]) == len(value):
+                    # Equal length lists dehydrate dicts at each matching index
+                    # and use incoming item values for other types
+                    out[key] = []
+                    for bv, v in zip(base_value[key], value):
+                        if isinstance(bv, dict) and isinstance(v, dict):
+                            dehydrated = strip(bv, v)
+                            apply_marked_keys(bv, v, dehydrated)
+                            out[key].append(dehydrated)
+                        else:
+                            out[key].append(v)
+                else:
+                    # Unequal length lists are not dehydrated and just use the
+                    # incoming item value
+                    out[key] = value
+                continue
+
+            if value is None or value == []:
+                # Don't keep empty values
+                continue
+
+            if isinstance(value, dict):
+                # After dehdrating a dict, mark any keys that are present on the
+                # base item but not in the incoming item as `do-not-merge` during
+                # rehydration
+                dehydrated = strip(base_value[key], value)
+                apply_marked_keys(base_value[key], value, dehydrated)
+                out[key] = dehydrated
+                continue
+            else:
+                # Unequal non-dict values are copied over from the incoming item
+                out[key] = value
+        return out
+
+    return strip(base_item, full_item)
 
 
 def apply_marked_keys(
