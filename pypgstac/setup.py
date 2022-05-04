@@ -24,9 +24,9 @@ extra_reqs = {
         "types-orjson==0.1.1",
     ],
     "psycopg": [
-     "psycopg[binary]==3.0.*",
-     "psycopg-pool==3.1.*",
-    ]
+        "psycopg[binary]==3.0.*",
+        "psycopg-pool==3.1.*",
+    ],
 }
 
 
@@ -49,7 +49,7 @@ setup(
     url="https://github.com/stac-utils/pgstac",
     license="MIT",
     packages=find_namespace_packages(exclude=["tests", "scripts"]),
-    package_data={"": ["py.typed"], "migrations": ["pypgstac/migrations/pgstac*.sql"]},
+    package_data={"": ["migrations/pgstac*.sql", "py.typed"]},
     zip_safe=False,
     install_requires=install_requires,
     tests_require=[extra_reqs["dev"], extra_reqs["psycopg"]],
