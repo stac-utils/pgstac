@@ -186,3 +186,22 @@ def test_equal_list_of_non_dicts() -> None:
 
     dehydrated = hydration.dehydrate(base_item, item)
     assert dehydrated == {"assets": {"thumbnail": {"href": "http://foo.com"}}}
+
+
+def test_invalid_assets_marked() -> None:
+    """
+    Assets can be included on item-assets that are not uniformly included on
+    individual items. Ensure that base item asset keys without a matching item
+    key are marked do-no-merge after dehydration.
+    """
+    base_item = {
+        "type": "Feature",
+        "assets": {"asset1": {"name": "Asset one"}, "asset2": {"name": "Asset two"}},
+    }
+    hydrated = {"assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}}}
+
+    dehydrated = hydration.dehydrate(base_item, hydrated)
+
+    assert dehydrated == {
+        "assets": {"asset1": {"href": "http://foo.com"}, "asset2": DO_NOT_MERGE_MARKER},
+    }

@@ -158,11 +158,34 @@ def test_deeply_nested_dict() -> None:
 
 
 def test_equal_list_of_non_dicts() -> None:
-    """Values of lists that match base_item should be dehydrated off"""
+    """Values of lists that match base_item should be hydrated back on"""
     base_item = {"assets": {"thumbnail": {"roles": ["thumbnail"]}}}
     dehydrated = {"assets": {"thumbnail": {"href": "http://foo.com"}}}
 
     hydrated = hydration.hydrate(base_item, dehydrated)
     assert hydrated == {
         "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}}
+    }
+
+
+def test_invalid_assets_removed() -> None:
+    """
+    Assets can be included on item-assets that are not uniformly included on
+    individual items. Ensure that item asset keys from base_item aren't included
+    after hydration
+    """
+    base_item = {
+        "type": "Feature",
+        "assets": {"asset1": {"name": "Asset one"}, "asset2": {"name": "Asset two"}},
+    }
+
+    dehydrated = {
+        "assets": {"asset1": {"href": "http://foo.com"}, "asset2": DO_NOT_MERGE_MARKER},
+    }
+
+    hydrated = hydration.hydrate(base_item, dehydrated)
+
+    assert hydrated == {
+        "type": "Feature",
+        "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}},
     }
