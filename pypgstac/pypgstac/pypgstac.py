@@ -6,6 +6,7 @@ import fire
 from pypgstac.db import PgstacDB
 from pypgstac.migrate import Migrate
 from pypgstac.load import Loader, Methods, Tables
+from pypgstac.version import __version__
 import logging
 
 # sys.tracebacklimit = 0
@@ -14,8 +15,14 @@ import logging
 class PgstacCLI:
     """CLI for PgStac."""
 
-    def __init__(self, dsn: Optional[str] = "", debug: bool = False):
+    def __init__(
+        self, dsn: Optional[str] = "", version: bool = False, debug: bool = False
+    ):
         """Initialize PgStac CLI."""
+        if version:
+            print(__version__)
+            sys.exit(0)
+
         self.dsn = dsn
         self._db = PgstacDB(dsn=dsn, debug=debug)
         if debug:
