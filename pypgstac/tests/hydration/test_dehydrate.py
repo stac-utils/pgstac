@@ -208,5 +208,28 @@ class TestDehydrate:
         dehydrated = self.dehydrate(base_item, hydrated)
 
         assert dehydrated == {
+            "type": DO_NOT_MERGE_MARKER,
             "assets": {"asset1": {"href": "http://foo.com"}, "asset2": DO_NOT_MERGE_MARKER},
+        }
+
+    def test_top_level_base_keys_marked(self) -> None:
+        """
+        Top level keys on the base item not present on the incoming item should be marked
+        as do not merge, no matter the nesting level.
+        """
+        base_item = {
+            "single": "Feature",
+            "double": {"nested": "value"},
+            "triple": {"nested": {"deep": "value"}},
+            "included": "value",
+        }
+        hydrated = {"included": "value", "unique": "value"}
+
+        dehydrated = self.dehydrate(base_item, hydrated)
+
+        assert dehydrated == {
+            "single": DO_NOT_MERGE_MARKER,
+            "double": DO_NOT_MERGE_MARKER,
+            "triple": DO_NOT_MERGE_MARKER,
+            "unique": "value",
         }
