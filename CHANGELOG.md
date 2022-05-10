@@ -1,4 +1,18 @@
 # Changelog
+## [v0.5.2]
+
+### Fixed
+- Fix function signatures for transactional functions (delete_item etc) to make sure that they are marked as volatile
+- Fix function for getting start/end dates from a stac item
+### Changed
+- Update hydration/dehydration logic to make sure that it matches hydration/dehydration in pypgstac
+- Update fields logic in pgstac to only use full paths and to match logic in stac-fastapi
+### Added
+- Add tests to ensure that pgstac and pypgstac hydration logic is equivalent
+- Add conf item to search to allow returning results without hydrating. This allows an application using pgstac to shift the CPU load of rehydrating items from the database onto the application server.
+- Add "--dehydrated" option to loader to be able to load a dehydrated file (or iterable) of items such as would be output using pg_dump or postgresql copy.
+- Add "--chunksize" option to loader that can split the processing of an iterable or file into chunks of n records at a time
+
 ## [v0.5.1]
 
 ### Fixed
