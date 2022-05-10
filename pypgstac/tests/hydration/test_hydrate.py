@@ -34,7 +34,6 @@ LANDSAT_ITEM = (
 
 
 class TestHydrate:
-
     def hydrate(
         self, base_item: Dict[str, Any], item: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -208,11 +207,10 @@ class TestHydrate:
             "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}},
         }
 
-
     def test_top_level_base_keys_marked(self) -> None:
         """
-        Top level keys on the base item not present on the incoming item should be marked
-        as do not merge, no matter the nesting level.
+        Top level keys on the base item not present on the incoming item should
+        be marked as do not merge, no matter the nesting level.
         """
         base_item = {
             "single": "Feature",

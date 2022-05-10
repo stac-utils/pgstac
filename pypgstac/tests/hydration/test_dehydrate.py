@@ -214,13 +214,16 @@ class TestDehydrate:
 
         assert dehydrated == {
             "type": DO_NOT_MERGE_MARKER,
-            "assets": {"asset1": {"href": "http://foo.com"}, "asset2": DO_NOT_MERGE_MARKER},
+            "assets": {
+                "asset1": {"href": "http://foo.com"},
+                "asset2": DO_NOT_MERGE_MARKER,
+            },
         }
 
     def test_top_level_base_keys_marked(self) -> None:
         """
-        Top level keys on the base item not present on the incoming item should be marked
-        as do not merge, no matter the nesting level.
+        Top level keys on the base item not present on the incoming item should
+        be marked as do not merge, no matter the nesting level.
         """
         base_item = {
             "single": "Feature",
