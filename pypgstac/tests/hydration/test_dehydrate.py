@@ -23,8 +23,9 @@ LANDSAT_ITEM = (
 
 
 class TestDehydrate:
-
-    def dehydrate(self,base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    def dehydrate(
+        self, base_item: Dict[str, Any], item: Dict[str, Any]
+    ) -> Dict[str, Any]:
         return hydration.dehydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
@@ -87,20 +88,17 @@ class TestDehydrate:
         assert list(nir09["raster:bands"][0].keys()) == ["unit"]
         assert nir09["raster:bands"] == [{"unit": DO_NOT_MERGE_MARKER}]
 
-
     def test_single_depth_equals(self) -> None:
         base_item = {"a": "first", "b": "second", "c": "third"}
         item = {"a": "first", "b": "second", "c": "third"}
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {}
 
-
     def test_nested_equals(self) -> None:
         base_item = {"a": "first", "b": "second", "c": {"d": "third"}}
         item = {"a": "first", "b": "second", "c": {"d": "third"}}
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {}
-
 
     def test_nested_extra_keys(self) -> None:
         """
@@ -116,7 +114,6 @@ class TestDehydrate:
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {"c": {"e": "fourth", "f": "fifth"}}
 
-
     def test_list_of_dicts_extra_keys(self) -> None:
         """Test that an equal length list of dicts is dehydrated correctly"""
         base_item = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
@@ -126,21 +123,25 @@ class TestDehydrate:
         assert "a" in dehydrated
         assert dehydrated["a"] == [{"b3": 3}, {"c3": 3}]
 
-
     def test_equal_len_list_of_mixed_types(self) -> None:
         """
-        Test that a list of equal length containing matched types at each index dehydrates
+        Test that a list of equal length containing matched
+        types at each index dehydrates
         dicts and preserves item-values of other types.
         """
         base_item = {"a": [{"b1": 1, "b2": 2}, "foo", {"c1": 1, "c2": 2}, "bar"]}
         item = {
-            "a": [{"b1": 1, "b2": 2, "b3": 3}, "far", {"c1": 1, "c2": 2, "c3": 3}, "boo"]
+            "a": [
+                {"b1": 1, "b2": 2, "b3": 3},
+                "far",
+                {"c1": 1, "c2": 2, "c3": 3},
+                "boo",
+            ]
         }
 
         dehydrated = self.dehydrate(base_item, item)
         assert "a" in dehydrated
         assert dehydrated["a"] == [{"b3": 3}, "far", {"c3": 3}, "boo"]
-
 
     def test_unequal_len_list(self) -> None:
         """Test that unequal length lists preserve the item value exactly"""
@@ -150,7 +151,6 @@ class TestDehydrate:
         dehydrated = self.dehydrate(base_item, item)
         assert "a" in dehydrated
         assert dehydrated["a"] == item["a"]
-
 
     def test_marked_non_merged_fields(self) -> None:
         base_item = {"a": "first", "b": "second", "c": {"d": "third", "e": "fourth"}}
@@ -162,9 +162,10 @@ class TestDehydrate:
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {"c": {"e": DO_NOT_MERGE_MARKER, "f": "fifth"}}
 
-
     def test_marked_non_merged_fields_in_list(self) -> None:
-        base_item = {"a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}]}
+        base_item = {
+            "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}]
+        }
         item = {"a": [{"b": "first"}, {"c": "second", "f": "fifth"}]}
 
         dehydrated = self.dehydrate(base_item, item)
@@ -175,7 +176,6 @@ class TestDehydrate:
             ]
         }
 
-
     def test_deeply_nested_dict(self) -> None:
         base_item = {"a": {"b": {"c": {"d": "first", "d1": "second"}}}}
         item = {"a": {"b": {"c": {"d": "first", "d1": "second", "d2": "third"}}}}
@@ -183,15 +183,15 @@ class TestDehydrate:
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {"a": {"b": {"c": {"d2": "third"}}}}
 
-
     def test_equal_list_of_non_dicts(self) -> None:
         """Values of lists that match base_item should be dehydrated off"""
         base_item = {"assets": {"thumbnail": {"roles": ["thumbnail"]}}}
-        item = {"assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}}}
+        item = {
+            "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}}
+        }
 
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {"assets": {"thumbnail": {"href": "http://foo.com"}}}
-
 
     def test_invalid_assets_marked(self) -> None:
         """
@@ -201,12 +201,20 @@ class TestDehydrate:
         """
         base_item = {
             "type": "Feature",
-            "assets": {"asset1": {"name": "Asset one"}, "asset2": {"name": "Asset two"}},
+            "assets": {
+                "asset1": {"name": "Asset one"},
+                "asset2": {"name": "Asset two"},
+            },
         }
-        hydrated = {"assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}}}
+        hydrated = {
+            "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}}
+        }
 
         dehydrated = self.dehydrate(base_item, hydrated)
 
         assert dehydrated == {
-            "assets": {"asset1": {"href": "http://foo.com"}, "asset2": DO_NOT_MERGE_MARKER},
+            "assets": {
+                "asset1": {"href": "http://foo.com"},
+                "asset2": DO_NOT_MERGE_MARKER,
+            },
         }

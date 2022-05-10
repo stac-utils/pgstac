@@ -1,7 +1,7 @@
 """Base library for database interaction with PgStac."""
 import time
 from types import TracebackType
-from typing import Any, List, Optional, Tuple, Type, Union, Generator, Dict
+from typing import Any, List, Optional, Tuple, Type, Union, Generator
 import orjson
 import psycopg
 from psycopg import Connection, sql
@@ -260,11 +260,3 @@ class PgstacDB:
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
         """Search PgStac."""
         return dumps(next(self.func("search", query))[0])
-
-    def dehydrate(
-        self,
-        base_item: Union[dict, str, psycopg.types.json.Jsonb] = "{}",
-        item: Union[dict, str, psycopg.types.json.Jsonb] = "{}",
-    )->Dict:
-        """Dehydrate an item in pgstac."""
-        return next(self.func('strip_jsonb', item, base_item))[0]

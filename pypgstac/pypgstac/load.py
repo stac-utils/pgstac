@@ -13,7 +13,6 @@ from typing import (
     Dict,
     Iterable,
     Iterator,
-    List,
     Optional,
     Tuple,
     Union,
@@ -40,13 +39,15 @@ from .hydration import dehydrate
 from enum import Enum
 
 
-def chunked_iterable(iterable, size):
+def chunked_iterable(iterable: Iterable, size: Optional[int] = 10000) -> Iterable:
+    """Chunk an iterable."""
     it = iter(iterable)
     while True:
         chunk = tuple(itertools.islice(it, size))
         if not chunk:
             break
         yield chunk
+
 
 class Tables(str, Enum):
     """Available tables for loading."""
@@ -279,14 +280,16 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row((
-                                item['id'],
-                                item['collection'],
-                                item['datetime'],
-                                item['end_datetime'],
-                                item['geometry'],
-                                item['content']
-                            ))
+                            copy.write_row(
+                                (
+                                    item["id"],
+                                    item["collection"],
+                                    item["datetime"],
+                                    item["end_datetime"],
+                                    item["geometry"],
+                                    item["content"],
+                                )
+                            )
                     logging.debug(cur.statusmessage)
                     logging.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
@@ -311,14 +314,16 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row((
-                                item['id'],
-                                item['collection'],
-                                item['datetime'],
-                                item['end_datetime'],
-                                item['geometry'],
-                                item['content']
-                            ))
+                            copy.write_row(
+                                (
+                                    item["id"],
+                                    item["collection"],
+                                    item["datetime"],
+                                    item["end_datetime"],
+                                    item["geometry"],
+                                    item["content"],
+                                )
+                            )
                     logging.debug(cur.statusmessage)
                     logging.debug(f"Copied rows: {cur.rowcount}")
 
@@ -392,10 +397,7 @@ class Loader:
             f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
 
-    def _partition_update(
-        self,
-        item: dict
-     ) -> dict:
+    def _partition_update(self, item: dict) -> str:
 
         p = item.get("partition", None)
         if p is None:
@@ -410,6 +412,8 @@ class Loader:
                 p = f"_items_{key}"
             item["partition"] = p
 
+        if self._partition_cache is None:
+            self._partition_cache = {}
 
         partition = self._partition_cache.get(
             item["partition"],
@@ -431,42 +435,36 @@ class Loader:
         if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
             partition["maxdt"] = item["datetime"]
 
-        if (
-            partition["minedt"] is None
-            or item["end_datetime"] < partition["minedt"]
-        ):
+        if partition["minedt"] is None or item["end_datetime"] < partition["minedt"]:
             partition["minedt"] = item["end_datetime"]
 
-        if (
-            partition["maxedt"] is None
-            or item["end_datetime"] > partition["maxedt"]
-        ):
+        if partition["maxedt"] is None or item["end_datetime"] > partition["maxedt"]:
             partition["maxedt"] = item["end_datetime"]
         self._partition_cache[item["partition"]] = partition
 
         return p
 
-    def read_dehydrated(
-        self,
-        file: Union[Path, str, Iterator[Any]] = "stdin"
-    ) -> Generator:
-        with open_std(file) as f:
-            fields = [
-                "id",
-                "geometry",
-                "collection",
-                "datetime",
-                "end_datetime",
-                "content",
-            ]
-            csvreader = csv.DictReader(f, fields, delimiter='\t')
-            for item in csvreader:
-                item['partition'] = self._partition_update(item)
-                yield item
+    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+        if file is None:
+            file = "stdin"
+        if isinstance(file, str):
+            open_file: Any = open_std(file, "r")
+            with open_file as f:
+                fields = [
+                    "id",
+                    "geometry",
+                    "collection",
+                    "datetime",
+                    "end_datetime",
+                    "content",
+                ]
+                csvreader = csv.DictReader(f, fields, delimiter="\t")
+                for item in csvreader:
+                    item["partition"] = self._partition_update(item)
+                    yield item
 
     def read_hydrated(
-        self,
-        file: Union[Path, str, Iterator[Any]] = "stdin"
+        self, file: Union[Path, str, Iterator[Any]] = "stdin"
     ) -> Generator:
         for line in read_json(file):
             item = self.format_item(line)
@@ -477,8 +475,8 @@ class Loader:
         self,
         file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
-        dehydrated: bool = False,
-        chunksize: int = 10000
+        dehydrated: Optional[bool] = False,
+        chunksize: Optional[int] = 10000,
     ) -> None:
         """Load items json records."""
         if file is None:
@@ -486,7 +484,7 @@ class Loader:
         t = time.perf_counter()
         self._partition_cache = {}
 
-        if dehydrated:
+        if dehydrated and isinstance(file, str):
             items = self.read_dehydrated(file)
         else:
             items = self.read_hydrated(file)

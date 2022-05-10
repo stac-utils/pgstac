@@ -1,3 +1,4 @@
+"""Hydrate data in pypgstac rather than on the database."""
 from copy import deepcopy
 from typing import Any, Dict
 
@@ -11,7 +12,6 @@ def hydrate(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
     This will not perform a deep copy; values of the original item will be referenced
     in the return item.
     """
-
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
@@ -113,7 +113,8 @@ def apply_marked_keys(
     full_item: Dict[str, Any],
     dehydrated: Dict[str, Any],
 ) -> None:
-    """
+    """Mark keys.
+
     Mark any keys that are present on the base item but not in the incoming item
     as `do-not-merge` on the dehydrated item. This will prevent they key from
     being rehydrated.

@@ -1,18 +1,20 @@
 from .test_dehydrate import TestDehydrate as TDehydrate
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import os
-import pytest
 from typing import Generator
 from pypgstac.db import PgstacDB
 from pypgstac.migrate import Migrate
 import psycopg
 from contextlib import contextmanager
 
+
 class TestDehydratePG(TDehydrate):
+    """Class to test Dehydration using pgstac."""
 
     @contextmanager
-    def db(self):
-        print('Setting up db.')
+    def db(self) -> Generator:
+        """Set up database connection."""
+        print("Setting up db.")
         origdb: str = os.getenv("PGDATABASE", "")
         with psycopg.connect(autocommit=True) as conn:
             try:
@@ -33,7 +35,9 @@ class TestDehydratePG(TDehydrate):
         pgdb.close()
         os.environ["PGDATABASE"] = origdb
 
-
-    def dehydrate(self, base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    def dehydrate(
+        self, base_item: Dict[str, Any], item: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Dehydrate item using pgstac."""
         with self.db() as db:
-            return next(db.func('strip_jsonb', item, base_item))[0]
+            return next(db.func("strip_jsonb", item, base_item))[0]

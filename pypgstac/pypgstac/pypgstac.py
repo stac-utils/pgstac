@@ -63,7 +63,7 @@ class PgstacCLI:
         file: str,
         method: Optional[Methods] = Methods.insert,
         dehydrated: Optional[bool] = False,
-        chunksize: Optional[int] = 10000
+        chunksize: Optional[int] = 10000,
     ) -> None:
         """Load collections or items into PGStac."""
         loader = Loader(db=self._db)
