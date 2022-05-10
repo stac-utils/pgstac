@@ -35,7 +35,7 @@ LANDSAT_ITEM = (
 class TestHydrate:
 
     def hydrate(self,base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
-        return self.hydrate(base_item, item)
+        return hydration.hydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
         """Test that a dehydrated item is is equal to the raw item it was dehydrated
