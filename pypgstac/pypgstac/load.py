@@ -2,6 +2,7 @@
 import contextlib
 import itertools
 import logging
+from pathlib import Path
 import sys
 import time
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from typing import (
     Generator,
     TextIO,
 )
-
+import csv
 import orjson
 import psycopg
 from orjson import JSONDecodeError
@@ -33,9 +34,19 @@ from tenacity import (
     wait_random_exponential,
 )
 
+
 from .db import PgstacDB
+from .hydration import dehydrate
 from enum import Enum
 
+
+def chunked_iterable(iterable, size):
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, size))
+        if not chunk:
+            break
+        yield chunk
 
 class Tables(str, Enum):
     """Available tables for loading."""
@@ -89,52 +100,7 @@ def open_std(
                 pass
 
 
-def name_array_asdict(na: List) -> dict:
-    """Create a dict from a list with key from name field."""
-    out = {}
-    for i in na:
-        out[i["name"]] = i
-    return out
-
-
-def name_array_diff(a: List, b: List) -> List:
-    """Diff an array by name attribute."""
-    diff = dict_minus(name_array_asdict(a), name_array_asdict(b))
-    vals = diff.values()
-    return [v for v in vals if v != {}]
-
-
-def dict_minus(a: dict, b: dict) -> dict:
-    """Get a recursive difference between two dicts."""
-    out: dict = {}
-    for key, value in b.items():
-        if isinstance(value, list):
-            try:
-                arraydiff = name_array_diff(a[key], value)
-                if arraydiff is not None and arraydiff != []:
-                    out[key] = arraydiff
-                continue
-            except KeyError:
-                pass
-            except TypeError:
-                pass
-
-        if value is None or value == []:
-            continue
-        if a is None or key not in a:
-            out[key] = value
-            continue
-
-        if a.get(key) != value:
-            if isinstance(value, dict):
-                out[key] = dict_minus(a[key], value)
-                continue
-            out[key] = value
-
-    return out
-
-
-def read_json(file: Union[str, Iterator[Any]] = "stdin") -> Iterable:
+def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
     """Load data from an ndjson or json file."""
     if file is None:
         file = "stdin"
@@ -175,6 +141,7 @@ class Loader:
     """Utilities for loading data."""
 
     db: PgstacDB
+    _partition_cache: Optional[dict] = None
 
     @lru_cache
     def collection_json(self, collection_id: str) -> Tuple[dict, int, str]:
@@ -195,7 +162,7 @@ class Loader:
 
     def load_collections(
         self,
-        file: Union[str, Iterator[Any]] = "stdin",
+        file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
@@ -312,7 +279,14 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(list(item.values()))
+                            copy.write_row((
+                                item['id'],
+                                item['collection'],
+                                item['datetime'],
+                                item['end_datetime'],
+                                item['geometry'],
+                                item['content']
+                            ))
                     logging.debug(cur.statusmessage)
                     logging.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
@@ -337,7 +311,14 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(list(item.values()))
+                            copy.write_row((
+                                item['id'],
+                                item['collection'],
+                                item['datetime'],
+                                item['end_datetime'],
+                                item['geometry'],
+                                item['content']
+                            ))
                     logging.debug(cur.statusmessage)
                     logging.debug(f"Copied rows: {cur.rowcount}")
 
@@ -411,73 +392,121 @@ class Loader:
             f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
 
+    def _partition_update(
+        self,
+        item: dict
+     ) -> dict:
+
+        p = item.get("partition", None)
+        if p is None:
+            _, key, partition_trunc = self.collection_json(item["collection"])
+            if partition_trunc == "year":
+                pd = item["datetime"].replace("-", "")[:4]
+                p = f"_items_{key}_{pd}"
+            elif partition_trunc == "month":
+                pd = item["datetime"].replace("-", "")[:6]
+                p = f"_items_{key}_{pd}"
+            else:
+                p = f"_items_{key}"
+            item["partition"] = p
+
+
+        partition = self._partition_cache.get(
+            item["partition"],
+            {
+                "partition": None,
+                "collection": None,
+                "mindt": None,
+                "maxdt": None,
+                "minedt": None,
+                "maxedt": None,
+            },
+        )
+
+        partition["partition"] = item["partition"]
+        partition["collection"] = item["collection"]
+        if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
+            partition["mindt"] = item["datetime"]
+
+        if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
+            partition["maxdt"] = item["datetime"]
+
+        if (
+            partition["minedt"] is None
+            or item["end_datetime"] < partition["minedt"]
+        ):
+            partition["minedt"] = item["end_datetime"]
+
+        if (
+            partition["maxedt"] is None
+            or item["end_datetime"] > partition["maxedt"]
+        ):
+            partition["maxedt"] = item["end_datetime"]
+        self._partition_cache[item["partition"]] = partition
+
+        return p
+
+    def read_dehydrated(
+        self,
+        file: Union[Path, str, Iterator[Any]] = "stdin"
+    ) -> Generator:
+        with open_std(file) as f:
+            fields = [
+                "id",
+                "geometry",
+                "collection",
+                "datetime",
+                "end_datetime",
+                "content",
+            ]
+            csvreader = csv.DictReader(f, fields, delimiter='\t')
+            for item in csvreader:
+                item['partition'] = self._partition_update(item)
+                yield item
+
+    def read_hydrated(
+        self,
+        file: Union[Path, str, Iterator[Any]] = "stdin"
+    ) -> Generator:
+        for line in read_json(file):
+            item = self.format_item(line)
+            item["partition"] = self._partition_update(item)
+            yield item
+
     def load_items(
         self,
-        file: Union[str, Iterator[Any]] = "stdin",
+        file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
+        dehydrated: bool = False,
+        chunksize: int = 10000
     ) -> None:
         """Load items json records."""
         if file is None:
             file = "stdin"
         t = time.perf_counter()
-        items: List = []
-        partitions: dict = {}
-        for line in read_json(file):
-            item = self.format_item(line)
-            items.append(item)
-            partition = partitions.get(
-                item["partition"],
-                {
-                    "partition": None,
-                    "collection": None,
-                    "mindt": None,
-                    "maxdt": None,
-                    "minedt": None,
-                    "maxedt": None,
-                },
+        self._partition_cache = {}
+
+        if dehydrated:
+            items = self.read_dehydrated(file)
+        else:
+            items = self.read_hydrated(file)
+
+        for chunk in chunked_iterable(items, chunksize):
+            list(chunk).sort(key=lambda x: x["partition"])
+            for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
+                self.load_partition(self._partition_cache[k], g, insert_mode)
+
+            logging.debug(
+                f"Adding data to database took {time.perf_counter() - t} seconds."
             )
-            partition["partition"] = item["partition"]
-            partition["collection"] = item["collection"]
-            if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
-                partition["mindt"] = item["datetime"]
 
-            if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
-                partition["maxdt"] = item["datetime"]
-
-            if (
-                partition["minedt"] is None
-                or item["end_datetime"] < partition["minedt"]
-            ):
-                partition["minedt"] = item["end_datetime"]
-
-            if (
-                partition["maxedt"] is None
-                or item["end_datetime"] > partition["maxedt"]
-            ):
-                partition["maxedt"] = item["end_datetime"]
-            partitions[item["partition"]] = partition
-        logging.debug(
-            f"Loading and parsing data took {time.perf_counter() - t} seconds."
-        )
-        t = time.perf_counter()
-        items.sort(key=lambda x: x["partition"])
-        logging.debug(f"Sorting data took {time.perf_counter() - t} seconds.")
-        t = time.perf_counter()
-
-        for k, g in itertools.groupby(items, lambda x: x["partition"]):
-            self.load_partition(partitions[k], g, insert_mode)
-
-        logging.debug(
-            f"Adding data to database took {time.perf_counter() - t} seconds."
-        )
-
-    def format_item(self, _item: Union[str, dict]) -> dict:
+    def format_item(self, _item: Union[Path, str, dict]) -> dict:
         """Format an item to insert into a record."""
         out = {}
         item: dict
         if not isinstance(_item, dict):
             try:
-                item = orjson.loads(_item.replace("\\\\", "\\"))
+                item = orjson.loads(str(_item).replace("\\\\", "\\"))
             except:
                 raise Exception(f"Could not load {_item}")
         else:
@@ -521,12 +550,12 @@ class Loader:
         bbox = item.pop("bbox")
         geojson = item.pop("geometry")
         if geojson is None and bbox is not None:
-            pass
+            geometry = None
         else:
             geometry = str(Geometry.from_geojson(geojson).wkb)
         out["geometry"] = geometry
 
-        content = dict_minus(base_item, item)
+        content = dehydrate(base_item, item)
 
         out["content"] = orjson.dumps(content).decode()
 

@@ -12,9 +12,7 @@ ENV \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_DEFAULT_TIMEOUT=100 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    POETRY_NO_INTERACTION=1
+    PIP_DEFAULT_TIMEOUT=100
 
 RUN \
     apt-get update \
@@ -35,7 +33,6 @@ RUN \
     && pip3 install -U psycopg2-binary \
     && pip3 install -U psycopg[binary] \
     && pip3 install -U migra[pg] \
-    && pip3 install poetry==1.1.13 \
     && apt-get remove -y apt-transport-https \
     && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
@@ -49,12 +46,9 @@ RUN mkdir -p /opt/src/pypgstac
 
 WORKDIR /opt/src/pypgstac
 
-COPY pypgstac/poetry.lock pypgstac/pyproject.toml ./
-RUN poetry install
-
-
 COPY pypgstac /opt/src/pypgstac
-RUN poetry install
+
+RUN pip3 install -e /opt/src/pypgstac[psycopg]
 
 ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
 

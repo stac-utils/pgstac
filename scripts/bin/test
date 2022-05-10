@@ -34,10 +34,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     find /opt/src/pypgstac/pypgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
 
 
-    VERSION_TOML=$(cd pypgstac; poetry version -s)
+    VERSION=$(pypgstac --version)
 
     echo "Checking whether base sql migration exists..."
-    [ -f pypgstac/pypgstac/migrations/pgstac.${VERSION_TOML}.sql ] || { echo "No Migration exists pypgstac/migrations/pgstac.${VERSION_TOML}.sql"; exit 1; }
+    [ -f pypgstac/pypgstac/migrations/pgstac."${VERSION}".sql ] || { echo "No Migration exists pypgstac/migrations/pgstac.${VERSION}.sql"; exit 1; }
 
     echo "Congratulations! All pypgstac tests pass."
 

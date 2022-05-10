@@ -6,6 +6,7 @@ import fire
 from pypgstac.db import PgstacDB
 from pypgstac.migrate import Migrate
 from pypgstac.load import Loader, Methods, Tables
+from pypgstac.version import __version__
 import logging
 
 # sys.tracebacklimit = 0
@@ -14,8 +15,14 @@ import logging
 class PgstacCLI:
     """CLI for PgStac."""
 
-    def __init__(self, dsn: Optional[str] = "", debug: bool = False):
+    def __init__(
+        self, dsn: Optional[str] = "", version: bool = False, debug: bool = False
+    ):
         """Initialize PgStac CLI."""
+        if version:
+            print(__version__)
+            sys.exit(0)
+
         self.dsn = dsn
         self._db = PgstacDB(dsn=dsn, debug=debug)
         if debug:
@@ -51,14 +58,19 @@ class PgstacCLI:
         return migrator.run_migration(toversion=toversion)
 
     def load(
-        self, table: Tables, file: str, method: Optional[Methods] = Methods.insert
+        self,
+        table: Tables,
+        file: str,
+        method: Optional[Methods] = Methods.insert,
+        dehydrated: Optional[bool] = False,
+        chunksize: Optional[int] = 10000
     ) -> None:
         """Load collections or items into PGStac."""
         loader = Loader(db=self._db)
         if table == "collections":
             loader.load_collections(file, method)
         if table == "items":
-            loader.load_items(file, method)
+            loader.load_items(file, method, dehydrated, chunksize)
 
 
 def cli() -> fire.Fire:

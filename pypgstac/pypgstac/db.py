@@ -1,7 +1,7 @@
 """Base library for database interaction with PgStac."""
 import time
 from types import TracebackType
-from typing import Any, List, Optional, Tuple, Type, Union, Generator
+from typing import Any, List, Optional, Tuple, Type, Union, Generator, Dict
 import orjson
 import psycopg
 from psycopg import Connection, sql
@@ -214,6 +214,8 @@ class PgstacDB:
                 """
             )
             logging.debug(f"VERSION: {version}")
+            if isinstance(version, bytes):
+                version = version.decode()
             if isinstance(version, str):
                 return version
         except psycopg.errors.UndefinedTable:
@@ -231,6 +233,8 @@ class PgstacDB:
             """
         )
         logging.debug(f"PG VERSION: {version}.")
+        if isinstance(version, bytes):
+            version = version.decode()
         if isinstance(version, str):
             if int(version.split(".")[0]) < 13:
                 raise Exception("PGStac requires PostgreSQL 13+")
@@ -244,11 +248,23 @@ class PgstacDB:
         """Call a database function."""
         placeholders = sql.SQL(", ").join(sql.Placeholder() * len(args))
         func = sql.Identifier(function_name)
+        cleaned_args = []
+        for arg in args:
+            if isinstance(arg, dict):
+                cleaned_args.append(psycopg.types.json.Jsonb(arg))
+            else:
+                cleaned_args.append(arg)
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
-        return self.query(base_query, *args)
+        return self.query(base_query, cleaned_args)
 
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
         """Search PgStac."""
-        if isinstance(query, dict):
-            query = psycopg.types.json.Jsonb(query)
         return dumps(next(self.func("search", query))[0])
+
+    def dehydrate(
+        self,
+        base_item: Union[dict, str, psycopg.types.json.Jsonb] = "{}",
+        item: Union[dict, str, psycopg.types.json.Jsonb] = "{}",
+    )->Dict:
+        """Dehydrate an item in pgstac."""
+        return next(self.func('strip_jsonb', item, base_item))[0]
