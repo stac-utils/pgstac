@@ -1,5 +1,5 @@
 # Changelog
-## [v0.5.2]
+## [v0.6.0]
 
 ### Fixed
 - Fix function signatures for transactional functions (delete_item etc) to make sure that they are marked as volatile
@@ -7,6 +7,7 @@
 ### Changed
 - Update hydration/dehydration logic to make sure that it matches hydration/dehydration in pypgstac
 - Update fields logic in pgstac to only use full paths and to match logic in stac-fastapi
+- Always include id and collection on features regardless of fields setting
 ### Added
 - Add tests to ensure that pgstac and pypgstac hydration logic is equivalent
 - Add conf item to search to allow returning results without hydrating. This allows an application using pgstac to shift the CPU load of rehydrating items from the database onto the application server.
