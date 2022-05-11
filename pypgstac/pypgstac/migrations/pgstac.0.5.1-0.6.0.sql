@@ -1,4 +1,6 @@
 SET SEARCH_PATH to pgstac, public;
+alter table "pgstac"."partitions" drop constraint "partitions_collection_fkey";
+
 drop function if exists "pgstac"."content_hydrate"(_item jsonb, _collection jsonb, fields jsonb);
 
 drop function if exists "pgstac"."content_slim"(_item jsonb, _collection jsonb);
@@ -6,6 +8,8 @@ drop function if exists "pgstac"."content_slim"(_item jsonb, _collection jsonb);
 drop function if exists "pgstac"."key_filter"(k text, val jsonb, INOUT kf jsonb, OUT include boolean);
 
 drop function if exists "pgstac"."strip_assets"(a jsonb);
+
+alter table "pgstac"."partitions" add constraint "partitions_collection_fkey" FOREIGN KEY (collection) REFERENCES pgstac.collections(id) ON DELETE CASCADE;
 
 set check_function_bodies = off;
 
@@ -166,6 +170,25 @@ AS $function$
         ELSE _a
     END
     ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.partitions_delete_trigger_func()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    q text;
+BEGIN
+    RAISE NOTICE 'Partition Delete Trigger. %', OLD.name;
+    EXECUTE format($q$
+            DROP TABLE IF EXISTS %I CASCADE;
+            $q$,
+            OLD.name
+        );
+    RAISE NOTICE 'Dropped partition.';
+    RETURN OLD;
+END;
 $function$
 ;
 
@@ -573,6 +596,8 @@ BEGIN
 END;
 $function$
 ;
+
+CREATE TRIGGER partitions_delete_trigger BEFORE DELETE ON pgstac.partitions FOR EACH ROW EXECUTE FUNCTION pgstac.partitions_delete_trigger_func();
 
 
 

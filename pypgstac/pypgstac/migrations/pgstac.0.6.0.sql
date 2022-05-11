@@ -616,7 +616,7 @@ CREATE OR REPLACE FUNCTION partition_collection(collection text, strategy partit
 $$ LANGUAGE SQL;
 
 CREATE TABLE IF NOT EXISTS partitions (
-    collection text REFERENCES collections(id),
+    collection text REFERENCES collections(id) ON DELETE CASCADE,
     name text PRIMARY KEY,
     partition_range tstzrange NOT NULL DEFAULT tstzrange('-infinity'::timestamptz,'infinity'::timestamptz, '[]'),
     datetime_range tstzrange,
@@ -628,7 +628,23 @@ CREATE TABLE IF NOT EXISTS partitions (
 ) WITH (FILLFACTOR=90);
 CREATE INDEX partitions_range_idx ON partitions USING GIST(partition_range);
 
+CREATE OR REPLACE FUNCTION partitions_delete_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+    q text;
+BEGIN
+    RAISE NOTICE 'Partition Delete Trigger. %', OLD.name;
+    EXECUTE format($q$
+            DROP TABLE IF EXISTS %I CASCADE;
+            $q$,
+            OLD.name
+        );
+    RAISE NOTICE 'Dropped partition.';
+    RETURN OLD;
+END;
+$$ LANGUAGE PLPGSQL;
 
+CREATE TRIGGER partitions_delete_trigger BEFORE DELETE ON partitions FOR EACH ROW
+EXECUTE FUNCTION partitions_delete_trigger_func();
 
 CREATE OR REPLACE FUNCTION partition_name(
     IN collection text,
