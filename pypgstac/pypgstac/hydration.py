@@ -103,6 +103,10 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
             else:
                 # Unequal non-dict values are copied over from the incoming item
                 out[key] = value
+
+        # Mark any top-level keys from the base_item that are not in the incoming item
+        apply_marked_keys(base_value, item_value, out)
+
         return out
 
     return strip(base_item, full_item)

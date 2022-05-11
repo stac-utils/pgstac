@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, cast
 
+from pypgstac import hydration
 from pypgstac.hydration import DO_NOT_MERGE_MARKER
 from pypgstac.load import Loader
 
@@ -36,7 +37,7 @@ class TestHydrate:
     def hydrate(
         self, base_item: Dict[str, Any], item: Dict[str, Any]
     ) -> Dict[str, Any]:
-        return self.hydrate(base_item, item)
+        return hydration.hydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
         """Test that a dehydrated item is is equal to the raw item it was dehydrated
@@ -205,3 +206,26 @@ class TestHydrate:
             "type": "Feature",
             "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}},
         }
+
+    def test_top_level_base_keys_marked(self) -> None:
+        """
+        Top level keys on the base item not present on the incoming item should
+        be marked as do not merge, no matter the nesting level.
+        """
+        base_item = {
+            "single": "Feature",
+            "double": {"nested": "value"},
+            "triple": {"nested": {"deep": "value"}},
+            "included": "value",
+        }
+
+        dehydrated = {
+            "single": DO_NOT_MERGE_MARKER,
+            "double": DO_NOT_MERGE_MARKER,
+            "triple": DO_NOT_MERGE_MARKER,
+            "unique": "value",
+        }
+
+        hydrated = self.hydrate(base_item, dehydrated)
+
+        assert hydrated == {"included": "value", "unique": "value"}
