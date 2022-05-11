@@ -39,6 +39,8 @@ from .db import PgstacDB
 from .hydration import dehydrate
 from enum import Enum
 
+logger = logging.getLogger(__name__)
+
 
 class Tables(str, Enum):
     """Available tables for loading."""
@@ -106,7 +108,7 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                     yield orjson.loads(line)
             except JSONDecodeError:
                 # If reading first line as json fails, try reading entire file
-                logging.info(
+                logger.info(
                     "First line could not be parsed as json, trying full file."
                 )
                 try:
@@ -118,7 +120,7 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                     else:
                         yield json
                 except JSONDecodeError:
-                    logging.info("File cannot be read as json")
+                    logger.info("File cannot be read as json")
                     raise
     elif isinstance(file, Iterable):
         for line in file:
@@ -179,8 +181,8 @@ class Loader:
                         SELECT content FROM tmp_collections;
                         """
                     )
-                    logging.debug(cur.statusmessage)
-                    logging.debug(f"Rows affected: {cur.rowcount}")
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in ("insert_ignore", "ignore"):
                     cur.execute(
                         """
@@ -189,8 +191,8 @@ class Loader:
                         ON CONFLICT DO NOTHING;
                         """
                     )
-                    logging.debug(cur.statusmessage)
-                    logging.debug(f"Rows affected: {cur.rowcount}")
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode == "upsert":
                     cur.execute(
                         """
@@ -200,8 +202,8 @@ class Loader:
                         UPDATE SET content=EXCLUDED.content;
                         """
                     )
-                    logging.debug(cur.statusmessage)
-                    logging.debug(f"Rows affected: {cur.rowcount}")
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, and upsert."
@@ -227,7 +229,7 @@ class Loader:
         conn = self.db.connect()
         t = time.perf_counter()
 
-        logging.debug(f"Loading data for partition: {partition}.")
+        logger.debug(f"Loading data for partition: {partition}.")
         with conn.cursor() as cur:
             with conn.transaction():
                 cur.execute(
@@ -254,7 +256,7 @@ class Loader:
                     ),
                 )
             with conn.transaction():
-                logging.debug(
+                logger.debug(
                     f"Adding partition {partition} took {time.perf_counter() - t}s"
                 )
                 t = time.perf_counter()
@@ -271,8 +273,8 @@ class Loader:
                         for item in items:
                             item.pop("partition")
                             copy.write_row(list(item.values()))
-                    logging.debug(cur.statusmessage)
-                    logging.debug(f"Rows affected: {cur.rowcount}")
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
                     "ignore_dupes",
                     "upsert",
@@ -296,8 +298,8 @@ class Loader:
                         for item in items:
                             item.pop("partition")
                             copy.write_row(list(item.values()))
-                    logging.debug(cur.statusmessage)
-                    logging.debug(f"Copied rows: {cur.rowcount}")
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Copied rows: {cur.rowcount}")
 
                     cur.execute(
                         sql.SQL(
@@ -316,8 +318,8 @@ class Loader:
                                 """
                             ).format(sql.Identifier(partition["partition"]))
                         )
-                        logging.debug(cur.statusmessage)
-                        logging.debug(f"Rows affected: {cur.rowcount}")
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
                     elif insert_mode == "upsert":
                         cur.execute(
                             sql.SQL(
@@ -335,8 +337,8 @@ class Loader:
                             """
                             ).format(sql.Identifier(partition["partition"]))
                         )
-                        logging.debug(cur.statusmessage)
-                        logging.debug(f"Rows affected: {cur.rowcount}")
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
                     elif insert_mode == "delsert":
                         cur.execute(
                             sql.SQL(
@@ -358,14 +360,14 @@ class Loader:
                             """
                             ).format(sql.Identifier(partition["partition"]))
                         )
-                        logging.debug(cur.statusmessage)
-                        logging.debug(f"Rows affected: {cur.rowcount}")
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, upsert, and delsert."
                         f"You entered {insert_mode}."
                     )
-        logging.debug(
+        logger.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
 
@@ -414,18 +416,18 @@ class Loader:
             ):
                 partition["maxedt"] = item["end_datetime"]
             partitions[item["partition"]] = partition
-        logging.debug(
+        logger.debug(
             f"Loading and parsing data took {time.perf_counter() - t} seconds."
         )
         t = time.perf_counter()
         items.sort(key=lambda x: x["partition"])
-        logging.debug(f"Sorting data took {time.perf_counter() - t} seconds.")
+        logger.debug(f"Sorting data took {time.perf_counter() - t} seconds.")
         t = time.perf_counter()
 
         for k, g in itertools.groupby(items, lambda x: x["partition"]):
             self.load_partition(partitions[k], g, insert_mode)
 
-        logging.debug(
+        logger.debug(
             f"Adding data to database took {time.perf_counter() - t} seconds."
         )
 
