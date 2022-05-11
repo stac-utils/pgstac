@@ -108,9 +108,7 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                     yield orjson.loads(line)
             except JSONDecodeError:
                 # If reading first line as json fails, try reading entire file
-                logger.info(
-                    "First line could not be parsed as json, trying full file."
-                )
+                logger.info("First line could not be parsed as json, trying full file.")
                 try:
                     f.seek(0)
                     json = orjson.loads(f.read())
@@ -427,9 +425,7 @@ class Loader:
         for k, g in itertools.groupby(items, lambda x: x["partition"]):
             self.load_partition(partitions[k], g, insert_mode)
 
-        logger.debug(
-            f"Adding data to database took {time.perf_counter() - t} seconds."
-        )
+        logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
     def format_item(self, _item: Union[Path, str, dict]) -> dict:
         """Format an item to insert into a record."""
