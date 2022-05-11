@@ -12,6 +12,8 @@ import logging
 from pydantic import BaseSettings
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
+logger = logging.getLogger(__name__)
+
 
 def dumps(data: dict) -> str:
     """Dump dictionary as string."""
@@ -25,7 +27,7 @@ set_json_loads(orjson.loads)
 def pg_notice_handler(notice: psycopg.errors.Diagnostic) -> None:
     """Add PG messages to logging."""
     msg = f"{notice.severity} - {notice.message_primary}"
-    logging.info(msg)
+    logger.info(msg)
 
 
 class Settings(BaseSettings):
@@ -103,6 +105,7 @@ class PgstacDB:
         pool = self.get_pool()
         if self.connection is None:
             self.connection = pool.getconn()
+            self.connection.autocommit = True
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
             atexit.register(self.disconnect)
@@ -179,7 +182,7 @@ class PgstacDB:
                         yield row
         except psycopg.errors.OperationalError as e:
             # If we get an operational error check the pool and retry
-            logging.warning(f"OPERATIONAL ERROR: {e}")
+            logger.warning(f"OPERATIONAL ERROR: {e}")
             if self.pool is None:
                 self.get_pool()
             else:
@@ -213,13 +216,13 @@ class PgstacDB:
                 order by datetime desc, version desc limit 1;
                 """
             )
-            logging.debug(f"VERSION: {version}")
+            logger.debug(f"VERSION: {version}")
             if isinstance(version, bytes):
                 version = version.decode()
             if isinstance(version, str):
                 return version
         except psycopg.errors.UndefinedTable:
-            logging.debug("PGStac is not installed.")
+            logger.debug("PGStac is not installed.")
             if self.connection is not None:
                 self.connection.rollback()
         return None
@@ -232,7 +235,7 @@ class PgstacDB:
             SHOW server_version;
             """
         )
-        logging.debug(f"PG VERSION: {version}.")
+        logger.debug(f"PG VERSION: {version}.")
         if isinstance(version, bytes):
             version = version.decode()
         if isinstance(version, str):

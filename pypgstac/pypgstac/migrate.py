@@ -12,6 +12,8 @@ from . import __version__
 dirname = os.path.dirname(__file__)
 migrations_dir = os.path.join(dirname, "migrations")
 
+logger = logging.getLogger(__name__)
+
 
 class MigrationPath:
     """Calculate path from migration files to get from one version to the next."""
@@ -115,16 +117,16 @@ class Migrate:
         files = []
 
         pg_version = self.db.pg_version
-        logging.info(f"Migrating PGStac on PostgreSQL Version {pg_version}")
+        logger.info(f"Migrating PGStac on PostgreSQL Version {pg_version}")
         oldversion = self.db.version
         if oldversion == toversion:
-            logging.info(f"Target database already at version: {toversion}")
+            logger.info(f"Target database already at version: {toversion}")
             return toversion
         if oldversion is None:
-            logging.info(f"No pgstac version set, installing {toversion} from scratch.")
+            logger.info(f"No pgstac version set, installing {toversion} from scratch.")
             files.append(os.path.join(migrations_dir, f"pgstac.{toversion}.sql"))
         else:
-            logging.info(f"Migrating from {oldversion} to {toversion}.")
+            logger.info(f"Migrating from {oldversion} to {toversion}.")
             m = MigrationPath(migrations_dir, oldversion, toversion)
             files = m.migrations()
 
@@ -135,13 +137,13 @@ class Migrate:
 
         with conn.cursor() as cur:
             for file in files:
-                logging.debug(f"Running migration file {file}.")
+                logger.debug(f"Running migration file {file}.")
                 migration_sql = get_sql(file)
                 cur.execute(migration_sql)
-                logging.debug(cur.statusmessage)
-                logging.debug(cur.rowcount)
+                logger.debug(cur.statusmessage)
+                logger.debug(cur.rowcount)
 
-            logging.debug(f"Database migrated to {toversion}")
+            logger.debug(f"Database migrated to {toversion}")
 
         newversion = self.db.version
         if conn is not None:
@@ -153,6 +155,6 @@ class Migrate:
                     "Migration failed, database rolled back to previous state."
                 )
 
-        logging.debug(f"New Version: {newversion}")
+        logger.debug(f"New Version: {newversion}")
 
         return newversion
