@@ -103,6 +103,7 @@ class PgstacDB:
         pool = self.get_pool()
         if self.connection is None:
             self.connection = pool.getconn()
+            self.connection.autocommit = True
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
             atexit.register(self.disconnect)
