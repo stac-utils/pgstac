@@ -576,4 +576,4 @@ $function$
 
 
 
-SELECT set_version('0.5.2');
+SELECT set_version('0.6.0');

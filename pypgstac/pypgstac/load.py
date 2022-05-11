@@ -494,9 +494,7 @@ class Loader:
             for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
                 self.load_partition(self._partition_cache[k], g, insert_mode)
 
-        logger.debug(
-            f"Adding data to database took {time.perf_counter() - t} seconds."
-        )
+        logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
     def format_item(self, _item: Union[Path, str, dict]) -> dict:
         """Format an item to insert into a record."""
