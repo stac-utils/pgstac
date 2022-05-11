@@ -249,9 +249,7 @@ BEGIN
     ELSE
         includes := includes || '["id","collection"]'::jsonb;
         FOR path IN SELECT explode_dotpaths(includes) LOOP
-            RAISE NOTICE '1 outj %, path %, val %', outj, path, j #> path;
             outj := jsonb_set_nested(outj, path, j #> path);
-            RAISE NOTICE '2 outj %, path %, val %', outj, path, j #> path;
         END LOOP;
     END IF;
     RETURN outj;
@@ -271,11 +269,7 @@ BEGIN
         RETURN j;
     ELSE
         FOR path IN SELECT explode_dotpaths(excludes) LOOP
-                    RAISE NOTICE '1 outj %, path %, val %', outj, path, j #> path;
-
             outj := outj #- path;
-                        RAISE NOTICE '2 outj %, path %, val %', outj, path, j #> path;
-
         END LOOP;
     END IF;
     RETURN outj;
@@ -1505,31 +1499,8 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
 
-CREATE OR REPLACE FUNCTION content_slim(_item jsonb, _collection jsonb) RETURNS jsonb AS $$
-    SELECT
-        jsonb_object_agg(
-            key,
-            CASE
-                WHEN
-                    jsonb_typeof(c.value) = 'object'
-                    AND
-                    jsonb_typeof(i.value) = 'object'
-                THEN content_slim(i.value, c.value)
-                ELSE i.value
-            END
-        )
-    FROM
-        jsonb_each(_item) as i
-    LEFT JOIN
-        jsonb_each(_collection) as c
-    USING (key)
-    WHERE
-        i.value IS DISTINCT FROM c.value
-    ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT content_slim(_item - '{id,type,collection,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
+    SELECT strip_jsonb(_item - '{id,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
@@ -1586,7 +1557,7 @@ CREATE OR REPLACE FUNCTION content_hydrate(
     _item jsonb,
     fields jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb AS $$
-    SELECT strip_jsonb(
+    SELECT merge_jsonb(
             jsonb_fields(_item, fields),
             jsonb_fields(_base_item, fields)
     );
@@ -1613,7 +1584,8 @@ BEGIN
             'id', _item.id,
             'geometry', geom,
             'bbox',bbox,
-            'collection', _item.collection
+            'collection', _item.collection,
+            'type', 'Feature'
         ) || _item.content,
         _collection.base_item,
         fields
@@ -1642,7 +1614,8 @@ BEGIN
                 'id', _item.id,
                 'geometry', geom,
                 'bbox',bbox,
-                'collection', _item.collection
+                'collection', _item.collection,
+                'type', 'Feature'
             ) || _item.content;
     RETURN output;
 END;
@@ -2422,6 +2395,8 @@ DECLARE
     cntr int := 0;
     iter_record items%ROWTYPE;
     first_record jsonb;
+    first_item items%ROWTYPE;
+    last_item items%ROWTYPE;
     last_record jsonb;
     out_records jsonb := '[]'::jsonb;
     prev_query text;
@@ -2502,7 +2477,9 @@ ELSE
             ELSE
                 last_record := content_hydrate(iter_record, _search->'fields');
             END IF;
+            last_item := iter_record;
             IF cntr = 1 THEN
+                first_item := last_item;
                 first_record := last_record;
             END IF;
             IF cntr <= _limit THEN
@@ -2539,7 +2516,7 @@ IF _search ? 'token' THEN
         concat_ws(
             ' AND ',
             _where,
-            trim(get_token_filter(_search, to_jsonb(content_dehydrate(first_record))))
+            trim(get_token_filter(_search, to_jsonb(first_item)))
         )
     );
     RAISE NOTICE 'Query to get previous record: % --- %', prev_query, first_record;

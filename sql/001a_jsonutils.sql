@@ -111,9 +111,7 @@ BEGIN
     ELSE
         includes := includes || '["id","collection"]'::jsonb;
         FOR path IN SELECT explode_dotpaths(includes) LOOP
-            RAISE NOTICE '1 outj %, path %, val %', outj, path, j #> path;
             outj := jsonb_set_nested(outj, path, j #> path);
-            RAISE NOTICE '2 outj %, path %, val %', outj, path, j #> path;
         END LOOP;
     END IF;
     RETURN outj;
@@ -133,11 +131,7 @@ BEGIN
         RETURN j;
     ELSE
         FOR path IN SELECT explode_dotpaths(excludes) LOOP
-                    RAISE NOTICE '1 outj %, path %, val %', outj, path, j #> path;
-
             outj := outj #- path;
-                        RAISE NOTICE '2 outj %, path %, val %', outj, path, j #> path;
-
         END LOOP;
     END IF;
     RETURN outj;
