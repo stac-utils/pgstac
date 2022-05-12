@@ -12,7 +12,7 @@ $$ LANGUAGE SQL IMMUTABLE STRICT SET TIME ZONE 'UTC';
 
 
 CREATE OR REPLACE FUNCTION to_text(jsonb) RETURNS text AS $$
-    SELECT $1->>0;
+    SELECT CASE WHEN jsonb_typeof($1) IN ('array','object') THEN $1::text ELSE $1->>0 END;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
 CREATE OR REPLACE FUNCTION to_text_array(jsonb) RETURNS text[] AS $$
