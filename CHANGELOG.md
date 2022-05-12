@@ -1,4 +1,9 @@
 # Changelog
+## [v0.6.1]
+
+### Fixed
+- Fix issue where using equality operator against an array was only comparing the first element of the array
+
 ## [v0.6.0]
 
 ### Fixed
