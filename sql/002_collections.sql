@@ -6,8 +6,7 @@ CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS 
         'type', 'Feature',
         'stac_version', content->'stac_version',
         'assets', content->'item_assets',
-        'collection', content->'id',
-        'links', '[]'::jsonb
+        'collection', content->'id'
     );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
@@ -115,7 +114,11 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
+
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
+
         INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
     ELSIF partition_empty THEN
         q := format($q$
@@ -137,7 +140,9 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
     END IF;
@@ -227,7 +232,7 @@ DECLARE
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=collection;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'Collection % does not exist', collection;
+        RAISE EXCEPTION 'Collection % does not exist', collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
     parent_name := format('_items_%s', c.key);
 

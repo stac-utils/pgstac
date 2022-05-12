@@ -186,7 +186,7 @@ CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     SELECT
     CASE
 
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN '"𒍟※"'::jsonb
+        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
         WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
         WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
         WHEN _a = _b THEN NULL

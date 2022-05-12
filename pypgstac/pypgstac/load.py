@@ -159,6 +159,7 @@ class Loader:
             raise Exception(
                 f"Collection {collection_id} is not present in the database"
             )
+        logger.debug(f"Found {collection_id} with base_item {base_item}")
         return base_item, key, partition_trunc
 
     def load_collections(

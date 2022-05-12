@@ -200,7 +200,7 @@ AS $function$
     SELECT
     CASE
 
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN '"𒍟※"'::jsonb
+        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
         WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
         WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
         WHEN _a = _b THEN NULL
@@ -239,6 +239,166 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.collection_base_item(content jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT jsonb_build_object(
+        'type', 'Feature',
+        'stac_version', content->'stac_version',
+        'assets', content->'item_assets',
+        'collection', content->'id'
+    );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collections_trigger_func()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'pgstac', 'public'
+AS $function$
+DECLARE
+    q text;
+    partition_name text := format('_items_%s', NEW.key);
+    partition_exists boolean := false;
+    partition_empty boolean := true;
+    err_context text;
+    loadtemp boolean := FALSE;
+BEGIN
+    RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
+    SELECT relid::text INTO partition_name
+    FROM pg_partition_tree('items')
+    WHERE relid::text = partition_name;
+    IF FOUND THEN
+        partition_exists := true;
+        partition_empty := table_empty(partition_name);
+    ELSE
+        partition_exists := false;
+        partition_empty := true;
+        partition_name := format('_items_%s', NEW.key);
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_empty THEN
+        q := format($q$
+            DROP TABLE IF EXISTS %I CASCADE;
+            $q$,
+            partition_name
+        );
+        EXECUTE q;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_exists AND NOT partition_empty THEN
+        q := format($q$
+            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+            DROP TABLE IF EXISTS %I CASCADE;
+            $q$,
+            partition_name,
+            partition_name
+        );
+        EXECUTE q;
+        loadtemp := TRUE;
+        partition_empty := TRUE;
+        partition_exists := FALSE;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS NOT DISTINCT FROM OLD.partition_trunc THEN
+        RETURN NEW;
+    END IF;
+    IF NEW.partition_trunc IS NULL AND partition_empty THEN
+        RAISE NOTICE '% % % %',
+            partition_name,
+            NEW.id,
+            concat(partition_name,'_id_idx'),
+            partition_name
+        ;
+        q := format($q$
+            CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
+            CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+            $q$,
+            partition_name,
+            NEW.id,
+            concat(partition_name,'_id_idx'),
+            partition_name
+        );
+        RAISE NOTICE 'q: %', q;
+        BEGIN
+            EXECUTE q;
+            EXCEPTION
+        WHEN duplicate_table THEN
+            RAISE NOTICE 'Partition % already exists.', partition_name;
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
+            RAISE INFO 'Error Name:%',SQLERRM;
+            RAISE INFO 'Error State:%', SQLSTATE;
+            RAISE INFO 'Error Context:%', err_context;
+        END;
+
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
+
+        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
+    ELSIF partition_empty THEN
+        q := format($q$
+            CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L)
+                PARTITION BY RANGE (datetime);
+            $q$,
+            partition_name,
+            NEW.id
+        );
+        RAISE NOTICE 'q: %', q;
+        BEGIN
+            EXECUTE q;
+            EXCEPTION
+        WHEN duplicate_table THEN
+            RAISE NOTICE 'Partition % already exists.', partition_name;
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
+            RAISE INFO 'Error Name:%',SQLERRM;
+            RAISE INFO 'Error State:%', SQLSTATE;
+            RAISE INFO 'Error Context:%', err_context;
+        END;
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
+        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
+    ELSE
+        RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
+    END IF;
+    IF loadtemp THEN
+        RAISE NOTICE 'Moving data into new partitions.';
+         q := format($q$
+            WITH p AS (
+                SELECT
+                    collection,
+                    datetime as datetime,
+                    end_datetime as end_datetime,
+                    (partition_name(
+                        collection,
+                        datetime
+                    )).partition_name as name
+                FROM changepartitionstaging
+            )
+            INSERT INTO partitions (collection, datetime_range, end_datetime_range)
+                SELECT
+                    collection,
+                    tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
+                    tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
+                FROM p
+                    GROUP BY collection, name
+                ON CONFLICT (name) DO UPDATE SET
+                    datetime_range = EXCLUDED.datetime_range,
+                    end_datetime_range = EXCLUDED.end_datetime_range
+            ;
+            INSERT INTO %I SELECT * FROM changepartitionstaging;
+            DROP TABLE IF EXISTS changepartitionstaging;
+            $q$,
+            partition_name
+        );
+        EXECUTE q;
+    END IF;
+    RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.content_hydrate(_item pgstac.items, _collection pgstac.collections, fields jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -252,16 +412,12 @@ DECLARE
     base_item jsonb := _collection.base_item;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := content_hydrate(
         jsonb_build_object(
             'id', _item.id,
             'geometry', geom,
-            'bbox',bbox,
             'collection', _item.collection,
             'type', 'Feature'
         ) || _item.content,
@@ -285,15 +441,11 @@ DECLARE
     output jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := jsonb_build_object(
                 'id', _item.id,
                 'geometry', geom,
-                'bbox',bbox,
                 'collection', _item.collection,
                 'type', 'Feature'
             ) || _item.content;
@@ -307,7 +459,7 @@ CREATE OR REPLACE FUNCTION pgstac.content_slim(_item jsonb)
  LANGUAGE sql
  IMMUTABLE PARALLEL SAFE
 AS $function$
-    SELECT strip_jsonb(_item - '{id,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
 $function$
 ;
 
@@ -361,6 +513,42 @@ BEGIN
     END IF;
 
     RETURN FALSE;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.partition_name(collection text, dt timestamp with time zone, OUT partition_name text, OUT partition_range tstzrange)
+ RETURNS record
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+    c RECORD;
+    parent_name text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+    parent_name := format('_items_%s', c.key);
+
+
+    IF c.partition_trunc = 'year' THEN
+        partition_name := format('%s_%s', parent_name, to_char(dt,'YYYY'));
+    ELSIF c.partition_trunc = 'month' THEN
+        partition_name := format('%s_%s', parent_name, to_char(dt,'YYYYMM'));
+    ELSE
+        partition_name := parent_name;
+        partition_range := tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
+    END IF;
+    IF partition_range IS NULL THEN
+        partition_range := tstzrange(
+            date_trunc(c.partition_trunc::text, dt),
+            date_trunc(c.partition_trunc::text, dt) + concat('1 ', c.partition_trunc)::interval
+        );
+    END IF;
+    RETURN;
+
 END;
 $function$
 ;
@@ -564,7 +752,12 @@ BEGIN
     IF props ? 'properties' THEN
         props := props->'properties';
     END IF;
-    IF props ? 'start_datetime' AND props ? 'end_datetime' THEN
+    IF
+        props ? 'start_datetime'
+        AND props->>'start_datetime' IS NOT NULL
+        AND props ? 'end_datetime'
+        AND props->>'end_datetime' IS NOT NULL
+    THEN
         dt := props->>'start_datetime';
         edt := props->>'end_datetime';
         IF dt > edt THEN
@@ -575,7 +768,8 @@ BEGIN
         edt := props->>'datetime';
     END IF;
     IF dt is NULL OR edt IS NULL THEN
-        RAISE EXCEPTION 'Either datetime or both start_datetime and end_datetime must be set.';
+        RAISE NOTICE 'DT: %, EDT: %', dt, edt;
+        RAISE EXCEPTION 'Either datetime (%) or both start_datetime (%) and end_datetime (%) must be set.', props->>'datetime',props->>'start_datetime',props->>'end_datetime';
     END IF;
     RETURN tstzrange(dt, edt, '[]');
 END;

@@ -324,7 +324,7 @@ CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     SELECT
     CASE
 
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN '"𒍟※"'::jsonb
+        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
         WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
         WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
         WHEN _a = _b THEN NULL
@@ -389,7 +389,12 @@ BEGIN
     IF props ? 'properties' THEN
         props := props->'properties';
     END IF;
-    IF props ? 'start_datetime' AND props ? 'end_datetime' THEN
+    IF
+        props ? 'start_datetime'
+        AND props->>'start_datetime' IS NOT NULL
+        AND props ? 'end_datetime'
+        AND props->>'end_datetime' IS NOT NULL
+    THEN
         dt := props->>'start_datetime';
         edt := props->>'end_datetime';
         IF dt > edt THEN
@@ -400,7 +405,8 @@ BEGIN
         edt := props->>'datetime';
     END IF;
     IF dt is NULL OR edt IS NULL THEN
-        RAISE EXCEPTION 'Either datetime or both start_datetime and end_datetime must be set.';
+        RAISE NOTICE 'DT: %, EDT: %', dt, edt;
+        RAISE EXCEPTION 'Either datetime (%) or both start_datetime (%) and end_datetime (%) must be set.', props->>'datetime',props->>'start_datetime',props->>'end_datetime';
     END IF;
     RETURN tstzrange(dt, edt, '[]');
 END;
@@ -437,8 +443,7 @@ CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS 
         'type', 'Feature',
         'stac_version', content->'stac_version',
         'assets', content->'item_assets',
-        'collection', content->'id',
-        'links', '[]'::jsonb
+        'collection', content->'id'
     );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
@@ -546,7 +551,11 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
+
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
+
         INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
     ELSIF partition_empty THEN
         q := format($q$
@@ -568,7 +577,9 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
         END;
+        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
         DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
+        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
     ELSE
         RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
     END IF;
@@ -658,7 +669,7 @@ DECLARE
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=collection;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'Collection % does not exist', collection;
+        RAISE EXCEPTION 'Collection % does not exist', collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
     parent_name := format('_items_%s', c.key);
 
@@ -1516,7 +1527,7 @@ ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) R
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
@@ -1590,16 +1601,12 @@ DECLARE
     base_item jsonb := _collection.base_item;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := content_hydrate(
         jsonb_build_object(
             'id', _item.id,
             'geometry', geom,
-            'bbox',bbox,
             'collection', _item.collection,
             'type', 'Feature'
         ) || _item.content,
@@ -1621,15 +1628,11 @@ DECLARE
     output jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := jsonb_build_object(
                 'id', _item.id,
                 'geometry', geom,
-                'bbox',bbox,
                 'collection', _item.collection,
                 'type', 'Feature'
             ) || _item.content;

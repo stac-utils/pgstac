@@ -125,6 +125,9 @@ def apply_marked_keys(
 
     This modifies the dehydrated item in-place.
     """
-    marked_keys = [key for key in base_item if key not in full_item.keys()]
-    marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
-    dehydrated.update(marked_dict)
+    try:
+        marked_keys = [key for key in base_item if key not in full_item.keys()]
+        marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
+        dehydrated.update(marked_dict)
+    except TypeError:
+        pass

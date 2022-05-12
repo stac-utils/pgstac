@@ -19,7 +19,7 @@ ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) R
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
@@ -93,16 +93,12 @@ DECLARE
     base_item jsonb := _collection.base_item;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := content_hydrate(
         jsonb_build_object(
             'id', _item.id,
             'geometry', geom,
-            'bbox',bbox,
             'collection', _item.collection,
             'type', 'Feature'
         ) || _item.content,
@@ -124,15 +120,11 @@ DECLARE
     output jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := jsonb_build_object(
                 'id', _item.id,
                 'geometry', geom,
-                'bbox',bbox,
                 'collection', _item.collection,
                 'type', 'Feature'
             ) || _item.content;
