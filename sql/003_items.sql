@@ -18,31 +18,8 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
 
-CREATE OR REPLACE FUNCTION content_slim(_item jsonb, _collection jsonb) RETURNS jsonb AS $$
-    SELECT
-        jsonb_object_agg(
-            key,
-            CASE
-                WHEN
-                    jsonb_typeof(c.value) = 'object'
-                    AND
-                    jsonb_typeof(i.value) = 'object'
-                THEN content_slim(i.value, c.value)
-                ELSE i.value
-            END
-        )
-    FROM
-        jsonb_each(_item) as i
-    LEFT JOIN
-        jsonb_each(_collection) as c
-    USING (key)
-    WHERE
-        i.value IS DISTINCT FROM c.value
-    ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT content_slim(_item - '{id,type,collection,geometry,bbox}'::text[], collection_base_item(_item->>'collection'));
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
@@ -56,101 +33,53 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     ;
 $$ LANGUAGE SQL STABLE;
 
-
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
-    includes jsonb := coalesce(fields->'includes', fields->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(fields->'excludes', fields->'exclude', '[]'::jsonb);
+    includes jsonb := fields->'include';
+    excludes jsonb := fields->'exclude';
 BEGIN
     IF f IS NULL THEN
         RETURN NULL;
-    ELSIF jsonb_array_length(includes)>0 AND includes ? f THEN
-        RETURN TRUE;
-    ELSIF jsonb_array_length(excludes)>0 AND excludes ? f THEN
-        RETURN FALSE;
-    ELSIF jsonb_array_length(includes)>0 AND NOT includes ? f THEN
+    END IF;
+
+
+    IF
+        jsonb_typeof(excludes) = 'array'
+        AND jsonb_array_length(excludes)>0
+        AND excludes ? f
+    THEN
         RETURN FALSE;
     END IF;
-    RETURN TRUE;
+
+    IF
+        (
+            jsonb_typeof(includes) = 'array'
+            AND jsonb_array_length(includes) > 0
+            AND includes ? f
+        ) OR
+        (
+            includes IS NULL
+            OR jsonb_typeof(includes) = 'null'
+            OR jsonb_array_length(includes) = 0
+        )
+    THEN
+        RETURN TRUE;
+    END IF;
+
+    RETURN FALSE;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
-
-CREATE OR REPLACE FUNCTION key_filter(IN k text, IN val jsonb, INOUT kf jsonb, OUT include boolean) AS $$
-DECLARE
-    includes jsonb := coalesce(kf->'includes', kf->'include', '[]'::jsonb);
-    excludes jsonb := coalesce(kf->'excludes', kf->'exclude', '[]'::jsonb);
-BEGIN
-    RAISE NOTICE '% % %', k, val, kf;
-
-    include := TRUE;
-    IF k = 'properties' AND NOT excludes ? 'properties' THEN
-        excludes := excludes || '["properties"]';
-        include := TRUE;
-        RAISE NOTICE 'Prop include %', include;
-    ELSIF
-        jsonb_array_length(excludes)>0 AND excludes ? k THEN
-        include := FALSE;
-    ELSIF
-        jsonb_array_length(includes)>0 AND NOT includes ? k THEN
-        include := FALSE;
-    ELSIF
-        jsonb_array_length(includes)>0 AND includes ? k THEN
-        includes := '[]'::jsonb;
-        RAISE NOTICE 'KF: %', kf;
-    END IF;
-    kf := jsonb_build_object('includes', includes, 'excludes', excludes);
-    RETURN;
-END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION strip_assets(a jsonb) RETURNS jsonb AS $$
-    WITH t AS (SELECT * FROM jsonb_each(a))
-    SELECT jsonb_object_agg(key, value) FROM t
-    WHERE value ? 'href';
-$$ LANGUAGE SQL IMMUTABLE STRICT;
-
+DROP FUNCTION IF EXISTS content_hydrate(jsonb, jsonb, jsonb);
 CREATE OR REPLACE FUNCTION content_hydrate(
+    _base_item jsonb,
     _item jsonb,
-    _collection jsonb,
     fields jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb AS $$
-    SELECT
-        jsonb_strip_nulls(jsonb_object_agg(
-            key,
-            CASE
-                WHEN key = 'properties' AND include_field('properties', fields) THEN
-                    i.value
-                WHEN key = 'properties' THEN
-                    content_hydrate(i.value, c.value, kf)
-                WHEN
-                    c.value IS NULL AND key != 'properties'
-                THEN i.value
-                WHEN
-                    key = 'assets'
-                    AND
-                    jsonb_typeof(c.value) = 'object'
-                    AND
-                    jsonb_typeof(i.value) = 'object'
-                THEN strip_assets(content_hydrate(i.value, c.value, kf))
-                WHEN
-                    jsonb_typeof(c.value) = 'object'
-                    AND
-                    jsonb_typeof(i.value) = 'object'
-                THEN content_hydrate(i.value, c.value, kf)
-                ELSE coalesce(i.value, c.value)
-            END
-        ))
-    FROM
-        jsonb_each(coalesce(_item,'{}'::jsonb)) as i
-    FULL JOIN
-        jsonb_each(coalesce(_collection,'{}'::jsonb)) as c
-    USING (key)
-    JOIN LATERAL (
-        SELECT kf, include FROM key_filter(key, i.value, fields)
-    ) as k ON (include)
-    ;
+    SELECT merge_jsonb(
+            jsonb_fields(_item, fields),
+            jsonb_fields(_base_item, fields)
+    );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
@@ -164,21 +93,18 @@ DECLARE
     base_item jsonb := _collection.base_item;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := content_hydrate(
-            jsonb_build_object(
-                'id', _item.id,
-                'geometry', geom,
-                'bbox',bbox,
-                'collection', _item.collection
-            ) || _item.content,
-            _collection.base_item,
-            fields
-        );
+        jsonb_build_object(
+            'id', _item.id,
+            'geometry', geom,
+            'collection', _item.collection,
+            'type', 'Feature'
+        ) || _item.content,
+        _collection.base_item,
+        fields
+    );
 
     RETURN output;
 END;
@@ -194,16 +120,13 @@ DECLARE
     output jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry)::jsonb;
-    END IF;
-    IF include_field('bbox', fields) THEN
-        bbox := geom_bbox(_item.geometry)::jsonb;
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
     output := jsonb_build_object(
                 'id', _item.id,
                 'geometry', geom,
-                'bbox',bbox,
-                'collection', _item.collection
+                'collection', _item.collection,
+                'type', 'Feature'
             ) || _item.content;
     RETURN output;
 END;
@@ -335,7 +258,7 @@ out items%ROWTYPE;
 BEGIN
     DELETE FROM items WHERE id = _id AND (_collection IS NULL OR collection=_collection) RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL STABLE;
+$$ LANGUAGE PLPGSQL;
 
 --/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
@@ -348,8 +271,8 @@ DECLARE
     old items %ROWTYPE;
     out items%ROWTYPE;
 BEGIN
-    SELECT delete_item(content->>'id', content->>'collection');
-    SELECT create_item(content);
+    PERFORM delete_item(content->>'id', content->>'collection');
+    PERFORM create_item(content);
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 

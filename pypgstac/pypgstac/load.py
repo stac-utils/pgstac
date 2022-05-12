@@ -13,14 +13,13 @@ from typing import (
     Dict,
     Iterable,
     Iterator,
-    List,
     Optional,
     Tuple,
     Union,
     Generator,
     TextIO,
 )
-
+import csv
 import orjson
 import psycopg
 from orjson import JSONDecodeError
@@ -40,6 +39,16 @@ from .hydration import dehydrate
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+def chunked_iterable(iterable: Iterable, size: Optional[int] = 10000) -> Iterable:
+    """Chunk an iterable."""
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, size))
+        if not chunk:
+            break
+        yield chunk
 
 
 class Tables(str, Enum):
@@ -133,6 +142,7 @@ class Loader:
     """Utilities for loading data."""
 
     db: PgstacDB
+    _partition_cache: Optional[dict] = None
 
     @lru_cache
     def collection_json(self, collection_id: str) -> Tuple[dict, int, str]:
@@ -149,6 +159,7 @@ class Loader:
             raise Exception(
                 f"Collection {collection_id} is not present in the database"
             )
+        logger.debug(f"Found {collection_id} with base_item {base_item}")
         return base_item, key, partition_trunc
 
     def load_collections(
@@ -270,7 +281,16 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(list(item.values()))
+                            copy.write_row(
+                                (
+                                    item["id"],
+                                    item["collection"],
+                                    item["datetime"],
+                                    item["end_datetime"],
+                                    item["geometry"],
+                                    item["content"],
+                                )
+                            )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
@@ -295,7 +315,16 @@ class Loader:
                     ) as copy:
                         for item in items:
                             item.pop("partition")
-                            copy.write_row(list(item.values()))
+                            copy.write_row(
+                                (
+                                    item["id"],
+                                    item["collection"],
+                                    item["datetime"],
+                                    item["end_datetime"],
+                                    item["geometry"],
+                                    item["content"],
+                                )
+                            )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Copied rows: {cur.rowcount}")
 
@@ -369,61 +398,102 @@ class Loader:
             f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
 
+    def _partition_update(self, item: dict) -> str:
+
+        p = item.get("partition", None)
+        if p is None:
+            _, key, partition_trunc = self.collection_json(item["collection"])
+            if partition_trunc == "year":
+                pd = item["datetime"].replace("-", "")[:4]
+                p = f"_items_{key}_{pd}"
+            elif partition_trunc == "month":
+                pd = item["datetime"].replace("-", "")[:6]
+                p = f"_items_{key}_{pd}"
+            else:
+                p = f"_items_{key}"
+            item["partition"] = p
+
+        if self._partition_cache is None:
+            self._partition_cache = {}
+
+        partition = self._partition_cache.get(
+            item["partition"],
+            {
+                "partition": None,
+                "collection": None,
+                "mindt": None,
+                "maxdt": None,
+                "minedt": None,
+                "maxedt": None,
+            },
+        )
+
+        partition["partition"] = item["partition"]
+        partition["collection"] = item["collection"]
+        if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
+            partition["mindt"] = item["datetime"]
+
+        if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
+            partition["maxdt"] = item["datetime"]
+
+        if partition["minedt"] is None or item["end_datetime"] < partition["minedt"]:
+            partition["minedt"] = item["end_datetime"]
+
+        if partition["maxedt"] is None or item["end_datetime"] > partition["maxedt"]:
+            partition["maxedt"] = item["end_datetime"]
+        self._partition_cache[item["partition"]] = partition
+
+        return p
+
+    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+        if file is None:
+            file = "stdin"
+        if isinstance(file, str):
+            open_file: Any = open_std(file, "r")
+            with open_file as f:
+                fields = [
+                    "id",
+                    "geometry",
+                    "collection",
+                    "datetime",
+                    "end_datetime",
+                    "content",
+                ]
+                csvreader = csv.DictReader(f, fields, delimiter="\t")
+                for item in csvreader:
+                    item["partition"] = self._partition_update(item)
+                    yield item
+
+    def read_hydrated(
+        self, file: Union[Path, str, Iterator[Any]] = "stdin"
+    ) -> Generator:
+        for line in read_json(file):
+            item = self.format_item(line)
+            item["partition"] = self._partition_update(item)
+            yield item
+
     def load_items(
         self,
         file: Union[Path, str, Iterator[Any]] = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
+        dehydrated: Optional[bool] = False,
+        chunksize: Optional[int] = 10000,
     ) -> None:
         """Load items json records."""
         if file is None:
             file = "stdin"
         t = time.perf_counter()
-        items: List = []
-        partitions: dict = {}
-        for line in read_json(file):
-            item = self.format_item(line)
-            items.append(item)
-            partition = partitions.get(
-                item["partition"],
-                {
-                    "partition": None,
-                    "collection": None,
-                    "mindt": None,
-                    "maxdt": None,
-                    "minedt": None,
-                    "maxedt": None,
-                },
-            )
-            partition["partition"] = item["partition"]
-            partition["collection"] = item["collection"]
-            if partition["mindt"] is None or item["datetime"] < partition["mindt"]:
-                partition["mindt"] = item["datetime"]
+        self._partition_cache = {}
 
-            if partition["maxdt"] is None or item["datetime"] > partition["maxdt"]:
-                partition["maxdt"] = item["datetime"]
+        if dehydrated and isinstance(file, str):
+            items = self.read_dehydrated(file)
+        else:
+            items = self.read_hydrated(file)
 
-            if (
-                partition["minedt"] is None
-                or item["end_datetime"] < partition["minedt"]
-            ):
-                partition["minedt"] = item["end_datetime"]
-
-            if (
-                partition["maxedt"] is None
-                or item["end_datetime"] > partition["maxedt"]
-            ):
-                partition["maxedt"] = item["end_datetime"]
-            partitions[item["partition"]] = partition
-        logger.debug(
-            f"Loading and parsing data took {time.perf_counter() - t} seconds."
-        )
-        t = time.perf_counter()
-        items.sort(key=lambda x: x["partition"])
-        logger.debug(f"Sorting data took {time.perf_counter() - t} seconds.")
-        t = time.perf_counter()
-
-        for k, g in itertools.groupby(items, lambda x: x["partition"]):
-            self.load_partition(partitions[k], g, insert_mode)
+        for chunk in chunked_iterable(items, chunksize):
+            list(chunk).sort(key=lambda x: x["partition"])
+            for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
+                self.load_partition(self._partition_cache[k], g, insert_mode)
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 

@@ -251,11 +251,15 @@ class PgstacDB:
         """Call a database function."""
         placeholders = sql.SQL(", ").join(sql.Placeholder() * len(args))
         func = sql.Identifier(function_name)
+        cleaned_args = []
+        for arg in args:
+            if isinstance(arg, dict):
+                cleaned_args.append(psycopg.types.json.Jsonb(arg))
+            else:
+                cleaned_args.append(arg)
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
-        return self.query(base_query, *args)
+        return self.query(base_query, cleaned_args)
 
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
         """Search PgStac."""
-        if isinstance(query, dict):
-            query = psycopg.types.json.Jsonb(query)
         return dumps(next(self.func("search", query))[0])

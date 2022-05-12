@@ -1,3 +1,4 @@
+"""Hydrate data in pypgstac rather than on the database."""
 from copy import deepcopy
 from typing import Any, Dict
 
@@ -11,7 +12,6 @@ def hydrate(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
     This will not perform a deep copy; values of the original item will be referenced
     in the return item.
     """
-
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
@@ -103,6 +103,10 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
             else:
                 # Unequal non-dict values are copied over from the incoming item
                 out[key] = value
+
+        # Mark any top-level keys from the base_item that are not in the incoming item
+        apply_marked_keys(base_value, item_value, out)
+
         return out
 
     return strip(base_item, full_item)
@@ -113,13 +117,17 @@ def apply_marked_keys(
     full_item: Dict[str, Any],
     dehydrated: Dict[str, Any],
 ) -> None:
-    """
+    """Mark keys.
+
     Mark any keys that are present on the base item but not in the incoming item
     as `do-not-merge` on the dehydrated item. This will prevent they key from
     being rehydrated.
 
     This modifies the dehydrated item in-place.
     """
-    marked_keys = [key for key in base_item if key not in full_item.keys()]
-    marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
-    dehydrated.update(marked_dict)
+    try:
+        marked_keys = [key for key in base_item if key not in full_item.keys()]
+        marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
+        dehydrated.update(marked_dict)
+    except TypeError:
+        pass

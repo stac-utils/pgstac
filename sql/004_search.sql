@@ -586,6 +586,8 @@ DECLARE
     cntr int := 0;
     iter_record items%ROWTYPE;
     first_record jsonb;
+    first_item items%ROWTYPE;
+    last_item items%ROWTYPE;
     last_record jsonb;
     out_records jsonb := '[]'::jsonb;
     prev_query text;
@@ -666,7 +668,9 @@ ELSE
             ELSE
                 last_record := content_hydrate(iter_record, _search->'fields');
             END IF;
+            last_item := iter_record;
             IF cntr = 1 THEN
+                first_item := last_item;
                 first_record := last_record;
             END IF;
             IF cntr <= _limit THEN
@@ -703,7 +707,7 @@ IF _search ? 'token' THEN
         concat_ws(
             ' AND ',
             _where,
-            trim(get_token_filter(_search, to_jsonb(content_dehydrate(first_record))))
+            trim(get_token_filter(_search, to_jsonb(first_item)))
         )
     );
     RAISE NOTICE 'Query to get previous record: % --- %', prev_query, first_record;

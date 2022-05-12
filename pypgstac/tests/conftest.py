@@ -17,8 +17,15 @@ def db() -> Generator:
         try:
             conn.execute("CREATE DATABASE pgstactestdb;")
         except psycopg.errors.DuplicateDatabase:
-            conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
-            conn.execute("CREATE DATABASE pgstactestdb;")
+            try:
+                conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
+                conn.execute("CREATE DATABASE pgstactestdb;")
+            except psycopg.errors.InsufficientPrivilege:
+                try:
+                    conn.execute("DROP DATABASE pgstactestdb;")
+                    conn.execute("CREATE DATABASE pgstactestdb;")
+                except:
+                    pass
 
     os.environ["PGDATABASE"] = "pgstactestdb"
 
@@ -31,7 +38,13 @@ def db() -> Generator:
     os.environ["PGDATABASE"] = origdb
 
     with psycopg.connect(autocommit=True) as conn:
-        conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
+        try:
+            conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
+        except psycopg.errors.InsufficientPrivilege:
+            try:
+                conn.execute("DROP DATABASE pgstactestdb;")
+            except:
+                pass
 
 
 @pytest.fixture(scope="function")

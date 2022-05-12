@@ -9,6 +9,7 @@ TEST_DATA_DIR = HERE.parent.parent / "test" / "testdata"
 TEST_COLLECTIONS_JSON = TEST_DATA_DIR / "collections.json"
 TEST_COLLECTIONS = TEST_DATA_DIR / "collections.ndjson"
 TEST_ITEMS = TEST_DATA_DIR / "items.ndjson"
+TEST_DEHYDRATED_ITEMS = TEST_DATA_DIR / "items.pgcopy"
 
 
 def test_load_collections_succeeds(loader: Loader) -> None:
@@ -222,3 +223,19 @@ def test_partition_loads_year(loader: Loader) -> None:
     )
 
     assert partitions == 1
+
+
+def test_load_items_dehydrated_ignore_succeeds(loader: Loader) -> None:
+    """Test pypgstac items ignore loader."""
+    loader.load_collections(
+        str(TEST_COLLECTIONS),
+        insert_mode=Methods.ignore,
+    )
+
+    loader.load_items(
+        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.insert, dehydrated=True
+    )
+
+    loader.load_items(
+        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.ignore, dehydrated=True
+    )

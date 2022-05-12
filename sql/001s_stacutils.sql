@@ -26,18 +26,24 @@ BEGIN
     IF props ? 'properties' THEN
         props := props->'properties';
     END IF;
-    IF props ? 'start_datetime' AND props ? 'end_datetime' THEN
-        dt := props->'start_datetime';
-        edt := props->'end_datetime';
+    IF
+        props ? 'start_datetime'
+        AND props->>'start_datetime' IS NOT NULL
+        AND props ? 'end_datetime'
+        AND props->>'end_datetime' IS NOT NULL
+    THEN
+        dt := props->>'start_datetime';
+        edt := props->>'end_datetime';
         IF dt > edt THEN
             RAISE EXCEPTION 'start_datetime must be < end_datetime';
         END IF;
     ELSE
-        dt := props->'datetime';
-        edt := props->'datetime';
+        dt := props->>'datetime';
+        edt := props->>'datetime';
     END IF;
     IF dt is NULL OR edt IS NULL THEN
-        RAISE EXCEPTION 'Either datetime or both start_datetime and end_datetime must be set.';
+        RAISE NOTICE 'DT: %, EDT: %', dt, edt;
+        RAISE EXCEPTION 'Either datetime (%) or both start_datetime (%) and end_datetime (%) must be set.', props->>'datetime',props->>'start_datetime',props->>'end_datetime';
     END IF;
     RETURN tstzrange(dt, edt, '[]');
 END;
