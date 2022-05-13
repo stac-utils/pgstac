@@ -1,6 +1,7 @@
 """Tests for pypgstac."""
+import json
 from pathlib import Path
-from pypgstac.load import Methods, Loader
+from pypgstac.load import Methods, Loader, read_json
 from psycopg.errors import UniqueViolation
 import pytest
 
@@ -239,3 +240,30 @@ def test_load_items_dehydrated_ignore_succeeds(loader: Loader) -> None:
     loader.load_items(
         str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.ignore, dehydrated=True
     )
+
+
+def test_format_items_keys(loader: Loader) -> None:
+    """Test pypgstac items ignore loader."""
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode=Methods.ignore,
+    )
+
+    items_iter = read_json(str(TEST_ITEMS))
+    item_json = next(iter(items_iter))
+    out = loader.format_item(item_json)
+
+    # Top level keys expected after format
+    assert "id" in out
+    assert "collection" in out
+    assert "geometry" in out
+    assert "content" in out
+
+    # Special keys expected not to be in the item content
+    content_json = json.loads(out["content"])
+    assert "id" not in content_json
+    assert "collection" not in content_json
+    assert "geometry" not in content_json
+
+    # Ensure bbox is included in content
+    assert "bbox" in content_json
