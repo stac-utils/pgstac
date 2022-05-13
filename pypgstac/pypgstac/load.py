@@ -511,8 +511,8 @@ class Loader:
 
         base_item, key, partition_trunc = self.collection_json(item["collection"])
 
-        out["id"] = item.pop("id")
-        out["collection"] = item.pop("collection")
+        out["id"] = item.get("id")
+        out["collection"] = item.get("collection")
         properties: dict = item.get("properties", {})
 
         dt = properties.get("datetime")
@@ -544,15 +544,20 @@ class Loader:
 
         out["partition"] = partition
 
-        bbox = item.pop("bbox")
-        geojson = item.pop("geometry")
-        if geojson is None and bbox is not None:
+        geojson = item.get("geometry")
+        if geojson is None:
             geometry = None
         else:
             geometry = str(Geometry.from_geojson(geojson).wkb)
         out["geometry"] = geometry
 
         content = dehydrate(base_item, item)
+
+        # Remove keys from the dehydrated item content which are stored directly
+        # on the table row.
+        content.pop("id", None)
+        content.pop("collection", None)
+        content.pop("geometry", None)
 
         out["content"] = orjson.dumps(content).decode()
 
