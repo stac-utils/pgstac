@@ -544,9 +544,8 @@ class Loader:
 
         out["partition"] = partition
 
-        bbox = item.get("bbox")
         geojson = item.get("geometry")
-        if geojson is None and bbox is not None:
+        if geojson is None:
             geometry = None
         else:
             geometry = str(Geometry.from_geojson(geojson).wkb)
