@@ -1,4 +1,11 @@
 # Changelog
+
+## [v0.6.2]
+
+### Fixed
+
+- Ensure special keys are not in content when loaded [#112](https://github.com/stac-utils/pgstac/pull/112/files)
+
 ## [v0.6.1]
 
 ### Fixed
