@@ -275,7 +275,7 @@ PGStac uses PGTap to test SQL. Tests can be found in tests/pgtap.sql and are run
 2) Create a PR against the main branch
 3) Once the PR has been merged, start the release process.
 4) Upate the version in `pypgstac/pypgstac/version.py`
-5) Use `scripts/stagerelease` as documented in migrations section above making sure to rename any files ending in ".staged" in the migrations section
+5) Use `scripts/stageversion VERSION` as documented in migrations section above making sure to rename any files ending in ".staged" in the migrations section
 6) Add details for release to the CHANGELOG
 7) Add/Commit any changes
 8) Run tests `scripts/test`
