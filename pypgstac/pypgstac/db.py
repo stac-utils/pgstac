@@ -165,7 +165,7 @@ class PgstacDB:
     def query(
         self,
         query: Union[str, sql.Composed],
-        args: Optional[List] = None,
+        args: Optional[List[Any]] = None,
         row_factory: psycopg.rows.BaseRowFactory = psycopg.rows.tuple_row,
     ) -> Generator:
         """Query the database with parameters."""
