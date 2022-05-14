@@ -72,8 +72,8 @@ $$ LANGUAGE PLPGSQL IMMUTABLE;
 
 DROP FUNCTION IF EXISTS content_hydrate(jsonb, jsonb, jsonb);
 CREATE OR REPLACE FUNCTION content_hydrate(
-    _base_item jsonb,
     _item jsonb,
+    _base_item jsonb,
     fields jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb AS $$
     SELECT merge_jsonb(
