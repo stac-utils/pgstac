@@ -13,7 +13,7 @@ class TestHydratePG(THydrate):
     """Test hydration using PGStac."""
 
     @contextmanager
-    def db(self) -> Generator:
+    def db(self) -> Generator[PgstacDB, None, None]:
         """Set up database."""
         print("Setting up db.")
         origdb: str = os.getenv("PGDATABASE", "")
@@ -41,4 +41,4 @@ class TestHydratePG(THydrate):
     ) -> Dict[str, Any]:
         """Hydrate using pgstac."""
         with self.db() as db:
-            return next(db.func("merge_jsonb", item, base_item))[0]
+            return next(db.func("content_hydrate", item, base_item))[0]
