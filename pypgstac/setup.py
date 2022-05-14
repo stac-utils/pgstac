@@ -22,6 +22,7 @@ extra_reqs = {
         "black>=21.7b0",
         "mypy>=0.910",
         "types-orjson==0.1.1",
+        "pystac[validation]==1.*"
     ],
     "psycopg": [
         "psycopg[binary]==3.0.*",
