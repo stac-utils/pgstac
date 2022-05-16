@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Skip partition updates when unnecessary, which can drastically improve large ingest performance into existing partitions. [#114](https://github.com/stac-utils/pgstac/pull/114)
+
 ## [v0.6.2]
 
 ### Fixed
