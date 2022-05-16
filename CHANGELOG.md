@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [v0.6.3]
+
+### Fixed
+
+- Fixed content_hydrate argument ordering which caused incorrect behavior in database hydration [#115](https://github.com/stac-utils/pgstac/pull/115)
 
 ### Added
 
