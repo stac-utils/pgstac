@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed issue loader grouping an unordered iterable by partition, speeding up loads of items with mixed partitions [#116](https://github.com/stac-utils/pgstac/pull/116)
+
 ## [v0.6.3]
 
 ### Fixed
