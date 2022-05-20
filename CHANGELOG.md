@@ -3,6 +3,10 @@
 ### Fixed
 - Fixed casts for numeric data when a property is not in the queryables table to use the type from the incoming json filter
 
+## Unreleased
+
+- Fixed issue loader grouping an unordered iterable by partition, speeding up loads of items with mixed partitions [#116](https://github.com/stac-utils/pgstac/pull/116)
+
 ## [v0.6.3]
 
 ### Fixed
