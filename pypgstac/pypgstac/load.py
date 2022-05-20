@@ -552,7 +552,8 @@ class Loader:
             items = self.read_hydrated(file)
 
         for chunk in chunked_iterable(items, chunksize):
-            list(chunk).sort(key=lambda x: x["partition"])
+            chunk = list(chunk)
+            chunk.sort(key=lambda x: x["partition"])
             for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
                 self.load_partition(self._partition_cache[k], g, insert_mode)
 
