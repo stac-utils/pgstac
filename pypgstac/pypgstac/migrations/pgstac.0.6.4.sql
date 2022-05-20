@@ -1293,7 +1293,7 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('/', '%s / %s', NULL),
     ('in', '%s = ANY (%s)', NULL),
     ('not', 'NOT (%s)', NULL),
-    ('between', '%s BETWEEN (%2$s)[1] AND (%2$s)[2]', NULL),
+    ('between', '%s BETWEEN %s AND %s', NULL),
     ('isnull', '%s IS NULL', NULL),
     ('upper', 'upper(%s)', NULL),
     ('lower', 'lower(%s)', NULL)
@@ -1361,16 +1361,11 @@ BEGIN
 
 
     IF op = 'between' THEN
-        SELECT (queryable(a->>'property')).wrapper INTO wrapper
-        FROM jsonb_array_elements(args) a
-        WHERE a ? 'property' LIMIT 1;
-
-        RETURN format(
-            '%s BETWEEN %s and %s',
-            cql2_query(args->0, wrapper),
-            cql2_query(args->1->0, wrapper),
-            cql2_query(args->1->1, wrapper)
-            );
+        args = jsonb_build_array(
+            args->0,
+            args->1->0,
+            args->1->1
+        );
     END IF;
 
     -- Make sure that args is an array and run cql2_query on

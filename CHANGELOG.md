@@ -1,4 +1,7 @@
 # Changelog
+## [v0.6.4]
+### Fixed
+- Fixed casts for numeric data when a property is not in the queryables table to use the type from the incoming json filter
 
 ## [v0.6.3]
 

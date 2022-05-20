@@ -384,7 +384,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') and to_int('50')
+    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') AND to_int('50')
     $r$,E' \n');
     $$, 'Test Example 10'
 );

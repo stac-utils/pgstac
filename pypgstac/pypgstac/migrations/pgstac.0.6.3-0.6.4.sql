@@ -1,15 +1,6 @@
 SET SEARCH_PATH to pgstac, public;
 set check_function_bodies = off;
 
-INSERT INTO cql2_ops (op, template, types) VALUES
-    ('upper', 'upper(%s)', NULL),
-    ('lower', 'lower(%s)', NULL)
-ON CONFLICT (op) DO UPDATE
-    SET
-        template = EXCLUDED.template
-;
-
-
 CREATE OR REPLACE FUNCTION pgstac.cql2_query(j jsonb, wrapper text DEFAULT NULL::text)
  RETURNS text
  LANGUAGE plpgsql
@@ -72,16 +63,11 @@ BEGIN
 
 
     IF op = 'between' THEN
-        SELECT (queryable(a->>'property')).wrapper INTO wrapper
-        FROM jsonb_array_elements(args) a
-        WHERE a ? 'property' LIMIT 1;
-
-        RETURN format(
-            '%s BETWEEN %s and %s',
-            cql2_query(args->0, wrapper),
-            cql2_query(args->1->0, wrapper),
-            cql2_query(args->1->1, wrapper)
-            );
+        args = jsonb_build_array(
+            args->0,
+            args->1->0,
+            args->1->1
+        );
     END IF;
 
     -- Make sure that args is an array and run cql2_query on
