@@ -164,7 +164,7 @@ SELECT results_eq($$
                 "args": [
                 {
                     "op": ">",
-                    "args": [ { "property": "sentinel:data_coverage" }, 50 ]
+                    "args": [ { "property": "sentinel:data_coverage" }, "50" ]
                 },
                 {
                     "op": "<",
@@ -176,7 +176,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('50') AND to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
+    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('"50"') AND to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
     $r$,E' \n');
     $$, 'Test Example 3'
 );
@@ -204,7 +204,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('50') OR to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
+    (to_float(content->'properties'->'sentinel:data_coverage') > to_float('50') OR to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
     $r$,E' \n');
     $$, 'Test Example 4'
 );
@@ -363,7 +363,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_text(content->'properties'->'sentinel:data_coverage') >= to_text('50') OR to_text(content->'properties'->'landsat:coverage_percent') >= to_text('50') OR (to_text(content->'properties'->'sentinel:data_coverage') IS NULL AND to_text(content->'properties'->'landsat:coverage_percent') IS NULL))
+    (to_float(content->'properties'->'sentinel:data_coverage') >= to_float('50') OR to_float(content->'properties'->'landsat:coverage_percent') >= to_float('50') OR (to_text(content->'properties'->'sentinel:data_coverage') IS NULL AND to_text(content->'properties'->'landsat:coverage_percent') IS NULL))
     $r$,E' \n');
     $$, 'Test Example 9'
 );
@@ -384,7 +384,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') and to_int('50')
+    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') AND to_int('50')
     $r$,E' \n');
     $$, 'Test Example 10'
 );
@@ -425,7 +425,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    upper(to_text(content->'properties'->'mission')) = upper('sentinel')
+    upper(to_text(content->'properties'->'mission')) = upper(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test upper'
 );
@@ -445,7 +445,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    lower(to_text(content->'properties'->'mission')) = lower('sentinel')
+    lower(to_text(content->'properties'->'mission')) = lower(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test lower'
 );

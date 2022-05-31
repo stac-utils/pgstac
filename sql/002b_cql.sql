@@ -236,11 +236,13 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('/', '%s / %s', NULL),
     ('in', '%s = ANY (%s)', NULL),
     ('not', 'NOT (%s)', NULL),
-    ('between', '%s BETWEEN (%2$s)[1] AND (%2$s)[2]', NULL),
-    ('isnull', '%s IS NULL', NULL)
+    ('between', '%s BETWEEN %s AND %s', NULL),
+    ('isnull', '%s IS NULL', NULL),
+    ('upper', 'upper(%s)', NULL),
+    ('lower', 'lower(%s)', NULL)
 ON CONFLICT (op) DO UPDATE
     SET
-        template = EXCLUDED.template;
+        template = EXCLUDED.template
 ;
 
 
@@ -252,6 +254,7 @@ DECLARE
     op text := lower(j->>'op');
     cql2op RECORD;
     literal text;
+    _wrapper text;
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -262,11 +265,11 @@ BEGIN
     END IF;
 
     IF j ? 'upper' THEN
-        RETURN format('upper(%s)', cql2_query(j->'upper'));
+        RETURN  cql2_query(jsonb_build_object('op', 'upper', 'args', j->'upper'));
     END IF;
 
     IF j ? 'lower' THEN
-        RETURN format('lower(%s)', cql2_query(j->'lower'));
+        RETURN  cql2_query(jsonb_build_object('op', 'lower', 'args', j->'lower'));
     END IF;
 
     -- Temporal Query
@@ -301,16 +304,11 @@ BEGIN
 
 
     IF op = 'between' THEN
-        SELECT (queryable(a->>'property')).wrapper INTO wrapper
-        FROM jsonb_array_elements(args) a
-        WHERE a ? 'property' LIMIT 1;
-
-        RETURN format(
-            '%s BETWEEN %s and %s',
-            cql2_query(args->0, wrapper),
-            cql2_query(args->1->0, wrapper),
-            cql2_query(args->1->1, wrapper)
-            );
+        args = jsonb_build_array(
+            args->0,
+            args->1->0,
+            args->1->1
+        );
     END IF;
 
     -- Make sure that args is an array and run cql2_query on
@@ -321,9 +319,31 @@ BEGIN
             args := jsonb_build_array(args);
         END IF;
 
-        SELECT (queryable(a->>'property')).wrapper INTO wrapper
-        FROM jsonb_array_elements(args) a
-        WHERE a ? 'property' LIMIT 1;
+        IF jsonb_path_exists(args, '$[*] ? (@.property == "id" || @.property == "datetime" || @.property == "end_datetime" || @.property == "collection")') THEN
+            wrapper := NULL;
+        ELSE
+            -- if any of the arguments are a property, try to get the property_wrapper
+            FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
+                RAISE NOTICE 'Arg: %', arg;
+                SELECT property_wrapper INTO wrapper
+                FROM queryables
+                WHERE name=(arg->>'property')
+                LIMIT 1;
+                RAISE NOTICE 'Property: %, Wrapper: %', arg, wrapper;
+                IF wrapper IS NOT NULL THEN
+                    EXIT;
+                END IF;
+            END LOOP;
+
+            -- if the property was not in queryables, see if any args were numbers
+            IF
+                wrapper IS NULL
+                AND jsonb_path_exists(args, '$[*] ? (@.type()=="number")')
+            THEN
+                wrapper := 'to_float';
+            END IF;
+            wrapper := coalesce(wrapper, 'to_text');
+        END IF;
 
         SELECT jsonb_agg(cql2_query(a, wrapper))
             INTO args
@@ -354,14 +374,15 @@ BEGIN
     END IF;
 
 
-    IF j ? 'property' THEN
-        RETURN (queryable(j->>'property')).expression;
-    END IF;
-
     IF wrapper IS NOT NULL THEN
-        EXECUTE format('SELECT %I(%L)', wrapper, j) INTO literal;
-        RAISE NOTICE '% % %',wrapper, j, literal;
-        RETURN format('%I(%L)', wrapper, j);
+        RAISE NOTICE 'Wrapping % with %', j, wrapper;
+        IF j ? 'property' THEN
+            RETURN format('%I(%s)', wrapper, (queryable(j->>'property')).path);
+        ELSE
+            RETURN format('%I(%L)', wrapper, j);
+        END IF;
+    ELSIF j ? 'property' THEN
+        RETURN quote_ident(j->>'property');
     END IF;
 
     RETURN quote_literal(to_text(j));
