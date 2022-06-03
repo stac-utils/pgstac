@@ -320,3 +320,22 @@ def test_s1_grd_load_and_query(loader: Loader) -> None:
     )[0]
     item = res["features"][0]
     pystac.Item.from_dict(item).validate()
+
+
+def test_load_dehydrated(loader: Loader) -> None:
+    """Test loader for items dumped directly out of item table."""
+    collections = [
+        HERE / "data-files" / "hydration" / "collections" / "chloris-biomass.json",
+    ]
+
+    for collection in collections:
+        loader.load_collections(
+            str(collection),
+            insert_mode=Methods.ignore,
+        )
+
+    dehydrated_items = HERE / "data-files" / "load" / "dehydrated.txt"
+
+    loader.load_items(
+        str(dehydrated_items), insert_mode=Methods.insert, dehydrated=True
+    )
