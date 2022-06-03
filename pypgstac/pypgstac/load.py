@@ -27,6 +27,7 @@ from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
 from psycopg.types.range import Range
+from pypgstac.utils import set_csv_field_size_limit
 from smart_open import open
 from tenacity import (
     retry,
@@ -507,6 +508,8 @@ class Loader:
         return partition_name
 
     def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+        set_csv_field_size_limit()
+
         if file is None:
             file = "stdin"
         if isinstance(file, str):
