@@ -217,6 +217,10 @@ CREATE TABLE cql2_ops (
 );
 INSERT INTO cql2_ops (op, template, types) VALUES
     ('eq', '%s = %s', NULL),
+    ('neq', '%s != %s', NULL),
+    ('ne', '%s != %s', NULL),
+    ('!=', '%s != %s', NULL),
+    ('<>', '%s != %s', NULL),
     ('lt', '%s < %s', NULL),
     ('lte', '%s <= %s', NULL),
     ('gt', '%s > %s', NULL),
@@ -234,7 +238,6 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('-', '%s - %s', NULL),
     ('*', '%s * %s', NULL),
     ('/', '%s / %s', NULL),
-    ('in', '%s = ANY (%s)', NULL),
     ('not', 'NOT (%s)', NULL),
     ('between', '%s BETWEEN %s AND %s', NULL),
     ('isnull', '%s IS NULL', NULL),
