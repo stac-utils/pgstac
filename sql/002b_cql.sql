@@ -294,11 +294,14 @@ BEGIN
 
 
     IF op = 'in' THEN
-        RETURN format(
-                '%s = ANY (%L)',
-                cql2_query(args->0),
-                to_text_array(args->1)
-            );
+        RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
+        args := jsonb_build_array(args->0) || (args->1);
+        RAISE NOTICE 'IN2 : %', args;
+        -- RETURN format(
+        --         '%s = ANY (%L)',
+        --         cql2_query(args->0),
+        --         to_text_array(args->1)
+        --     );
     END IF;
 
 
@@ -359,11 +362,20 @@ BEGIN
             );
     END IF;
 
+    IF op = 'in' THEN
+        RETURN format(
+            '%L IN (%s)',
+            args->0,
+            array_to_string((to_text_array(args))[2:], ',')
+        );
+    END IF;
+
     -- Look up template from cql2_ops
     IF j ? 'op' THEN
         SELECT * INTO cql2op FROM cql2_ops WHERE  cql2_ops.op ilike op;
         IF FOUND THEN
             -- If specific index set in queryables for a property cast other arguments to that type
+
             RETURN format(
                 cql2op.template,
                 VARIADIC (to_text_array(args))
