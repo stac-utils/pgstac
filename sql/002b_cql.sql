@@ -363,9 +363,10 @@ BEGIN
     END IF;
 
     IF op = 'in' THEN
+        RAISE NOTICE 'IN --  % %', args->0, to_text(args->0);
         RETURN format(
-            '%L IN (%s)',
-            args->0,
+            '%s IN (%s)',
+            to_text(args->0),
             array_to_string((to_text_array(args))[2:], ',')
         );
     END IF;
