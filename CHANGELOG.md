@@ -1,5 +1,13 @@
 # Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- Fix failure of pypgstac load for large items [#121](https://github.com/stac-utils/pgstac/pull/121)
+
 ## [v0.6.4]
+
 ### Fixed
 - Fixed casts for numeric data when a property is not in the queryables table to use the type from the incoming json filter
 - Fixed issue loader grouping an unordered iterable by partition, speeding up loads of items with mixed partitions [#116](https://github.com/stac-utils/pgstac/pull/116)
