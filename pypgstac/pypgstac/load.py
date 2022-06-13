@@ -20,7 +20,6 @@ from typing import (
     Generator,
     TextIO,
 )
-import csv
 import orjson
 import psycopg
 from orjson import JSONDecodeError
@@ -512,6 +511,8 @@ class Loader:
         if isinstance(file, str):
             open_file: Any = open_std(file, "r")
             with open_file as f:
+                # Note: if 'content' is changed to be anything
+                # but the last field, the logic below will break.
                 fields = [
                     "id",
                     "geometry",
@@ -520,8 +521,21 @@ class Loader:
                     "end_datetime",
                     "content",
                 ]
-                csvreader = csv.DictReader(f, fields, delimiter="\t")
-                for item in csvreader:
+
+                for line in f:
+                    tab_split = line.split("\t")
+                    item = {}
+                    for i, field in enumerate(fields):
+                        if field == "content":
+                            # Join the remaining splits in case
+                            # there were any tabs in the JSON content.
+                            content_value = "\t".join(tab_split[i:])
+                            # Replace quote characters that can be
+                            # written on export and causes failures.
+                            content_value = content_value.replace(r'\\"', r"\"")
+                            item[field] = content_value
+                        else:
+                            item[field] = tab_split[i]
                     item["partition"] = self._partition_update(item)
                     yield item
 
