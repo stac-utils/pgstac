@@ -217,6 +217,10 @@ CREATE TABLE cql2_ops (
 );
 INSERT INTO cql2_ops (op, template, types) VALUES
     ('eq', '%s = %s', NULL),
+    ('neq', '%s != %s', NULL),
+    ('ne', '%s != %s', NULL),
+    ('!=', '%s != %s', NULL),
+    ('<>', '%s != %s', NULL),
     ('lt', '%s < %s', NULL),
     ('lte', '%s <= %s', NULL),
     ('gt', '%s > %s', NULL),
@@ -234,7 +238,6 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('-', '%s - %s', NULL),
     ('*', '%s * %s', NULL),
     ('/', '%s / %s', NULL),
-    ('in', '%s = ANY (%s)', NULL),
     ('not', 'NOT (%s)', NULL),
     ('between', '%s BETWEEN %s AND %s', NULL),
     ('isnull', '%s IS NULL', NULL),
@@ -294,11 +297,9 @@ BEGIN
 
 
     IF op = 'in' THEN
-        RETURN format(
-                '%s = ANY (%L)',
-                cql2_query(args->0),
-                to_text_array(args->1)
-            );
+        RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
+        args := jsonb_build_array(args->0) || (args->1);
+        RAISE NOTICE 'IN2 : %', args;
     END IF;
 
 
@@ -359,11 +360,21 @@ BEGIN
             );
     END IF;
 
+    IF op = 'in' THEN
+        RAISE NOTICE 'IN --  % %', args->0, to_text(args->0);
+        RETURN format(
+            '%s IN (%s)',
+            to_text(args->0),
+            array_to_string((to_text_array(args))[2:], ',')
+        );
+    END IF;
+
     -- Look up template from cql2_ops
     IF j ? 'op' THEN
         SELECT * INTO cql2op FROM cql2_ops WHERE  cql2_ops.op ilike op;
         IF FOUND THEN
             -- If specific index set in queryables for a property cast other arguments to that type
+
             RETURN format(
                 cql2op.template,
                 VARIADIC (to_text_array(args))

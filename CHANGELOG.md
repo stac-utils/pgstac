@@ -1,9 +1,7 @@
 # Changelog
-
-## [Unreleased]
-
+## [v0.6.5]
 ### Fixed
-
+- Fix for type casting when using the "in" operator [#122](https://github.com/stac-utils/pgstac/issues/122)
 - Fix failure of pypgstac load for large items [#121](https://github.com/stac-utils/pgstac/pull/121)
 
 ## [v0.6.4]

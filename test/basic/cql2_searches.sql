@@ -33,3 +33,7 @@ SELECT search('{"filter":{"op":"in","args":[{"property":"collection"},["nonexist
 SELECT search('{"filter":{"op":"in","args":[{"property":"collection"},["nonexistent"]]}, "conf":{"context":"off"}}');
 
 SELECT search('{"conf": {"nohydrate": true}, "limit": 2}');
+
+SELECT search('{"filter":{"op":"in","args":[{"property":"naip:state"},["zz","xx"]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"in","args":[{"property":"naip:year"},[2012,2013]]},"fields":{"include":["id"]}}');
