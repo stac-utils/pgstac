@@ -300,11 +300,6 @@ BEGIN
         RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
         args := jsonb_build_array(args->0) || (args->1);
         RAISE NOTICE 'IN2 : %', args;
-        -- RETURN format(
-        --         '%s = ANY (%L)',
-        --         cql2_query(args->0),
-        --         to_text_array(args->1)
-        --     );
     END IF;
 
 
