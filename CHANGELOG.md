@@ -1,7 +1,7 @@
 # Changelog
 ## [v0.6.6]
 ### Added
-- Add support for array operators in CQL2 (aequals, acontains, contained by, aoverlaps).
+- Add support for array operators in CQL2 (a_equals, a_contains, a_contained_by, a_overlaps).
 
 ## [v0.6.5]
 ### Fixed

@@ -1353,7 +1353,7 @@ BEGIN
         RETURN spatial_op_query(op, args);
     END IF;
 
-    IF op IN ('aequals', 'acontains', 'contained by', 'aoverlaps') THEN
+    IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
         IF args->0 ? 'property' THEN
             leftarg := format('to_text_array(%s)', (queryable(args->0->>'property')).path);
         END IF;
@@ -1364,10 +1364,10 @@ BEGIN
             '%s %s %s',
             COALESCE(leftarg, quote_literal(to_text_array(args->0))),
             CASE op
-                WHEN 'aequals' THEN '='
-                WHEN 'acontains' THEN '@>'
-                WHEN 'contained by' THEN '<@'
-                WHEN 'aoverlaps' THEN '&&'
+                WHEN 'a_equals' THEN '='
+                WHEN 'a_contains' THEN '@>'
+                WHEN 'a_contained_by' THEN '<@'
+                WHEN 'a_overlaps' THEN '&&'
             END,
             COALESCE(rightarg, quote_literal(to_text_array(args->1)))
         );
