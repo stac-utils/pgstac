@@ -1,4 +1,8 @@
 # Changelog
+## [v0.6.6]
+### Added
+- Add support for array operators in CQL2 (aequals, acontains, contained by, aoverlaps).
+
 ## [v0.6.5]
 ### Fixed
 - Fix for type casting when using the "in" operator [#122](https://github.com/stac-utils/pgstac/issues/122)
