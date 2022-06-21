@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/10407788/174886188-3b932ada-ec28-4da0-a7a2-3b24142afe71.png"/>
+  <img src="https://user-images.githubusercontent.com/10407788/174893876-7a3b5b7a-95a5-48c4-9ff2-cc408f1b6af9.png"/>
   <p align="center">PostgreSQL schema and functions for Spatio-Temporal Asset Catalog (STAC)</p>
 </p>
 
