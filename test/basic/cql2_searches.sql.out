@@ -60,17 +60,27 @@ SELECT search('{"filter":{"op":"a_equals","args":[{"property":"proj:bbox"},[6548
 SELECT search('{"filter":{"op":"a_equals","args":[[654842, 3423507, 661516, 3431125],{"property":"proj:bbox"}]},"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0003", "collection": "pgstac-test-collection"}]}
 
+SELECT search('{"filter":{"op":"a_equals","args":[[654842, 3423507, 661516],{"property":"proj:bbox"}]},"fields":{"include":["id"]}}');
+{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}
+
 SELECT search('{"filter":{"op":"a_overlaps","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 12345]]},"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0003", "collection": "pgstac-test-collection"}]}
 
+SELECT search('{"filter":{"op":"a_overlaps","args":[{"property":"proj:bbox"},[12345]]},"fields":{"include":["id"]}}');
+{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}
+
 SELECT search('{"filter":{"op":"a_contains","args":[{"property":"proj:bbox"},[654842, 3423507, 661516]]},"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0003", "collection": "pgstac-test-collection"}]}
+
+SELECT search('{"filter":{"op":"a_contains","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 12345]]},"fields":{"include":["id"]}}');
+{"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}
 
 SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516]]},"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}
 
 SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 3431125, 234324]]},"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0003", "collection": "pgstac-test-collection"}]}
+
 
 \set QUIET 1
 \set ECHO none

@@ -178,6 +178,39 @@ END;
 $function$
 ;
 
+TRUNCATE cql2_ops;
+INSERT INTO cql2_ops (op, template, types) VALUES
+    ('eq', '%s = %s', NULL),
+    ('neq', '%s != %s', NULL),
+    ('ne', '%s != %s', NULL),
+    ('!=', '%s != %s', NULL),
+    ('<>', '%s != %s', NULL),
+    ('lt', '%s < %s', NULL),
+    ('lte', '%s <= %s', NULL),
+    ('gt', '%s > %s', NULL),
+    ('gte', '%s >= %s', NULL),
+    ('le', '%s <= %s', NULL),
+    ('ge', '%s >= %s', NULL),
+    ('=', '%s = %s', NULL),
+    ('<', '%s < %s', NULL),
+    ('<=', '%s <= %s', NULL),
+    ('>', '%s > %s', NULL),
+    ('>=', '%s >= %s', NULL),
+    ('like', '%s LIKE %s', NULL),
+    ('ilike', '%s ILIKE %s', NULL),
+    ('+', '%s + %s', NULL),
+    ('-', '%s - %s', NULL),
+    ('*', '%s * %s', NULL),
+    ('/', '%s / %s', NULL),
+    ('not', 'NOT (%s)', NULL),
+    ('between', '%s BETWEEN %s AND %s', NULL),
+    ('isnull', '%s IS NULL', NULL),
+    ('upper', 'upper(%s)', NULL),
+    ('lower', 'lower(%s)', NULL)
+ON CONFLICT (op) DO UPDATE
+    SET
+        template = EXCLUDED.template
+;
 
 
 SELECT set_version('0.6.6');
