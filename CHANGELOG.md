@@ -2,6 +2,7 @@
 ## [v0.6.6]
 ### Added
 - Add support for array operators in CQL2 (a_equals, a_contains, a_contained_by, a_overlaps).
+- Add check in loader to make sure that pypgstac and pgstac versions match before loading data [#123](https://github.com/stac-utils/pgstac/issues/123)
 
 ## [v0.6.5]
 ### Fixed
