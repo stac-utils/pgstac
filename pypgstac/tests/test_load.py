@@ -1,6 +1,7 @@
 """Tests for pypgstac."""
 import json
 from pathlib import Path
+from unittest import mock
 from pypgstac.load import Methods, Loader, read_json
 from psycopg.errors import UniqueViolation
 import pytest
@@ -339,3 +340,29 @@ def test_load_dehydrated(loader: Loader) -> None:
     loader.load_items(
         str(dehydrated_items), insert_mode=Methods.insert, dehydrated=True
     )
+
+
+def test_load_collections_incompatible_version(loader: Loader) -> None:
+    """Test pypgstac collections loader raises an exception for incompatible version."""
+    with mock.patch(
+        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock
+    ) as mock_version:
+        mock_version.return_value = "dummy"
+        with pytest.raises(Exception):
+            loader.load_collections(
+                str(TEST_COLLECTIONS_JSON),
+                insert_mode=Methods.insert,
+            )
+
+
+def test_load_items_incompatible_version(loader: Loader) -> None:
+    """Test pypgstac items loader raises an exception for incompatible version."""
+    with mock.patch(
+        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock
+    ) as mock_version:
+        mock_version.return_value = "dummy"
+        with pytest.raises(Exception):
+            loader.load_items(
+                str(TEST_ITEMS),
+                insert_mode=Methods.insert,
+            )
