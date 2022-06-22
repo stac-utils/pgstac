@@ -24,7 +24,6 @@ CREATE OR REPLACE FUNCTION to_text_array(jsonb) RETURNS text[] AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
     WHEN 4 THEN

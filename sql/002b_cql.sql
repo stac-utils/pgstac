@@ -258,6 +258,8 @@ DECLARE
     cql2op RECORD;
     literal text;
     _wrapper text;
+    leftarg text;
+    rightarg text;
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -295,6 +297,25 @@ BEGIN
         RETURN spatial_op_query(op, args);
     END IF;
 
+    IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
+        IF args->0 ? 'property' THEN
+            leftarg := format('to_text_array(%s)', (queryable(args->0->>'property')).path);
+        END IF;
+        IF args->1 ? 'property' THEN
+            rightarg := format('to_text_array(%s)', (queryable(args->1->>'property')).path);
+        END IF;
+        RETURN FORMAT(
+            '%s %s %s',
+            COALESCE(leftarg, quote_literal(to_text_array(args->0))),
+            CASE op
+                WHEN 'a_equals' THEN '='
+                WHEN 'a_contains' THEN '@>'
+                WHEN 'a_contained_by' THEN '<@'
+                WHEN 'a_overlaps' THEN '&&'
+            END,
+            COALESCE(rightarg, quote_literal(to_text_array(args->1)))
+        );
+    END IF;
 
     IF op = 'in' THEN
         RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
