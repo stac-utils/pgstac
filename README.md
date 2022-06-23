@@ -24,7 +24,7 @@
 
 ---
 
-Lorem ipsum: **PgSTAC** is a set of SQL function and schema to build highly performant database for Spatio-Temporal Asset Catalog (STAC). The project also provide **pypgstac** python module to help with the database migration and documents ingestion (collections and items).
+**PgSTAC** is a set of SQL function and schema to build highly performant database for Spatio-Temporal Asset Catalog (STAC). The project also provide **pypgstac** python module to help with the database migration and documents ingestion (collections and items).
 
 PgSTAC Documentation: https://stac-utils.github.io/pgstac/pgstac
 
