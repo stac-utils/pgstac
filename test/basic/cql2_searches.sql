@@ -37,3 +37,21 @@ SELECT search('{"conf": {"nohydrate": true}, "limit": 2}');
 SELECT search('{"filter":{"op":"in","args":[{"property":"naip:state"},["zz","xx"]]},"fields":{"include":["id"]}}');
 
 SELECT search('{"filter":{"op":"in","args":[{"property":"naip:year"},[2012,2013]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_equals","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 3431125]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_equals","args":[[654842, 3423507, 661516, 3431125],{"property":"proj:bbox"}]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_equals","args":[[654842, 3423507, 661516],{"property":"proj:bbox"}]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_overlaps","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 12345]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_overlaps","args":[{"property":"proj:bbox"},[12345]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_contains","args":[{"property":"proj:bbox"},[654842, 3423507, 661516]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_contains","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 12345]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516]]},"fields":{"include":["id"]}}');
+
+SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 3431125, 234324]]},"fields":{"include":["id"]}}');

@@ -37,6 +37,7 @@ from tenacity import (
 
 from .db import PgstacDB
 from .hydration import dehydrate
+from .version import __version__
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,13 @@ class Loader:
         self.db = db
         self._partition_cache: Dict[str, Partition] = {}
 
+    def check_version(self) -> None:
+        if self.db.version != __version__:
+            raise Exception(
+                f"pypgstac version {__version__} is not compatible with the target"
+                f" database version {self.db.version}."
+            )
+
     @lru_cache
     def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
         """Get collection."""
@@ -183,6 +191,8 @@ class Loader:
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
+        self.check_version()
+
         if file is None:
             file = "stdin"
         conn = self.db.connect()
@@ -555,6 +565,8 @@ class Loader:
         chunksize: Optional[int] = 10000,
     ) -> None:
         """Load items json records."""
+        self.check_version()
+
         if file is None:
             file = "stdin"
         t = time.perf_counter()
