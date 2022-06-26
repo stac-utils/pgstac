@@ -167,7 +167,7 @@ class Loader:
                 f" database version {self.db.version}."
             )
 
-    @lru_cache
+    @lru_cache(maxsize=128)
     def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
         """Get collection."""
         res = self.db.query_one(
