@@ -124,7 +124,7 @@ FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
-CREATE OR REPLACE FUNCTION get_queryables(_collection text DEFAULT NULL) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
     SELECT
         jsonb_build_object(
             '$schema', 'http://json-schema.org/draft-07/schema#',
@@ -138,11 +138,22 @@ CREATE OR REPLACE FUNCTION get_queryables(_collection text DEFAULT NULL) RETURNS
         )
         FROM queryables
         WHERE
-            _collection IS NULL OR
-            collections IS NULL OR
-            _collection = ANY (collection_ids)
+            _collection_ids IS NULL OR
+            cardinality(_collection_ids) = 0 OR
+            collection_ids IS NULL OR
+            _collection_ids && collection_ids
         ;
 $$ LANGUAGE SQL STABLE;
+
+CREATE OR REPLACE FUNCTION get_queryables(_collection text DEFAULT NULL) RETURNS jsonb AS $$
+    SELECT
+        CASE
+            WHEN _collection IS NULL THEN get_queryables(NULL::text[])
+            ELSE get_queryables(ARRAY[_collection])
+        END
+    ;
+$$ LANGUAGE SQL;
+
 
 CREATE OR REPLACE FUNCTION missing_queryables(_collection text, _tablesample int DEFAULT 5) RETURNS TABLE(collection text, name text, definition jsonb, property_wrapper text) AS $$
 DECLARE
