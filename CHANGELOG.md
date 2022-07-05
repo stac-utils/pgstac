@@ -1,5 +1,11 @@
 # Changelog
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](http://keepachangelog.com/)
+and this project adheres to [Semantic Versioning](http://semver.org/).
+
 ## [v0.6.7]
+
 ### Added
 - Add get_queryables function to return a composite queryables json for either a single collection (text), a list of collections(text[]), or for the full repository (null::text).
 
@@ -9,11 +15,13 @@
 
 
 ## [v0.6.6]
+
 ### Added
 - Add support for array operators in CQL2 (a_equals, a_contains, a_contained_by, a_overlaps).
 - Add check in loader to make sure that pypgstac and pgstac versions match before loading data [#123](https://github.com/stac-utils/pgstac/issues/123)
 
 ## [v0.6.5]
+
 ### Fixed
 - Fix for type casting when using the "in" operator [#122](https://github.com/stac-utils/pgstac/issues/122)
 - Fix failure of pypgstac load for large items [#121](https://github.com/stac-utils/pgstac/pull/121)
@@ -207,5 +215,25 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[Unreleased]: <https://github.com/stac-utils/pgstac/compare/v0.2.8..main>
-[v0.2.8]: <https://github.com/stac-utils/pgstac/compare/v0.2.7..v0.2.8>
+[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.6...HEAD
+[v0.6.6]: https://github.com//stac-utils/pgstac/compare/v0.6.5...v0.6.6
+[v0.6.5]: https://github.com//stac-utils/pgstac/compare/v0.6.4...v0.6.5
+[v0.6.4]: https://github.com//stac-utils/pgstac/compare/v0.6.3...v0.6.4
+[v0.6.3]: https://github.com//stac-utils/pgstac/compare/v0.6.2...v0.6.3
+[v0.6.2]: https://github.com//stac-utils/pgstac/compare/v0.6.1...v0.6.2
+[v0.6.1]: https://github.com//stac-utils/pgstac/compare/v0.6.0...v0.6.1
+[v0.6.0]: https://github.com//stac-utils/pgstac/compare/v0.5.1...v0.6.0
+[v0.5.1]: https://github.com//stac-utils/pgstac/compare/v0.5.0...v0.5.1
+[v0.5.0]: https://github.com//stac-utils/pgstac/compare/v0.4.5...v0.5.0
+[v0.4.5]: https://github.com//stac-utils/pgstac/compare/v0.4.4...v0.4.5
+[v0.4.4]: https://github.com//stac-utils/pgstac/compare/v0.4.3...v0.4.4
+[v0.4.3]: https://github.com//stac-utils/pgstac/compare/v0.4.2...v0.4.3
+[v0.4.2]: https://github.com//stac-utils/pgstac/compare/v0.4.1...v0.4.2
+[v0.4.1]: https://github.com//stac-utils/pgstac/compare/v0.4.0...v0.4.1
+[v0.4.0]: https://github.com//stac-utils/pgstac/compare/v0.3.4...v0.4.0
+[v0.3.4]: https://github.com//stac-utils/pgstac/compare/v0.3.3...v0.3.4
+[v0.3.3]: https://github.com//stac-utils/pgstac/compare/v0.3.2...v0.3.3
+[v0.3.2]: https://github.com//stac-utils/pgstac/compare/v0.3.1...v0.3.2
+[v0.3.1]: https://github.com//stac-utils/pgstac/compare/v0.3.0...v0.3.1
+[v0.3.0]: https://github.com//stac-utils/pgstac/compare/v0.2.8...v0.3.0
+[v0.2.8]: https://github.com//stac-utils/pgstac/compare/ff02c9cee7bbb0a2de21530b0aeb34e823f2e95c...v0.2.8
