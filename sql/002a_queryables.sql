@@ -17,8 +17,6 @@ INSERT INTO queryables (name, definition) VALUES
 ('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}')
 ON CONFLICT DO NOTHING;
 
-ON CONFLICT DO NOTHING;
-
 INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
 ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
 ON CONFLICT DO NOTHING;
