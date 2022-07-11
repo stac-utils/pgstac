@@ -325,7 +325,7 @@ class Loader:
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
-                    "ignore_dupes",
+                    "insert_ignore",
                     "upsert",
                     "delsert",
                     "ignore",
