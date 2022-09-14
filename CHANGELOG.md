@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.6.7]
+
+### Fixed
+- Fix not-null `prev` attribute when reading first token_type="prev" [#140](https://github.com/stac-utils/pgstac/issues/140)
+
 ## [v0.6.6]
 
 ### Added
@@ -206,7 +211,8 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.6...HEAD
+[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.7...HEAD
+[v0.6.7]: https://github.com//stac-utils/pgstac/compare/v0.6.6...v0.6.7
 [v0.6.6]: https://github.com//stac-utils/pgstac/compare/v0.6.5...v0.6.6
 [v0.6.5]: https://github.com//stac-utils/pgstac/compare/v0.6.4...v0.6.5
 [v0.6.4]: https://github.com//stac-utils/pgstac/compare/v0.6.3...v0.6.4

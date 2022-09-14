@@ -44,6 +44,18 @@ SELECT results_eq($$
 );
 
 
+SELECT has_function('pgstac'::name, 'search', ARRAY['jsonb']);
+
+
+SELECT results_eq($$
+    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}], "token": "prev:pgstac-test-item-0011"}')
+    $$,$$
+    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}')
+    $$,
+    'Test prev token when reading first token_type=prev (https://github.com/stac-utils/pgstac/issues/140)'
+);
+
+
 SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
 
 
