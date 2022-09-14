@@ -697,6 +697,7 @@ DROP TABLE results;
 -- Flip things around if this was the result of a prev token query
 IF token_type='prev' THEN
     out_records := flip_jsonb_array(out_records);
+    first_item := last_item;
     first_record := last_record;
 END IF;
 

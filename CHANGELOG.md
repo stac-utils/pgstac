@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.6.8]
+
+### Added
+- Add get_queryables function to return a composite queryables json for either a single collection (text), a list of collections(text[]), or for the full repository (null::text).
+
+- Add missing_queryables(collection text, tablesample int) function to help identify if there are any properties in a collection without entries in the queryables table. The tablesample parameter is an int <=100 that is the approximate percentage of the collection to scan to look for missing queryables rather than reading every item.
+
+- Add missing_queryables(tablesample int) function that scans all collections using a sample of records to identify missing queryables.
+
+
+
 ## [v0.6.7]
 
 ### Added
@@ -12,6 +23,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add missing_queryables(collection text, tablesample int) function to help identify if there are any properties in a collection without entries in the queryables table. The tablesample parameter is an int <=100 that is the approximate percentage of the collection to scan to look for missing queryables rather than reading every item.
 
 - Add missing_queryables(tablesample int) function that scans all collections using a sample of records to identify missing queryables.
+
 
 
 ## [v0.6.6]
@@ -215,7 +227,8 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.6...HEAD
+[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.7...HEAD
+[v0.6.7]: https://github.com//stac-utils/pgstac/compare/v0.6.6...v0.6.7
 [v0.6.6]: https://github.com//stac-utils/pgstac/compare/v0.6.5...v0.6.6
 [v0.6.5]: https://github.com//stac-utils/pgstac/compare/v0.6.4...v0.6.5
 [v0.6.4]: https://github.com//stac-utils/pgstac/compare/v0.6.3...v0.6.4

@@ -167,7 +167,7 @@ class Loader:
                 f" database version {self.db.version}."
             )
 
-    @lru_cache
+    @lru_cache(maxsize=128)
     def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
         """Get collection."""
         res = self.db.query_one(
@@ -208,7 +208,10 @@ class Loader:
                 with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
                     for collection in read_json(file):
                         copy.write_row((orjson.dumps(collection).decode(),))
-                if insert_mode is None or insert_mode == "insert":
+                if insert_mode in (
+                    None,
+                    Methods.insert,
+                ):
                     cur.execute(
                         """
                         INSERT INTO collections (content)
@@ -217,7 +220,10 @@ class Loader:
                     )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode in ("insert_ignore", "ignore"):
+                elif insert_mode in (
+                    Methods.insert_ignore,
+                    Methods.ignore,
+                ):
                     cur.execute(
                         """
                         INSERT INTO collections (content)
@@ -227,7 +233,7 @@ class Loader:
                     )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode == "upsert":
+                elif insert_mode == Methods.upsert:
                     cur.execute(
                         """
                         INSERT INTO collections (content)
@@ -300,7 +306,10 @@ class Loader:
 
             with conn.transaction():
                 t = time.perf_counter()
-                if insert_mode is None or insert_mode == "insert":
+                if insert_mode in (
+                    None,
+                    Methods.insert,
+                ):
                     with cur.copy(
                         sql.SQL(
                             """
@@ -325,10 +334,10 @@ class Loader:
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
                 elif insert_mode in (
-                    "ignore_dupes",
-                    "upsert",
-                    "delsert",
-                    "ignore",
+                    Methods.insert_ignore,
+                    Methods.upsert,
+                    Methods.delsert,
+                    Methods.ignore,
                 ):
                     cur.execute(
                         """
@@ -366,7 +375,10 @@ class Loader:
                             """
                         ).format(sql.Identifier(partition.name))
                     )
-                    if insert_mode in ("ignore", "insert_ignore"):
+                    if insert_mode in (
+                        Methods.ignore,
+                        Methods.insert_ignore,
+                    ):
                         cur.execute(
                             sql.SQL(
                                 """
@@ -378,7 +390,7 @@ class Loader:
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
-                    elif insert_mode == "upsert":
+                    elif insert_mode == Methods.upsert:
                         cur.execute(
                             sql.SQL(
                                 """
@@ -397,7 +409,7 @@ class Loader:
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
-                    elif insert_mode == "delsert":
+                    elif insert_mode == Methods.delsert:
                         cur.execute(
                             sql.SQL(
                                 """
