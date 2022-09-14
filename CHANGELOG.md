@@ -227,7 +227,8 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.7...HEAD
+[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.8...HEAD
+[v0.6.8]: https://github.com//stac-utils/pgstac/compare/v0.6.7...v0.6.8
 [v0.6.7]: https://github.com//stac-utils/pgstac/compare/v0.6.6...v0.6.7
 [v0.6.6]: https://github.com//stac-utils/pgstac/compare/v0.6.5...v0.6.6
 [v0.6.5]: https://github.com//stac-utils/pgstac/compare/v0.6.4...v0.6.5
