@@ -347,10 +347,7 @@ BEGIN
             -- if any of the arguments are a property, try to get the property_wrapper
             FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
                 RAISE NOTICE 'Arg: %', arg;
-                SELECT property_wrapper INTO wrapper
-                FROM queryables
-                WHERE name=(arg->>'property')
-                LIMIT 1;
+                wrapper := (queryable(arg->>'property')).nulled_wrapper;
                 RAISE NOTICE 'Property: %, Wrapper: %', arg, wrapper;
                 IF wrapper IS NOT NULL THEN
                     EXIT;

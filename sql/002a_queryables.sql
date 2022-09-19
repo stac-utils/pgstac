@@ -35,7 +35,8 @@ CREATE OR REPLACE FUNCTION queryable(
     IN dotpath text,
     OUT path text,
     OUT expression text,
-    OUT wrapper text
+    OUT wrapper text,
+    OUT nulled_wrapper text
 ) AS $$
 DECLARE
     q RECORD;
@@ -47,17 +48,26 @@ BEGIN
         wrapper := NULL;
         RETURN;
     END IF;
-    SELECT * INTO q FROM queryables WHERE name=dotpath;
+    SELECT * INTO q FROM queryables
+        WHERE
+            name=dotpath
+            OR name = 'properties.' || dotpath
+            OR name = replace(dotpath, 'properties.', '')
+    ;
     IF q.property_wrapper IS NULL THEN
         IF q.definition->>'type' = 'number' THEN
             wrapper := 'to_float';
+            nulled_wrapper := wrapper;
         ELSIF q.definition->>'format' = 'date-time' THEN
             wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
         ELSE
+            nulled_wrapper := NULL;
             wrapper := 'to_text';
         END IF;
     ELSE
         wrapper := q.property_wrapper;
+        nulled_wrapper := wrapper;
     END IF;
     IF q.property_path IS NOT NULL THEN
         path := q.property_path;
