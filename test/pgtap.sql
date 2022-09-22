@@ -19,7 +19,7 @@ SET SEARCH_PATH TO pgstac, pgtap, public;
 SET CLIENT_MIN_MESSAGES TO 'warning';
 
 -- Plan the tests.
-SELECT plan(66);
+SELECT plan(70);
 --SELECT * FROM no_plan();
 
 -- Run the tests.
@@ -30,6 +30,7 @@ SELECT plan(66);
 \i test/pgtap/001b_cursorutils.sql
 \i test/pgtap/001s_stacutils.sql
 \i test/pgtap/002_collections.sql
+\i test/pgtap/002a_queryables.sql
 \i test/pgtap/003_items.sql
 \i test/pgtap/004_search.sql
 \i test/pgtap/005_tileutils.sql
