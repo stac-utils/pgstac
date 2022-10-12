@@ -657,6 +657,7 @@ ELSE
         RAISE NOTICE 'Partition Query: %', query;
         batches := batches + 1;
         -- curs = create_cursor(query);
+        RAISE NOTICE 'cursor_tuple_fraction: %', current_setting('cursor_tuple_fraction');
         OPEN curs FOR EXECUTE query;
         LOOP
             FETCH curs into iter_record;
@@ -750,7 +751,7 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
 
 
 CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$

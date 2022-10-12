@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.6.9]
+
+### Fixed
+- Set cursor_tuple_fraction to 1 in search function to let query planner know to expect the entire table result within the search function to be returned. The default cursor_tuple_fraction of .1 within that function was at times creating bad query plans leading to slow queries.
+
 ## [v0.6.8]
 
 ### Added
