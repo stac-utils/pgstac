@@ -135,9 +135,13 @@ FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
 BEGIN
     -- Build up queryables if the input contains valid collection ids or is empty
-    IF (select array_agg(id) from collections) @> _collection_ids OR
-        _collection_ids IS NULL OR
-        cardinality(_collection_ids) = 0
+    IF EXISTS (
+        SELECT 1 FROM collections
+        WHERE
+            _collection_ids IS NULL
+            OR cardinality(_collection_ids) = 0
+            OR id = ANY(_collection_ids)
+    )
     THEN
         RETURN (
             SELECT

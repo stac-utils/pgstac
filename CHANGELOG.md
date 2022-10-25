@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## [v0.6.10]
+
+### Fixed
+- Makes sure that passing in a non-existing collection does not return a queryable object.
 
 ## [v0.6.9]
 
