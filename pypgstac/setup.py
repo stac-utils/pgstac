@@ -6,7 +6,7 @@ with open("README.md") as f:
     desc = f.read()
 
 install_requires = [
-    "smart-open==6.2.*",
+    "smart-open>=4.2,<7.0",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
