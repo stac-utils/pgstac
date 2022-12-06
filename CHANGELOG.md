@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [unreleased]
+## [v0.6.11]
 
 ### Fixed
 - update pypgstac requirements to support python 3.11 [142](https://github.com/stac-utils/pgstac/pull/142)
