@@ -60,7 +60,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_estimated_count', '100000'),
   ('context_estimated_cost', '100000'),
   ('context_stats_ttl', '1 day'),
-  ('default-filter-lang', 'cql2-json'),
+  ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true')
 ON CONFLICT DO NOTHING
 ;

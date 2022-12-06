@@ -11,7 +11,7 @@ SELECT results_eq(
     'Make sure that sortby with/without properties prefix return the same sort statement.'
 );
 
-SET pgstac."default-filter-lang" TO 'cql2-json';
+SET pgstac."default_filter_lang" TO 'cql2-json';
 
 SELECT results_eq(
     $$ SELECT stac_search_to_where('{"filter":{"op":"eq","args":[{"property":"eo:cloud_cover"},0]}}'); $$,
@@ -19,7 +19,7 @@ SELECT results_eq(
     'Make sure that CQL2 filter works the same with/without properties prefix.'
 );
 
-SET pgstac."default-filter-lang" TO 'cql-json';
+SET pgstac."default_filter_lang" TO 'cql-json';
 
 SELECT results_eq(
     $$ SELECT stac_search_to_where('{"filter":{"eq":[{"property":"eo:cloud_cover"},0]}}'); $$,
