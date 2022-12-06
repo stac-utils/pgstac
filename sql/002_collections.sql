@@ -195,6 +195,10 @@ CREATE TABLE IF NOT EXISTS partitions (
     partition_range tstzrange NOT NULL DEFAULT tstzrange('-infinity'::timestamptz,'infinity'::timestamptz, '[]'),
     datetime_range tstzrange,
     end_datetime_range tstzrange,
+    spatial_extent geometry,
+    last_updated timestamptz DEFAULT now(),
+    summaries_needs_check boolean DEFAULT FALSE,
+    indexes_needs_check boolean DEFAULT TRUE,
     CONSTRAINT prange EXCLUDE USING GIST (
         collection WITH =,
         partition_range WITH &&

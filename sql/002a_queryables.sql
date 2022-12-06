@@ -5,7 +5,8 @@ CREATE TABLE queryables (
     definition jsonb,
     property_path text,
     property_wrapper text,
-    property_index_type text
+    property_index_type text,
+    summarize text,
 );
 CREATE INDEX queryables_name_idx ON queryables (name);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
