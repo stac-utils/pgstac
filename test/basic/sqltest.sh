@@ -31,7 +31,7 @@ BEGIN;
 SET SEARCH_PATH TO pgstac, public;
 SET client_min_messages TO 'warning';
 SET pgstac.context TO 'on';
-SET pgstac."default-filter-lang" TO 'cql-json';
+SET pgstac."default_filter_lang" TO 'cql-json';
 
 DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy collections (content) FROM '../testdata/collections.ndjson';
