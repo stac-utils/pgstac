@@ -1,4 +1,4 @@
-SET pgstac."default-filter-lang" TO 'cql-json';
+SET pgstac."default_filter_lang" TO 'cql-json';
 
 SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
 

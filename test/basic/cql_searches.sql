@@ -1,4 +1,4 @@
-SET pgstac."default-filter-lang" TO 'cql-json';
+SET pgstac."default_filter_lang" TO 'cql-json';
 
 SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
 

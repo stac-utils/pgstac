@@ -3,7 +3,7 @@
 \copy items_staging (content) FROM 'test/testdata/items.ndjson'
 
 SET pgstac.context TO 'on';
-SET pgstac."default-filter-lang" TO 'cql-json';
+SET pgstac."default_filter_lang" TO 'cql-json';
 
 SELECT has_function('pgstac'::name, 'parse_dtrange', ARRAY['jsonb','timestamptz']);
 
@@ -82,7 +82,7 @@ SELECT results_eq($$
 
 -- CQL 2 Tests from examples at https://github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md
 
-SET pgstac."default-filter-lang" TO 'cql2-json';
+SET pgstac."default_filter_lang" TO 'cql2-json';
 
 SELECT results_eq($$
     SELECT BTRIM(stac_search_to_where($q$

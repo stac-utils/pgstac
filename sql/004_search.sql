@@ -176,7 +176,7 @@ BEGIN
 
     filterlang := COALESCE(
         j->>'filter-lang',
-        get_setting('default-filter-lang', j->'conf')
+        get_setting('default_filter_lang', j->'conf')
     );
     IF NOT filter @? '$.**.op' THEN
         filterlang := 'cql-json';
