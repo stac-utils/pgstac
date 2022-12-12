@@ -6,13 +6,13 @@ with open("README.md") as f:
     desc = f.read()
 
 install_requires = [
-    "smart-open==4.2.*",
+    "smart-open>=4.2,<7.0",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
     "plpygis==0.2.*",
-    "pydantic[dotenv]==1.9.*",
-    "tenacity==8.0.*",
+    "pydantic[dotenv]==1.10.*",
+    "tenacity==8.1.*",
 ]
 
 extra_reqs = {
@@ -25,7 +25,7 @@ extra_reqs = {
         "pystac[validation]==1.*"
     ],
     "psycopg": [
-        "psycopg[binary]==3.0.*",
+        "psycopg[binary]==3.1.*",
         "psycopg-pool==3.1.*",
     ],
 }

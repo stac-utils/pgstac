@@ -1,4 +1,4 @@
-SET pgstac."default-filter-lang" TO 'cql2-json';
+SET pgstac."default_filter_lang" TO 'cql2-json';
 SET
 SELECT search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 1, "returned": 1}, "features": [{"id": "pgstac-test-item-0097", "collection": "pgstac-test-collection"}]}
