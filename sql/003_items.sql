@@ -202,9 +202,16 @@ BEGIN
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
-            SELECT (content_dehydrate(content)).* FROM newdata
-        ), deletes AS (
-            DELETE FROM items i USING staging_formatted s
+            SELECT (content_dehydrate(content)).*  FROM newdata
+        ), changed AS (
+            SELECT s.*
+            FROM staging_formatted s
+                LEFT JOIN items i
+                USING (id, collection)
+            WHERE i.id IS NULL OR i IS DISTINCT FROM s
+        ),
+        deletes AS (
+            DELETE FROM items i USING changed s
                 WHERE
                     i.id = s.id
                     AND i.collection = s.collection
@@ -212,10 +219,7 @@ BEGIN
             RETURNING i.id, i.collection
         )
         INSERT INTO items
-        SELECT s.* FROM
-            staging_formatted s
-            JOIN deletes d
-            USING (id, collection);
+        SELECT s.* FROM changed;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
