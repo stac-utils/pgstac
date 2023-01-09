@@ -214,8 +214,7 @@ BEGIN
         INSERT INTO items
         SELECT s.* FROM
             staging_formatted s
-            JOIN deletes d
-            USING (id, collection);
+            ON CONFLICT DO NOTHING;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
