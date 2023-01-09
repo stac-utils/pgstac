@@ -202,16 +202,9 @@ BEGIN
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
-            SELECT (content_dehydrate(content)).*  FROM newdata
-        ), changed AS (
-            SELECT s.*
-            FROM staging_formatted s
-                LEFT JOIN items i
-                USING (id, collection)
-            WHERE i.id IS NULL OR i IS DISTINCT FROM s
-        ),
-        deletes AS (
-            DELETE FROM items i USING changed s
+            SELECT (content_dehydrate(content)).* FROM newdata
+        ), deletes AS (
+            DELETE FROM items i USING staging_formatted s
                 WHERE
                     i.id = s.id
                     AND i.collection = s.collection
@@ -219,7 +212,9 @@ BEGIN
             RETURNING i.id, i.collection
         )
         INSERT INTO items
-        SELECT s.* FROM changed;
+        SELECT s.* FROM
+            staging_formatted s
+            ON CONFLICT DO NOTHING;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
@@ -293,32 +288,3 @@ CREATE OR REPLACE FUNCTION upsert_items(data jsonb) RETURNS VOID AS $$
     INSERT INTO items_staging_upsert (content)
     SELECT * FROM jsonb_array_elements(data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
-
-
-CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
-    SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb
-    FROM items WHERE collection=$1;
-    ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
-
-CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS $$
-    SELECT to_jsonb(array[array[min(datetime)::text, max(datetime)::text]])
-    FROM items WHERE collection=$1;
-;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
-
-CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections SET
-    content = content ||
-    jsonb_build_object(
-        'extent', jsonb_build_object(
-            'spatial', jsonb_build_object(
-                'bbox', collection_bbox(collections.id)
-            ),
-            'temporal', jsonb_build_object(
-                'interval', collection_temporal_extent(collections.id)
-            )
-        )
-    )
-;
-$$ LANGUAGE SQL;

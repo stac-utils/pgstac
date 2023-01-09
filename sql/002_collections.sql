@@ -197,8 +197,7 @@ CREATE TABLE IF NOT EXISTS partitions (
     end_datetime_range tstzrange,
     spatial_extent geometry,
     last_updated timestamptz DEFAULT now(),
-    summaries_needs_check boolean DEFAULT FALSE,
-    indexes_needs_check boolean DEFAULT TRUE,
+    update_summaries boolean DEFAULT FALSE
     CONSTRAINT prange EXCLUDE USING GIST (
         collection WITH =,
         partition_range WITH &&
@@ -221,8 +220,10 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
+
 CREATE TRIGGER partitions_delete_trigger BEFORE DELETE ON partitions FOR EACH ROW
 EXECUTE FUNCTION partitions_delete_trigger_func();
+
 
 CREATE OR REPLACE FUNCTION partition_name(
     IN collection text,
@@ -260,7 +261,13 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE;
 
-
+CREATE OR REPLACE FUNCTION items_partition_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    UPDATE partitions SET update_summaries = TRUE, last_updated = now() WHERE name = TG_TABLE_NAME;
+    RETURN;
+END;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION partitions_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
@@ -362,6 +369,7 @@ BEGIN
     maxdt := date_trunc(coalesce(partition_trunc, 'year'), maxdt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
     minedt := date_trunc(coalesce(partition_trunc, 'year'), minedt);
     maxedt := date_trunc(coalesce(partition_trunc, 'year'), maxedt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
+    c text;
 
 
     IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
@@ -380,77 +388,79 @@ BEGIN
                     mindt:  %, maxdt:  %
                     minedt: %, maxedt: %
                 ', mindt, maxdt, minedt, maxedt;
+            -- DROP existing constraints
+            FOR c SELECT FORMAT(
+                $q$
+                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+                $q$,
+                partition_name,
+                conname
+            ) FROM pg_constraint
+                WHERE conrelid=partition_name::regclass::oid AND contype='c'
+            LOOP
+                EXECUTE cq;
+            END LOOP;
+
             IF partition_trunc IS NULL THEN
                 cq := format($q$
-                    ALTER TABLE %7$I
-                        DROP CONSTRAINT IF EXISTS %1$I,
-                        DROP CONSTRAINT IF EXISTS %2$I,
-                        ADD CONSTRAINT %1$I
+                    ALTER TABLE %I
+                        ADD CONSTRAINT %I
                             CHECK (
-                                (datetime >= %3$L)
-                                AND (datetime <= %4$L)
-                                AND (end_datetime >= %5$L)
-                                AND (end_datetime <= %6$L)
+                                (datetime >= %L)
+                                AND (datetime <= $L)
+                                AND (end_datetime >= %L)
+                                AND (end_datetime <= %L)
                             ) NOT VALID
                     ;
-                    ALTER TABLE %7$I
-                        VALIDATE CONSTRAINT %1$I;
                     $q$,
+                    partition_name,
                     format('%s_dt', partition_name),
-                    format('%s_edt', partition_name),
                     mindt,
                     maxdt,
                     minedt,
-                    maxedt,
-                    partition_name
+                    maxedt
                 );
             ELSE
                 cq := format($q$
-                    ALTER TABLE %5$I
-                        DROP CONSTRAINT IF EXISTS %1$I,
-                        DROP CONSTRAINT IF EXISTS %2$I,
-                        ADD CONSTRAINT %2$I
-                            CHECK ((end_datetime >= %3$L) AND (end_datetime <= %4$L)) NOT VALID
+                    ALTER TABLE %I
+                        ADD CONSTRAINT %I
+                            CHECK ((end_datetime >= %L) AND (end_datetime <= %L)) NOT VALID
                     ;
-                    ALTER TABLE %5$I
-                        VALIDATE CONSTRAINT %2$I;
                     $q$,
+                    partition_name,
                     format('%s_dt', partition_name),
-                    format('%s_edt', partition_name),
                     minedt,
-                    maxedt,
-                    partition_name
+                    maxedt
                 );
 
             END IF;
             RAISE NOTICE 'Altering Constraints. %', cq;
             EXECUTE cq;
+            PERFORM run_or_queue(format('ALTER TABLE %I VALIDATE CONSTRAINT %I', partition_name, format('%s_dt', partition_name)));
         END IF;
     ELSE
         NEW.datetime_range = NULL;
         NEW.end_datetime_range = NULL;
 
         cq := format($q$
-            ALTER TABLE %3$I
-                DROP CONSTRAINT IF EXISTS %1$I,
-                DROP CONSTRAINT IF EXISTS %2$I,
-                ADD CONSTRAINT %1$I
-                    CHECK ((datetime IS NULL AND end_datetime IS NULL)) NOT VALID
+            ALTER TABLE %I
+                ADD CONSTRAINT %I
+                    CHECK ((datetime IS NULL AND end_datetime IS NULL))
+                    NOT VALID
             ;
-            ALTER TABLE %3$I
-                VALIDATE CONSTRAINT %1$I;
+
             $q$,
-            format('%s_dt', partition_name),
-            format('%s_edt', partition_name),
-            partition_name
+            partition_name,
+            format('%s_dt', partition_name)
         );
         EXECUTE cq;
     END IF;
-
+    PERFORM validate_constraints();
     RETURN NEW;
 
 END;
 $$ LANGUAGE PLPGSQL;
+
 
 CREATE TRIGGER partitions_trigger BEFORE INSERT OR UPDATE ON partitions FOR EACH ROW
 EXECUTE FUNCTION partitions_trigger_func();

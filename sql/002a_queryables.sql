@@ -87,43 +87,146 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
-CREATE OR REPLACE FUNCTION create_queryable_indexes() RETURNS VOID AS $$
+
+CREATE OR REPLACE FUNCTION maintain_partition_queries(
+    part text DEFAULT 'items',
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE
+) RETURNS SETOF text AS $$
 DECLARE
-    queryable RECORD;
+    parent text;
+    level int;
+    isleaf bool;
+    collection collections%ROWTYPE;
+    subpart text;
+    baseidx text;
+    queryable_name text;
+    queryable_property_index_type text;
+    queryable_property_wrapper text;
+    queryable_parsed RECORD;
+    deletedidx pg_indexes%ROWTYPE;
     q text;
+    idx text;
+    collection_partition bigint;
 BEGIN
-    FOR queryable IN
-        SELECT
-            queryables.id as qid,
-            CASE WHEN collections.key IS NULL THEN 'items' ELSE format('_items_%s',collections.key) END AS part,
-            property_index_type,
-            expression
-            FROM
-            queryables
-            LEFT JOIN collections ON (collections.id = ANY (queryables.collection_ids))
-            JOIN LATERAL queryable(queryables.name) ON (queryables.property_index_type IS NOT NULL)
+    RAISE NOTICE 'Maintaining partition: %', part;
+
+    -- Get root partition
+    SELECT parentrelid::text, pt.isleaf, pt.level
+        INTO parent, isleaf, level
+    FROM pg_partition_tree('items') pt
+    WHERE relid::text = part;
+    IF NOT FOUND THEN
+        RAISE NOTICE 'Partition % Does Not Exist In Partition Tree', part;
+        RETURN;
+    END IF;
+
+    -- If this is a parent partition, recurse to leaves
+    IF NOT isleaf THEN
+        FOR subpart IN
+            SELECT relid::text
+            FROM pg_partition_tree(part)
+            WHERE relid::text != part
         LOOP
-        q := format(
-            $q$
-                CREATE INDEX IF NOT EXISTS %I ON %I USING %s ((%s));
-            $q$,
-            format('%s_%s_idx', queryable.part, queryable.qid),
-            queryable.part,
-            COALESCE(queryable.property_index_type, 'to_text'),
-            queryable.expression
-            );
-        RAISE NOTICE '%',q;
-        EXECUTE q;
+            RAISE NOTICE 'Recursing to %', subpart;
+            RETURN QUERY SELECT * FROM maintain_partition_queries(subpart, dropindexes, rebuildindexes);
+        END LOOP;
+        RETURN; -- Don't continue since not an end leaf
+    END IF;
+
+
+    -- Get collection
+    collection_partition := ((regexp_match(part, E'^_items_([0-9]+)'))[1])::bigint;
+    RAISE NOTICE 'COLLECTION PARTITION: %', collection_partition;
+    SELECT * INTO STRICT collection
+    FROM collections
+    WHERE key = collection_partition;
+    RAISE NOTICE 'COLLECTION ID: %s', collection.id;
+
+
+    -- Create temp table with existing indexes
+    CREATE TEMP TABLE existing_indexes ON COMMIT DROP AS
+    SELECT *
+    FROM pg_indexes
+    WHERE schemaname='pgstac' AND tablename=part;
+
+
+    -- Check if index exists for each queryable.
+    FOR
+        queryable_name,
+        queryable_property_index_type,
+        queryable_property_wrapper
+    IN
+        SELECT
+            name,
+            COALESCE(property_index_type, 'BTREE'),
+            COALESCE(property_wrapper, 'to_text')
+        FROM queryables
+        WHERE
+            name NOT in ('id', 'datetime', 'geometry')
+            AND (
+                collection_ids IS NULL
+                OR collection_ids = '{}'::text[]
+                OR collection.id = ANY (collection_ids)
+            )
+        UNION ALL
+        SELECT 'datetime desc, end_datetime', 'BTREE', ''
+        UNION ALL
+        SELECT 'geometry', 'GIST', ''
+        UNION ALL
+        SELECT 'id', 'BTREE', ''
+    LOOP
+        baseidx := format(
+            $q$ ON %I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            part,
+            queryable_property_index_type,
+            queryable_property_wrapper,
+            queryable_name
+        );
+        RAISE NOTICE 'BASEIDX: %', baseidx;
+        RAISE NOTICE 'IDXSEARCH: %', format($q$[(']%s[')]$q$, queryable_name);
+        -- If index already exists, delete it from existing indexes type table
+        DELETE FROM existing_indexes
+        WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
+        RETURNING * INTO deletedidx;
+        RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
+        IF NOT FOUND THEN -- index did not exist, create it
+            RETURN NEXT format('CREATE INDEX CONCURRENTLY %s;', baseidx);
+        ELSIF rebuildindexes THEN
+            RETURN NEXT format('REINDEX %I CONCURRENTLY;', deletedidx.indexname);
+        END IF;
     END LOOP;
+
+    -- Remove indexes that were not expected
+    IF dropindexes THEN
+        FOR idx IN SELECT indexname::text FROM existing_indexes
+        LOOP
+            RETURN NEXT format('DROP INDEX IF EXISTS %I;', idx);
+        END LOOP;
+    END IF;
+
+    DROP TABLE existing_indexes;
     RETURN;
+
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREAET OR REPLACE FUNCTION maintain_partitions(
+    part text DEFAULT items,
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE
+) RETURNS VOID AS $$
+    WITH t AS (
+        SELECT run_or_queue(q) FROM maintain_partitions_queries(part, dropindexes, rebuildindexes) q
+    ) SELECT count(*) FROM t;
+$$ LANGUAGE SQL;
+
 
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-PERFORM create_queryable_indexes();
-RETURN NEW;
+    PERFORM maintain_partitions();
+    RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL;
 
@@ -131,7 +234,7 @@ CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
 CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
-FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
+FOR EACH STATEMENT WHEN OLD.partition_trunc IS DISTINCT FROM NEW.partition_trunc EXECUTE PROCEDURE queryables_trigger_func();
 
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
 BEGIN
