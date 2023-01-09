@@ -14,6 +14,15 @@ CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
+CREATE OR REPLACE FUNCTION items_before_trigger_func() RETURNS VOID AS $$
+DECLARE
+
+BEGIN
+    UPDATE partitions SET
+
+END;
+$$ LANGUAGE PLPGSQL;
+
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
