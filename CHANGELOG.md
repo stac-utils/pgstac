@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## [v0.6.12]
+
+### Fixed
+- Fix issue with upserts in the trigger for using the items_staging tables
+- Fix for generating token query for sorting. [152] (https://github.com/stac-utils/pgstac/pull/152)
 
 ## [v0.6.11]
 
