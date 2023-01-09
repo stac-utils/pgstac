@@ -271,6 +271,21 @@ CREATE OR REPLACE FUNCTION get_sort_dir(sort_item jsonb) RETURNS text AS $$
     SELECT CASE WHEN sort_item->>'direction' ILIKE 'desc%' THEN 'DESC' ELSE 'ASC' END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION  get_token_val_str(
+    _field text,
+    _item items
+) RETURNS text AS $$
+DECLARE
+literal text;
+BEGIN
+RAISE NOTICE '% %', _field, _item;
+CREATE TEMP TABLE _token_item ON COMMIT DROP AS SELECT (_item).*;
+EXECUTE format($q$ SELECT quote_literal(%s) FROM _token_item $q$, _field) INTO literal;
+DROP TABLE IF EXISTS _token_item;
+RETURN literal;
+END;
+$$ LANGUAGE PLPGSQL;
+
 
 CREATE OR REPLACE FUNCTION get_token_filter(_search jsonb = '{}'::jsonb, token_rec jsonb DEFAULT NULL) RETURNS text AS $$
 DECLARE
@@ -284,6 +299,7 @@ DECLARE
     andfilters text[] := '{}'::text[];
     output text;
     token_where text;
+    token_item items%ROWTYPE;
 BEGIN
     RAISE NOTICE 'Getting Token Filter. % %', _search, token_rec;
     -- If no token provided return NULL
@@ -303,6 +319,12 @@ BEGIN
         FROM items WHERE id=token_id;
     END IF;
     RAISE NOTICE 'TOKEN ID: % %', token_rec, token_rec->'id';
+
+
+    RAISE NOTICE 'TOKEN ID: % %', token_rec, token_rec->'id';
+    token_item := jsonb_populate_record(null::items, token_rec);
+    RAISE NOTICE 'TOKEN ITEM ----- %', token_item;
+
 
     CREATE TEMP TABLE sorts (
         _row int GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -331,46 +353,50 @@ BEGIN
     END IF;
 
     -- Add value from looked up item to the sorts table
-    UPDATE sorts SET _val=quote_literal(token_rec->>_field);
+    UPDATE sorts SET _val=get_token_val_str(_field, token_item);
 
     -- Check if all sorts are the same direction and use row comparison
     -- to filter
     RAISE NOTICE 'sorts 2: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
 
-    IF (SELECT count(DISTINCT _dir) FROM sorts) = 1 THEN
-        SELECT format(
-                '(%s) %s (%s)',
-                concat_ws(', ', VARIADIC array_agg(quote_ident(_field))),
-                CASE WHEN (prev AND dir = 'ASC') OR (NOT prev AND dir = 'DESC') THEN '<' ELSE '>' END,
-                concat_ws(', ', VARIADIC array_agg(_val))
-        ) INTO output FROM sorts
-        WHERE token_rec ? _field
-        ;
-    ELSE
         FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
             RAISE NOTICE 'SORT: %', sort;
             IF sort._row = 1 THEN
-                orfilters := orfilters || format('(%s %s %s)',
-                    quote_ident(sort._field),
-                    CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                    sort._val
+                IF sort._val IS NULL THEN
+                    orfilters := orfilters || format('(%s IS NOT NULL)', sort._field);
+                ELSE
+                    orfilters := orfilters || format('(%s %s %s)',
+                        sort._field,
+                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
+                        sort._val
+                    );
+                END IF;
+            ELSE
+                IF sort._val IS NULL THEN
+                    orfilters := orfilters || format('(%s AND %s IS NOT NULL)',
+                    array_to_string(andfilters, ' AND '), sort._field);
+                ELSE
+                    orfilters := orfilters || format('(%s AND %s %s %s)',
+                        array_to_string(andfilters, ' AND '),
+                        sort._field,
+                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
+                        sort._val
+                    );
+                END IF;
+            END IF;
+            IF sort._val IS NULL THEN
+                andfilters := andfilters || format('%s IS NULL',
+                    sort._field
                 );
             ELSE
-                orfilters := orfilters || format('(%s AND %s %s %s)',
-                    array_to_string(andfilters, ' AND '),
-                    quote_ident(sort._field),
-                    CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
+                andfilters := andfilters || format('%s = %s',
+                    sort._field,
                     sort._val
                 );
-
             END IF;
-            andfilters := andfilters || format('%s = %s',
-                quote_ident(sort._field),
-                sort._val
-            );
         END LOOP;
         output := array_to_string(orfilters, ' OR ');
-    END IF;
+
     DROP TABLE IF EXISTS sorts;
     token_where := concat('(',coalesce(output,'true'),')');
     IF trim(token_where) = '' THEN
