@@ -58,17 +58,9 @@ CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 
-CREATE TABLE IF NOT EXISTS stac_extensions(
-    name text PRIMARY KEY,
-    url text,
-    enbabled_by_default boolean NOT NULL DEFAULT TRUE,
-    enableable boolean NOT NULL DEFAULT TRUE
-);
+DROP TABLE IF EXISTS stac_extensions;
 
-INSERT INTO stac_extensions (name, url) VALUES
-    ('fields', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#fields'),
-    ('sort','https://api.stacspec.org/v1.0.0-beta.5/item-search#sort'),
-    ('context','https://api.stacspec.org/v1.0.0-beta.5/item-search#context'),
-    ('filter', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#filter'),
-    ('query', 'https://api.stacspec.org/v1.0.0-beta.5/item-search#query')
-ON CONFLICT (name) DO UPDATE SET url=EXCLUDED.url;
+CREATE TABLE IF NOT EXISTS stac_extensions(
+    url text PRIMARY KEY,
+    content jsonb
+);

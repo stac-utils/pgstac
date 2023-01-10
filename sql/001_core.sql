@@ -170,7 +170,7 @@ CREATE TABLE query_queue (
 );
 
 DROP TABLE IF EXISTS query_queue_history;
-CREATE TABLE query_queue_errors(
+CREATE TABLE query_queue_history(
     query text,
     added timestamptz NOT NULL,
     finished timestamptz NOT NULL DEFAULT now(),
@@ -199,7 +199,7 @@ BEGIN
             EXCEPTION WHEN others THEN
                 error := format('%s | %s', SQLERRM, SQLSTATE);
         END;
-        INSERT INTO query_queye_history (query, added, finished, error)
+        INSERT INTO query_queue_history (query, added, finished, error)
             VALUES (qitem.query, qitem.added, clock_timestamp(), error);
         DELETE FROM query_queue WHERE query = qitem.query;
         COMMIT;

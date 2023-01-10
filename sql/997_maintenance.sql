@@ -6,7 +6,7 @@ BEGIN
 FOR q IN
     SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
     FROM pg_stat_user_tables
-    WHERE relname like concat('%_', filter, '%') AND (n_mod_since_analyze>0 OR force)
+    WHERE relname like concat('%_', filter, '%') AND (n_mod_since_analyze>0 OR last_analyze IS NULL OR force)
 LOOP
         cnt := cnt + 1;
         PERFORM run_or_queue(q);

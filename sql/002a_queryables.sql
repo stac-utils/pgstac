@@ -88,6 +88,30 @@ END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
 
+DROP VIEW IF EXISTS pgstac_indexes;
+CREATE VIEW pgstac_indexes AS
+SELECT
+    i.schemaname,
+    i.tablename,
+    i.indexname,
+    indexdef,
+    COALESCE(
+        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+    ) AS field,
+    pg_table_size(i.indexname::text) as index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty,
+    n_distinct,
+    most_common_vals::text::text[],
+    most_common_freqs::text::text[],
+    histogram_bounds::text::text[],
+    correlation
+FROM
+    pg_indexes i
+    LEFT JOIN pg_stats s ON (s.tablename = i.indexname)
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+
 CREATE OR REPLACE FUNCTION maintain_partition_queries(
     part text DEFAULT 'items',
     dropindexes boolean DEFAULT FALSE,
