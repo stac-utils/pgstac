@@ -8,6 +8,7 @@ from pypgstac.migrate import Migrate
 from pypgstac.load import Loader, Methods, Tables
 from pypgstac.version import __version__
 import logging
+from smart_open import open
 
 # sys.tracebacklimit = 0
 
@@ -71,6 +72,33 @@ class PgstacCLI:
             loader.load_collections(file, method)
         if table == "items":
             loader.load_items(file, method, dehydrated, chunksize)
+
+    def loadextensions(
+        self
+    ) -> None:
+        urls = self._db.query_one('''
+            SELECT pgstac.update_stac_extension_urls();
+            SELECT url FROM stac_extensions WHERE content IS NULL;
+        ''')
+        if urls:
+            for url in urls:
+                print(f"Fetching content from {url}")
+                try:
+                    with open(url, 'r') as f:
+                        content = f.readlines()
+                        self._db.query(
+                            '''
+                                UPDATE pgstac.stac_extensions
+                                SET content=$1
+                                WHERE url=$2;
+                            ''',
+                            content,
+                            url
+                        )
+                except Exception as e:
+                    print(f'Unable to load {url} into pgstac. {e}')
+
+
 
 
 def cli() -> fire.Fire:
