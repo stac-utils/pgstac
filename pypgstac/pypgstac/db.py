@@ -174,12 +174,13 @@ class PgstacDB:
             with conn.cursor(row_factory=row_factory) as cursor:
                 if args is None:
                     rows = cursor.execute(query, prepare=False)
+                else:
+                    rows = cursor.execute(query, args)
+                if rows:
                     for row in rows:
                         yield row
                 else:
-                    rows = cursor.execute(query, args)
-                    for row in rows:
-                        yield row
+                    yield None
         except psycopg.errors.OperationalError as e:
             # If we get an operational error check the pool and retry
             logger.warning(f"OPERATIONAL ERROR: {e}")

@@ -1,6 +1,6 @@
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
-    name text UNIQUE NOT NULL,
+    name text NOT NULL,
     collection_ids text[], -- used to determine what partitions to create indexes on
     definition jsonb,
     property_path text,
@@ -132,7 +132,9 @@ FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
+
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
+DECLARE
 BEGIN
     -- Build up queryables if the input contains valid collection ids or is empty
     IF EXISTS (
@@ -144,29 +146,52 @@ BEGIN
     )
     THEN
         RETURN (
+            WITH base AS (
+                SELECT
+                    unnest(collection_ids) as collection_id,
+                    name,
+                    coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables
+                WHERE
+                    _collection_ids IS NULL OR
+                    _collection_ids = '{}'::text[] OR
+                    _collection_ids && collection_ids
+                UNION ALL
+                SELECT null, name, coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables WHERE collection_ids IS NULL OR collection_ids = '{}'::text[]
+            ), g AS (
+                SELECT
+                    name,
+                    first_notnull(definition) as definition,
+                    jsonb_array_unique_merge(definition->'enum') as enum,
+                    jsonb_min(definition->'minimum') as minimum,
+                    jsonb_min(definition->'maxiumn') as maximum
+                FROM base
+                GROUP BY 1
+            )
             SELECT
                 jsonb_build_object(
                     '$schema', 'http://json-schema.org/draft-07/schema#',
-                    '$id', 'https://example.org/queryables',
+                    '$id', '',
                     'type', 'object',
                     'title', 'STAC Queryables.',
                     'properties', jsonb_object_agg(
                         name,
                         definition
+                        ||
+                        jsonb_strip_nulls(jsonb_build_object(
+                            'enum', enum,
+                            'minimum', minimum,
+                            'maximum', maximum
+                        ))
                     )
                 )
-                FROM queryables
-                WHERE
-                    _collection_ids IS NULL OR
-                    cardinality(_collection_ids) = 0 OR
-                    collection_ids IS NULL OR
-                    _collection_ids && collection_ids
+                FROM g
         );
     ELSE
         RETURN NULL;
     END IF;
 END;
-
 $$ LANGUAGE PLPGSQL STABLE;
 
 CREATE OR REPLACE FUNCTION get_queryables(_collection text DEFAULT NULL) RETURNS jsonb AS $$
@@ -178,23 +203,38 @@ CREATE OR REPLACE FUNCTION get_queryables(_collection text DEFAULT NULL) RETURNS
     ;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION get_queryables() RETURNS jsonb AS $$
+    SELECT get_queryables(NULL::text[]);
+$$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION missing_queryables(_collection text, _tablesample int DEFAULT 5) RETURNS TABLE(collection text, name text, definition jsonb, property_wrapper text) AS $$
+CREATE OR REPLACE FUNCTION schema_qualify_refs(url text, j jsonb) returns jsonb as $$
+    SELECT regexp_replace(j::text, '"\$ref": "#', concat('"$ref": "', url, '#'), 'g')::jsonb;
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+
+CREATE OR REPLACE VIEW stac_extension_queryables AS
+SELECT DISTINCT key as name, schema_qualify_refs(e.url, j.value) as definition FROM stac_extensions e, jsonb_each(e.content->'definitions'->'fields'->'properties') j;
+
+
+CREATE OR REPLACE FUNCTION missing_queryables(_collection text, _tablesample float DEFAULT 5, minrows float DEFAULT 10) RETURNS TABLE(collection text, name text, definition jsonb, property_wrapper text) AS $$
 DECLARE
     q text;
     _partition text;
     explain_json json;
-    psize bigint;
+    psize float;
+    estrows float;
 BEGIN
     SELECT format('_items_%s', key) INTO _partition FROM collections WHERE id=_collection;
 
     EXECUTE format('EXPLAIN (format json) SELECT 1 FROM %I;', _partition)
     INTO explain_json;
     psize := explain_json->0->'Plan'->'Plan Rows';
-    IF _tablesample * .01 * psize < 10 THEN
-        _tablesample := 100;
+    estrows := _tablesample * .01 * psize;
+    IF estrows < minrows THEN
+        _tablesample := least(100,greatest(_tablesample, (estrows / psize) / 100));
+        RAISE NOTICE '%', (psize / estrows) / 100;
     END IF;
-    RAISE NOTICE 'Using tablesample % to find missing queryables from % % that has ~% rows', _tablesample, _collection, _partition, psize;
+    RAISE NOTICE 'Using tablesample % to find missing queryables from % % that has ~% rows estrows: %', _tablesample, _collection, _partition, psize, estrows;
 
     q := format(
         $q$
@@ -212,19 +252,22 @@ BEGIN
             ), p AS (
                 SELECT DISTINCT ON (key)
                     key,
-                    value
+                    value,
+                    s.definition
                 FROM t
                 JOIN LATERAL jsonb_each(properties) ON TRUE
                 LEFT JOIN q ON (q.name=key)
+                LEFT JOIN stac_extension_queryables s ON (s.name=key)
                 WHERE q.definition IS NULL
             )
             SELECT
                 %L,
                 key,
-                jsonb_build_object('type',jsonb_typeof(value)) as definition,
-                CASE jsonb_typeof(value)
-                    WHEN 'number' THEN 'to_float'
-                    WHEN 'array' THEN 'to_text_array'
+                COALESCE(definition, jsonb_build_object('type',jsonb_typeof(value))) as definition,
+                CASE
+                    WHEN definition->>'type' = 'integer' THEN 'to_int'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'number' THEN 'to_float'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'array' THEN 'to_text_array'
                     ELSE 'to_text'
                 END
             FROM p;
@@ -238,7 +281,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION missing_queryables(_tablesample int DEFAULT 5) RETURNS TABLE(collection_ids text[], name text, definition jsonb, property_wrapper text) AS $$
+CREATE OR REPLACE FUNCTION missing_queryables(_tablesample float DEFAULT 5) RETURNS TABLE(collection_ids text[], name text, definition jsonb, property_wrapper text) AS $$
     SELECT
         array_agg(collection),
         name,

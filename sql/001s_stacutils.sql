@@ -57,15 +57,7 @@ CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS
     SELECT upper(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
-
 CREATE TABLE stac_extensions(
     url text PRIMARY KEY,
     content jsonb
 );
-
-CREATE OR REPLACE FUNCTION update_stac_extension_urls() RETURNS VOID AS $$
-    INSERT INTO stac_extensions (url)
-    SELECT DISTINCT substring(jsonb_array_elements_text(content->'stac_extensions') FROM E'^[^#]*')
-    FROM collections
-    ON CONFLICT DO NOTHING;
-$$ LANGUAGE SQL;

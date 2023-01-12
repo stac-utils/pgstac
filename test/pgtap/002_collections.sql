@@ -6,4 +6,4 @@ SELECT has_function('pgstac'::name, 'update_collection', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'upsert_collection', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'get_collection', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'delete_collection', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'all_collections', NULL);
+SELECT has_function('pgstac'::name, 'all_collections', '{}'::text[]);

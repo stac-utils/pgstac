@@ -1,5 +1,49 @@
+SET client_min_messages TO WARNING;
 SET SEARCH_PATH to pgstac, public;
+alter table "pgstac"."queryables" drop constraint "queryables_name_key";
+
+drop function if exists "pgstac"."missing_queryables"(_collection text, _tablesample integer);
+
+drop function if exists "pgstac"."missing_queryables"(_tablesample integer);
+
+alter table "pgstac"."stac_extensions" drop constraint "stac_extensions_pkey";
+
+drop index if exists "pgstac"."queryables_name_key";
+
+drop index if exists "pgstac"."stac_extensions_pkey";
+
+alter table "pgstac"."stac_extensions" drop column "enableable";
+
+alter table "pgstac"."stac_extensions" drop column "enbabled_by_default";
+
+alter table "pgstac"."stac_extensions" drop column "name";
+
+alter table "pgstac"."stac_extensions" add column "content" jsonb;
+
+alter table "pgstac"."stac_extensions" alter column "url" set not null;
+
+CREATE UNIQUE INDEX stac_extensions_pkey ON pgstac.stac_extensions USING btree (url);
+
+alter table "pgstac"."stac_extensions" add constraint "stac_extensions_pkey" PRIMARY KEY using index "stac_extensions_pkey";
+
 set check_function_bodies = off;
+
+CREATE OR REPLACE FUNCTION pgstac.first_notnull_sfunc(anyelement, anyelement)
+ RETURNS anyelement
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT COALESCE($1,$2);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.get_queryables()
+ RETURNS jsonb
+ LANGUAGE sql
+AS $function$
+    SELECT get_queryables(NULL::text[]);
+$function$
+;
 
 CREATE OR REPLACE FUNCTION pgstac.get_token_val_str(_field text, _item pgstac.items)
  RETURNS text
@@ -13,6 +57,244 @@ CREATE TEMP TABLE _token_item ON COMMIT DROP AS SELECT (_item).*;
 EXECUTE format($q$ SELECT quote_literal(%s) FROM _token_item $q$, _field) INTO literal;
 DROP TABLE IF EXISTS _token_item;
 RETURN literal;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_array_unique(j jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT nullif_jsonbnullempty(jsonb_agg(DISTINCT a)) v FROM jsonb_array_elements(j) a;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_concat_ignorenull(a jsonb, b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT coalesce(a,'[]'::jsonb) || coalesce(b,'[]'::jsonb);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_greatest(a jsonb, b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT nullif_jsonbnullempty(greatest(a, b));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_least(a jsonb, b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT nullif_jsonbnullempty(least(nullif_jsonbnullempty(a), nullif_jsonbnullempty(b)));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.missing_queryables(_collection text, _tablesample double precision DEFAULT 5, minrows double precision DEFAULT 10)
+ RETURNS TABLE(collection text, name text, definition jsonb, property_wrapper text)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    q text;
+    _partition text;
+    explain_json json;
+    psize float;
+    estrows float;
+BEGIN
+    SELECT format('_items_%s', key) INTO _partition FROM collections WHERE id=_collection;
+
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM %I;', _partition)
+    INTO explain_json;
+    psize := explain_json->0->'Plan'->'Plan Rows';
+    estrows := _tablesample * .01 * psize;
+    IF estrows < minrows THEN
+        _tablesample := least(100,greatest(_tablesample, (estrows / psize) / 100));
+        RAISE NOTICE '%', (psize / estrows) / 100;
+    END IF;
+    RAISE NOTICE 'Using tablesample % to find missing queryables from % % that has ~% rows estrows: %', _tablesample, _collection, _partition, psize, estrows;
+
+    q := format(
+        $q$
+            WITH q AS (
+                SELECT * FROM queryables
+                WHERE
+                    collection_ids IS NULL
+                    OR %L = ANY(collection_ids)
+            ), t AS (
+                SELECT
+                    content->'properties' AS properties
+                FROM
+                    %I
+                TABLESAMPLE SYSTEM(%L)
+            ), p AS (
+                SELECT DISTINCT ON (key)
+                    key,
+                    value,
+                    s.definition
+                FROM t
+                JOIN LATERAL jsonb_each(properties) ON TRUE
+                LEFT JOIN q ON (q.name=key)
+                LEFT JOIN stac_extension_queryables s ON (s.name=key)
+                WHERE q.definition IS NULL
+            )
+            SELECT
+                %L,
+                key,
+                COALESCE(definition, jsonb_build_object('type',jsonb_typeof(value))) as definition,
+                CASE
+                    WHEN definition->>'type' = 'integer' THEN 'to_int'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'number' THEN 'to_float'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'array' THEN 'to_text_array'
+                    ELSE 'to_text'
+                END
+            FROM p;
+        $q$,
+        _collection,
+        _partition,
+        _tablesample,
+        _collection
+    );
+    RETURN QUERY EXECUTE q;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.missing_queryables(_tablesample double precision DEFAULT 5)
+ RETURNS TABLE(collection_ids text[], name text, definition jsonb, property_wrapper text)
+ LANGUAGE sql
+AS $function$
+    SELECT
+        array_agg(collection),
+        name,
+        definition,
+        property_wrapper
+    FROM
+        collections
+        JOIN LATERAL
+        missing_queryables(id, _tablesample) c
+        ON TRUE
+    GROUP BY
+        2,3,4
+    ORDER BY 2,1
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.nullif_jsonbnullempty(j jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+    SELECT nullif(nullif(nullif(j,'null'::jsonb),'{}'::jsonb),'[]'::jsonb);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.schema_qualify_refs(url text, j jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+    SELECT regexp_replace(j::text, '"\$ref": "#', concat('"$ref": "', url, '#'), 'g')::jsonb;
+$function$
+;
+
+create or replace view "pgstac"."stac_extension_queryables" as  SELECT DISTINCT j.key AS name,
+    pgstac.schema_qualify_refs(e.url, j.value) AS definition
+   FROM pgstac.stac_extensions e,
+    LATERAL jsonb_each((((e.content -> 'definitions'::text) -> 'fields'::text) -> 'properties'::text)) j(key, value);
+
+
+CREATE OR REPLACE AGGREGATE first_notnull(anyelement)(
+    SFUNC = first_notnull_sfunc,
+    STYPE = anyelement
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_array_unique_merge(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_concat_ignorenull,
+    FINALFUNC = jsonb_array_unique
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_min(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_least
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_max(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_greatest
+);
+
+
+CREATE OR REPLACE FUNCTION pgstac.get_queryables(_collection_ids text[] DEFAULT NULL::text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+BEGIN
+    -- Build up queryables if the input contains valid collection ids or is empty
+    IF EXISTS (
+        SELECT 1 FROM collections
+        WHERE
+            _collection_ids IS NULL
+            OR cardinality(_collection_ids) = 0
+            OR id = ANY(_collection_ids)
+    )
+    THEN
+        RETURN (
+            WITH base AS (
+                SELECT
+                    unnest(collection_ids) as collection_id,
+                    name,
+                    coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables
+                WHERE
+                    _collection_ids IS NULL OR
+                    _collection_ids = '{}'::text[] OR
+                    _collection_ids && collection_ids
+                UNION ALL
+                SELECT null, name, coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables WHERE collection_ids IS NULL OR collection_ids = '{}'::text[]
+            ), g AS (
+                SELECT
+                    name,
+                    first_notnull(definition) as definition,
+                    jsonb_array_unique_merge(definition->'enum') as enum,
+                    jsonb_min(definition->'minimum') as minimum,
+                    jsonb_min(definition->'maxiumn') as maximum
+                FROM base
+                GROUP BY 1
+            )
+            SELECT
+                jsonb_build_object(
+                    '$schema', 'http://json-schema.org/draft-07/schema#',
+                    '$id', '',
+                    'type', 'object',
+                    'title', 'STAC Queryables.',
+                    'properties', jsonb_object_agg(
+                        name,
+                        definition
+                        ||
+                        jsonb_strip_nulls(jsonb_build_object(
+                            'enum', enum,
+                            'minimum', minimum,
+                            'maximum', maximum
+                        ))
+                    )
+                )
+                FROM g
+        );
+    ELSE
+        RETURN NULL;
+    END IF;
 END;
 $function$
 ;

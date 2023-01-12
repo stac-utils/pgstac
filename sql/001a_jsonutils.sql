@@ -222,3 +222,49 @@ CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     END
     ;
 $$ LANGUAGE SQL IMMUTABLE;
+
+
+CREATE OR REPLACE FUNCTION nullif_jsonbnullempty(j jsonb) RETURNS jsonb AS $$
+    SELECT nullif(nullif(nullif(j,'null'::jsonb),'{}'::jsonb),'[]'::jsonb);
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION jsonb_array_unique(j jsonb) RETURNS jsonb AS $$
+    SELECT nullif_jsonbnullempty(jsonb_agg(DISTINCT a)) v FROM jsonb_array_elements(j) a;
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION jsonb_concat_ignorenull(a jsonb, b jsonb) RETURNS jsonb AS $$
+    SELECT coalesce(a,'[]'::jsonb) || coalesce(b,'[]'::jsonb);
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION jsonb_least(a jsonb, b jsonb) RETURNS jsonb AS $$
+    SELECT nullif_jsonbnullempty(least(nullif_jsonbnullempty(a), nullif_jsonbnullempty(b)));
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION jsonb_greatest(a jsonb, b jsonb) RETURNS jsonb AS $$
+    SELECT nullif_jsonbnullempty(greatest(a, b));
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION first_notnull_sfunc(anyelement, anyelement) RETURNS anyelement AS $$
+    SELECT COALESCE($1,$2);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE AGGREGATE first_notnull(anyelement)(
+    SFUNC = first_notnull_sfunc,
+    STYPE = anyelement
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_array_unique_merge(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_concat_ignorenull,
+    FINALFUNC = jsonb_array_unique
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_min(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_least
+);
+
+CREATE OR REPLACE AGGREGATE jsonb_max(jsonb) (
+    STYPE = jsonb,
+    SFUNC = jsonb_greatest
+);
