@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [v0.6.12]
 
+### Added
+- Add ability to merge enum, min, and max from queryables where collections have different values.
+- Add tooling in pypgstac and pgstac to add stac_extension definitions to the database.
+- Modify missing_queryables function to try to use stac_extension definitions to populate queryable definitions from the stac_extension schemas.
+
 ### Fixed
 - Fix issue with upserts in the trigger for using the items_staging tables
 - Fix for generating token query for sorting. [152] (https://github.com/stac-utils/pgstac/pull/152)
