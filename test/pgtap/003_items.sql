@@ -18,7 +18,7 @@ SELECT has_function('pgstac'::name, 'upsert_items', ARRAY['jsonb']);
 -- tools to update collection extents based on extents in items
 SELECT has_function('pgstac'::name, 'collection_bbox', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'collection_temporal_extent', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'update_collection_extents', NULL);
+SELECT has_function('pgstac'::name, 'update_collection_extents', '{}'::text[]);
 
 DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy collections (content) FROM 'test/testdata/collections.ndjson';

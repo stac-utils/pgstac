@@ -2,12 +2,14 @@
 SCRIPTDIR=$(dirname "$0")
 cd $SCRIPTDIR
 SQLFILE=$(pwd)/$1
+TESTDB=$2
 SQLOUTFILE=${SQLFILE}.out
 PGDATABASE_OLD=$PGDATABASE
 
 echo $SQLFILE
 echo $SQLOUTFILE
 
+if [ -z "{$TESTDB}" ]; then
 psql <<EOSQL
 DROP DATABASE IF EXISTS pgstac_basic_tests WITH (force);
 CREATE DATABASE pgstac_basic_tests;
@@ -17,12 +19,17 @@ trap 'echo "trap"; psql -c "DROP DATABASE IF EXISTS pgstac_basic_tests WITH (for
 export PGDATABASE=pgstac_basic_tests
 echo $PGDATABASE
 pypgstac migrate
+else
+    export PGDATABASE=$TESTDB
+    echo $PGDATABASE
+    psql -l
+fi
 
 TMPFILE=$(mktemp)
 trap 'rm "$TMPFILE"' 0 2 3 15
 
 echo "Running tests in $SQLFILE"
-psql -X <<EOSQL >"$TMPFILE"
+psql -X $PGDATABASE <<EOSQL >"$TMPFILE"
 \set QUIET 1
 \set ON_ERROR_STOP 1
 \set ON_ERROR_ROLLBACK 1
@@ -56,7 +63,7 @@ else
 fi
 
 export PGDATABASE=$PGDATABASE_OLD
-psql <<EOSQL
+psql $PGDATABASE <<EOSQL
 DROP DATABASE IF EXISTS pgstac_basic_tests WITH (force);
 EOSQL
 

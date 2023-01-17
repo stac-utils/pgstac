@@ -1,0 +1,2 @@
+SET client_min_messages TO WARNING;
+SET SEARCH_PATH to pgstac, public;

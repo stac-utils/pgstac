@@ -5,6 +5,7 @@ export PYPGSTACDIR=$BASEDIR/pypgstac
 export MIGRATIONSDIR=$PYPGSTACDIR/pypgstac/migrations
 export TODBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_to"
 export FROMDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_from"
+export BASETESTDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/base_test"
 
 function base_migrations(){
     find $MIGRATIONSDIR -regex ".*\/pgstac\.[0-9]+\.[0-9]+\.[0-9]+\.sql"
@@ -22,6 +23,8 @@ psql -q >/dev/null 2>&1 <<-'EOSQL'
     CREATE DATABASE migra_from;
     DROP DATABASE IF EXISTS migra_to;
     CREATE DATABASE migra_to;
+    DROP DATABASE IF EXISTS base_test;
+    CREATE DATABASE base_test;
 EOSQL
 }
 export -f create_migra_dbs
@@ -57,14 +60,16 @@ export -f pgtap
 
 function calc_migration(){
     cd $MIGRATIONS_DIR
+    tmpfile=$(mktemp)
+    trap "rm -f $tmpfile" 0 2 3 15
     MIGRA_FROM_FILE=$1
     MIGRA_TO_FILE=$2
     pgwait
     create_migra_dbs
     trap drop_migra_dbs 0 2 3 15
 
-    psql -q -X -1 -v ON_ERROR_STOP -f $MIGRA_FROM_FILE $FROMDBURL >/dev/null 2>&1
-    psql -q -X -1 -v ON_ERROR_STOP -f $MIGRA_TO_FILE $TODBURL >/dev/null 2>&1
+    psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $MIGRA_FROM_FILE $FROMDBURL >/dev/null || exit 1;
+    psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $MIGRA_TO_FILE $TODBURL >/dev/null || exit 1;
 
     migra --schema pgstac --unsafe $FROMDBURL $TODBURL || echo ""
 }

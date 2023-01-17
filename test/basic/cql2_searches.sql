@@ -55,3 +55,14 @@ SELECT search('{"filter":{"op":"a_contains","args":[{"property":"proj:bbox"},[65
 SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516]]},"fields":{"include":["id"]}}');
 
 SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"},[654842, 3423507, 661516, 3431125, 234324]]},"fields":{"include":["id"]}}');
+
+-- Test Paging
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"token":"next:pgstac-test-item-0048", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"token":"next:pgstac-test-item-0016", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"token":"prev:pgstac-test-item-0030", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"token":"prev:pgstac-test-item-0054", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');

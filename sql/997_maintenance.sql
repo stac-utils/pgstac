@@ -109,24 +109,24 @@ $$ LANGUAGE PLPGSQL;
 
 
 
-SELECT
-    collection,
-    relname,
-    reltuples,
-    relpages,
-    pg_size_pretty(pg_total_relation_size(relname::regclass)) as total_size,
-    pg_size_pretty(pg_relation_size(relname::regclass)) as table_size,
-    pg_size_pretty(pg_indexes_size(relname::regclass)) as index_size,
-    seq_scan,
-    seq_tup_read,
-    idx_scan,
-    idx_tup_fetch,
-    n_live_tup,
-    n_dead_tup,
-    pg_size_pretty((pg_total_relation_size(relname::regclass)/nullif(reltuples,0))::numeric) as avg_row_size
+-- SELECT
+--     collection,
+--     relname,
+--     reltuples,
+--     relpages,
+--     pg_size_pretty(pg_total_relation_size(relname::regclass)) as total_size,
+--     pg_size_pretty(pg_relation_size(relname::regclass)) as table_size,
+--     pg_size_pretty(pg_indexes_size(relname::regclass)) as index_size,
+--     seq_scan,
+--     seq_tup_read,
+--     idx_scan,
+--     idx_tup_fetch,
+--     n_live_tup,
+--     n_dead_tup,
+--     pg_size_pretty((pg_total_relation_size(relname::regclass)/nullif(reltuples,0))::numeric) as avg_row_size
 
-FROM pg_class JOIN pg_stat_user_tables USING (relname)
-JOIN partitions ON (relname=name)
-WHERE relname ~ '_items_'
-ORDER BY pg_total_relation_size(relname::regclass)/nullif(reltuples,0) desc
-;
+-- FROM pg_class JOIN pg_stat_user_tables USING (relname)
+-- JOIN partitions ON (relname=name)
+-- WHERE relname ~ '_items_'
+-- ORDER BY pg_total_relation_size(relname::regclass)/nullif(reltuples,0) desc
+-- ;

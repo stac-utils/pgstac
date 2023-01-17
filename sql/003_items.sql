@@ -14,9 +14,6 @@ CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
-CREATE
-
-
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
 
@@ -157,27 +154,28 @@ CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p record;
     _partitions text[];
+    part text;
     ts timestamptz := clock_timestamp();
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
-    WITH ranges AS (
+
+    FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
-            stac_daterange(n.content->'properties') as dtr
-        FROM newdata n
+            stac_daterange(n.content->'properties') as dtr,
+            partition_trunc
+        FROM newdata n JOIN collections ON (n.content->>'collection'=collections.id)
     ), p AS (
         SELECT
             collection,
-            lower(dtr) as datetime,
-            upper(dtr) as end_datetime,
-            (partition_name(
-                collection,
-                lower(dtr)
-            )).partition_name as name
-        FROM ranges
-    )
-    SELECT check_partition(collection, datetime_range, end_datetime_range);
-
+            date_trunc(partition_trunc::text, lower(dtr)) as d,
+            tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
+            tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
+        FROM t
+        GROUP BY 1,2
+    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+        RAISE NOTICE 'Partition %', part;
+    END LOOP;
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
