@@ -97,5 +97,68 @@ SELECT search('{"token":"prev:pgstac-test-item-0030", "fields":{"include":["id",
 SELECT search('{"token":"prev:pgstac-test-item-0054", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
  {"next": "pgstac-test-item-0048", "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 100, "returned": 10}, "features": [{"id": "pgstac-test-item-0097", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-07-31T00:00:00Z", "eo:cloud_cover": 1}}, {"id": "pgstac-test-item-0013", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0063", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 2}}, {"id": "pgstac-test-item-0005", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-24T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0034", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0041", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0073", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-15T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0085", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-01T00:00:00Z", "eo:cloud_cover": 3}}, {"id": "pgstac-test-item-0012", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-17T00:00:00Z", "eo:cloud_cover": 4}}, {"id": "pgstac-test-item-0048", "collection": "pgstac-test-collection", "properties": {"datetime": "2011-08-16T00:00:00Z", "eo:cloud_cover": 4}}]}
 
+-- Test paging without fields extension
+SELECT jsonb_path_query(search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+"pgstac-test-item-0097"
+"pgstac-test-item-0013"
+"pgstac-test-item-0063"
+"pgstac-test-item-0005"
+"pgstac-test-item-0034"
+"pgstac-test-item-0041"
+"pgstac-test-item-0073"
+"pgstac-test-item-0085"
+"pgstac-test-item-0012"
+"pgstac-test-item-0048"
+
+SELECT jsonb_path_query(search('{"token":"next:pgstac-test-item-0048","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+"pgstac-test-item-0054"
+"pgstac-test-item-0032"
+"pgstac-test-item-0057"
+"pgstac-test-item-0075"
+"pgstac-test-item-0049"
+"pgstac-test-item-0040"
+"pgstac-test-item-0036"
+"pgstac-test-item-0039"
+"pgstac-test-item-0052"
+"pgstac-test-item-0016"
+
+SELECT jsonb_path_query(search('{"token":"next:pgstac-test-item-0016","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+"pgstac-test-item-0030"
+"pgstac-test-item-0031"
+"pgstac-test-item-0046"
+"pgstac-test-item-0014"
+"pgstac-test-item-0078"
+"pgstac-test-item-0051"
+"pgstac-test-item-0068"
+"pgstac-test-item-0004"
+"pgstac-test-item-0088"
+"pgstac-test-item-0053"
+
+SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0030","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+"pgstac-test-item-0054"
+"pgstac-test-item-0032"
+"pgstac-test-item-0057"
+"pgstac-test-item-0075"
+"pgstac-test-item-0049"
+"pgstac-test-item-0040"
+"pgstac-test-item-0036"
+"pgstac-test-item-0039"
+"pgstac-test-item-0052"
+"pgstac-test-item-0016"
+
+SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0054","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+"pgstac-test-item-0097"
+"pgstac-test-item-0013"
+"pgstac-test-item-0063"
+"pgstac-test-item-0005"
+"pgstac-test-item-0034"
+"pgstac-test-item-0041"
+"pgstac-test-item-0073"
+"pgstac-test-item-0085"
+"pgstac-test-item-0012"
+"pgstac-test-item-0048"
+
+
+
 \set QUIET 1
 \set ECHO none
