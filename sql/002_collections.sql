@@ -1,6 +1,4 @@
 
-
-
 CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS $$
     SELECT jsonb_build_object(
         'type', 'Feature',
@@ -10,7 +8,9 @@ CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS 
     );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+
 CREATE TYPE partition_trunc_strategy AS ENUM ('year', 'month');
+
 
 CREATE TABLE IF NOT EXISTS collections (
     key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -21,24 +21,11 @@ CREATE TABLE IF NOT EXISTS collections (
 );
 
 
+
 CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
     SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-
-
-CREATE OR REPLACE FUNCTION table_empty(text) RETURNS boolean AS $$
-DECLARE
-    retval boolean;
-BEGIN
-    EXECUTE format($q$
-        SELECT NOT EXISTS (SELECT 1 FROM %I LIMIT 1)
-        $q$,
-        $1
-    ) INTO retval;
-    RETURN retval;
-END;
-$$ LANGUAGE PLPGSQL;
 
 
 CREATE OR REPLACE FUNCTION collections_trigger_func() RETURNS TRIGGER AS $$
@@ -51,186 +38,119 @@ DECLARE
     loadtemp boolean := FALSE;
 BEGIN
     RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
-    SELECT relid::text INTO partition_name
-    FROM pg_partition_tree('items')
-    WHERE relid::text = partition_name;
-    IF FOUND THEN
-        partition_exists := true;
-        partition_empty := table_empty(partition_name);
-    ELSE
-        partition_exists := false;
-        partition_empty := true;
-        partition_name := format('_items_%s', NEW.key);
-    END IF;
-    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_empty THEN
-        q := format($q$
-            DROP TABLE IF EXISTS %I CASCADE;
-            $q$,
-            partition_name
-        );
-        EXECUTE q;
-    END IF;
-    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc AND partition_exists AND NOT partition_empty THEN
-        q := format($q$
-            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
-            DROP TABLE IF EXISTS %I CASCADE;
-            $q$,
-            partition_name,
-            partition_name
-        );
-        EXECUTE q;
-        loadtemp := TRUE;
-        partition_empty := TRUE;
-        partition_exists := FALSE;
-    END IF;
-    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS NOT DISTINCT FROM OLD.partition_trunc THEN
-        RETURN NEW;
-    END IF;
-    IF NEW.partition_trunc IS NULL AND partition_empty THEN
-        RAISE NOTICE '% % % %',
-            partition_name,
-            NEW.id,
-            concat(partition_name,'_id_idx'),
-            partition_name
-        ;
-        q := format($q$
-            CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
-            CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
-            $q$,
-            partition_name,
-            NEW.id,
-            concat(partition_name,'_id_idx'),
-            partition_name
-        );
-        RAISE NOTICE 'q: %', q;
-        BEGIN
-            EXECUTE q;
-            EXCEPTION
-        WHEN duplicate_table THEN
-            RAISE NOTICE 'Partition % already exists.', partition_name;
-        WHEN others THEN
-            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
-            RAISE INFO 'Error Name:%',SQLERRM;
-            RAISE INFO 'Error State:%', SQLSTATE;
-            RAISE INFO 'Error Context:%', err_context;
-        END;
-
-        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
-        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
-        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
-
-        INSERT INTO partitions (collection, name) VALUES (NEW.id, partition_name);
-    ELSIF partition_empty THEN
-        q := format($q$
-            CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L)
-                PARTITION BY RANGE (datetime);
-            $q$,
-            partition_name,
-            NEW.id
-        );
-        RAISE NOTICE 'q: %', q;
-        BEGIN
-            EXECUTE q;
-            EXCEPTION
-        WHEN duplicate_table THEN
-            RAISE NOTICE 'Partition % already exists.', partition_name;
-        WHEN others THEN
-            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
-            RAISE INFO 'Error Name:%',SQLERRM;
-            RAISE INFO 'Error State:%', SQLSTATE;
-            RAISE INFO 'Error Context:%', err_context;
-        END;
-        ALTER TABLE partitions DISABLE TRIGGER partitions_delete_trigger;
-        DELETE FROM partitions WHERE collection=NEW.id AND name=partition_name;
-        ALTER TABLE partitions ENABLE TRIGGER partitions_delete_trigger;
-    ELSE
-        RAISE EXCEPTION 'Cannot modify partition % unless empty', partition_name;
-    END IF;
-    IF loadtemp THEN
-        RAISE NOTICE 'Moving data into new partitions.';
-         q := format($q$
-            WITH p AS (
-                SELECT
-                    collection,
-                    datetime as datetime,
-                    end_datetime as end_datetime,
-                    (partition_name(
-                        collection,
-                        datetime
-                    )).partition_name as name
-                FROM changepartitionstaging
-            )
-            INSERT INTO partitions (collection, datetime_range, end_datetime_range)
-                SELECT
-                    collection,
-                    tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
-                    tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
-                FROM p
-                    GROUP BY collection, name
-                ON CONFLICT (name) DO UPDATE SET
-                    datetime_range = EXCLUDED.datetime_range,
-                    end_datetime_range = EXCLUDED.end_datetime_range
-            ;
-            INSERT INTO %I SELECT * FROM changepartitionstaging;
-            DROP TABLE IF EXISTS changepartitionstaging;
-            $q$,
-            partition_name
-        );
-        EXECUTE q;
+    IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN
+        PERFORM repartition(NEW.id, NEW.partition_trunc);
     END IF;
     RETURN NEW;
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
-
-CREATE TRIGGER collections_trigger AFTER INSERT OR UPDATE ON collections FOR EACH ROW
-EXECUTE FUNCTION collections_trigger_func();
-
-CREATE OR REPLACE FUNCTION partition_collection(collection text, strategy partition_trunc_strategy) RETURNS text AS $$
-    UPDATE collections SET partition_trunc=strategy WHERE id=collection RETURNING partition_trunc;
-$$ LANGUAGE SQL;
-
-CREATE TABLE IF NOT EXISTS partitions (
-    collection text REFERENCES collections(id) ON DELETE CASCADE,
-    name text PRIMARY KEY,
-    partition_range tstzrange NOT NULL DEFAULT tstzrange('-infinity'::timestamptz,'infinity'::timestamptz, '[]'),
-    datetime_range tstzrange,
-    end_datetime_range tstzrange,
-    spatial_extent geometry,
-    last_updated timestamptz DEFAULT now(),
-    update_summaries boolean DEFAULT FALSE
-    CONSTRAINT prange EXCLUDE USING GIST (
-        collection WITH =,
-        partition_range WITH &&
-    )
-) WITH (FILLFACTOR=90);
-CREATE INDEX partitions_range_idx ON partitions USING GIST(partition_range);
-
-CREATE OR REPLACE FUNCTION partitions_delete_trigger_func() RETURNS TRIGGER AS $$
-DECLARE
-    q text;
-BEGIN
-    RAISE NOTICE 'Partition Delete Trigger. %', OLD.name;
-    EXECUTE format($q$
-            DROP TABLE IF EXISTS %I CASCADE;
-            $q$,
-            OLD.name
-        );
-    RAISE NOTICE 'Dropped partition.';
-    RETURN OLD;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE TRIGGER partitions_delete_trigger BEFORE DELETE ON partitions FOR EACH ROW
-EXECUTE FUNCTION partitions_delete_trigger_func();
+CREATE TRIGGER collections_trigger AFTER
+INSERT
+OR
+UPDATE ON collections
+FOR EACH ROW EXECUTE FUNCTION collections_trigger_func();
+
+CREATE TABLE partition_stats (
+    partition text PRIMARY KEY,
+    dtrange tstzrange,
+    edtrange tstzrange,
+    spatial geometry,
+    last_updated timestamptz,
+    keys text[]
+    CONSTRAINT prange EXCLUDE USING GIST ( collection WITH -, dtrange WITH && )
+) WITH FILLFACTOR=90);
+
+CREATE INDEX partitions_range_idx ON partitions USING GIST(dtrange);
 
 
-CREATE OR REPLACE FUNCTION partition_name(
-    IN collection text,
-    IN dt timestamptz,
-    OUT partition_name text,
-    OUT partition_range tstzrange
-) AS $$
+CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
+    WITH t AS (
+        SELECT regexp_matches(
+            expr,
+            E'\\(''\([0-9 :+-]*\)''\\).*\\(''\([0-9 :+-]*\)''\\)'
+        ) AS m
+    ) SELECT tstzrange(m[1]::timestamptz, m[2]::timestamptz) FROM t
+    ;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+CREATE OR REPLACE FUNCTION dt_constraint(coid oid, OUT dt tstzrange, OUT edt tstzrange) RETURNS RECORD AS $$
+DECLARE
+    expr text := pg_get_constraintdef(coid);
+    matches timestamptz[];
+BEGIN
+    IF expr = 'CHECK (((datetime IS NULL) AND (end_datetime IS NULL)))' THEN
+        dt := tstzrange('-infinity','-infinity');
+        edt := tstzrange('-infinity', '-infinity');
+        RETURN;
+    END IF;
+    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9])', 'g'))[1] f)
+    SELECT array_agg(f::timestamptz) INTO matches FROM f;
+    IF cardinality(matches) = 4 THEN
+        dt := tstzrange(matches[1], matches[2],'[]');
+        edt := tstzrange(matches[3], matches[4], '[]');
+        RETURN;
+    ELSIF cardinality(matches) = 2 THEN
+        edt := tstzrange(matches[1], matches[2],'[]');
+        RETURN;
+    END IF;
+    RETURN;
+END;
+$$ LANGUAGE PLPGSQL STABLE STRICT;
+
+CREATE OR REPLACE VIEW partition_sys_meta AS
+SELECT
+    relid as partition,
+    replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
+        ELSE pg_get_expr(parent.relpartbound, parent.oid)
+    END, 'FOR VALUES IN (''',''), ''')','') AS collection,
+    level,
+    c.reltuples,
+    c.relhastriggers,
+    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partion_dtrange,
+    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
+    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange
+FROM
+    pg_partition_tree('items')
+    JOIN pg_class c ON (relid::regclass = c.oid)
+    JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
+WHERE isleaf
+;
+
+
+CREATE OR REPLACE FUNCTION update_partition_stats(_partition text) RETURNS VOID AS $$
+DECLARE
+    dtrange tstzrange;
+    edtrange tstzrange;
+    extent geometry;
+BEGIN
+    EXECUTE format(
+        $q$
+            SELECT
+                tstzrange(min(datetime), max(datetime),'[]'),
+                tstzrange(min(end_datetime), max(end_datetime), '[]')
+            FROM %I
+        $q$,
+        _partition
+    ) INTO dtrange, edtrange;
+    extent := st_estimatedextent('pgstac', _partition, 'geometry');
+    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
+        SELECT _partition, dtrange, edtrange, extent, now()
+        ON CONFLICT (partition) DO
+            UPDATE SET
+                dtrange=EXCLUDED.dtrange,
+                edtrange=EXCLUDED.edtrange,
+                spatial=EXCLUDED.spatial,
+                last_updated=EXCLUDED.last_updated
+    ;
+END;
+$$ LANGUAGE PLPGSQL STRICT;
+
+
+
+CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
 DECLARE
     c RECORD;
     parent_name text;
@@ -261,216 +181,202 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE;
 
-CREATE OR REPLACE FUNCTION items_partition_trigger_func() RETURNS TRIGGER AS $$
-DECLARE
-BEGIN
-    UPDATE partitions SET update_summaries = TRUE, last_updated = now() WHERE name = TG_TABLE_NAME;
-    RETURN;
-END;
-$$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION partitions_trigger_func() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
 DECLARE
     q text;
-    cq text;
-    parent_name text;
-    partition_trunc text;
-    partition_name text := NEW.name;
-    partition_exists boolean := false;
-    partition_empty boolean := true;
-    partition_range tstzrange;
-    datetime_range tstzrange;
-    end_datetime_range tstzrange;
-    err_context text;
-    mindt timestamptz := lower(NEW.datetime_range);
-    maxdt timestamptz := upper(NEW.datetime_range);
-    minedt timestamptz := lower(NEW.end_datetime_range);
-    maxedt timestamptz := upper(NEW.end_datetime_range);
-    t_mindt timestamptz;
-    t_maxdt timestamptz;
-    t_minedt timestamptz;
-    t_maxedt timestamptz;
 BEGIN
-    RAISE NOTICE 'Partitions Trigger. %', NEW;
-    datetime_range := NEW.datetime_range;
-    end_datetime_range := NEW.end_datetime_range;
+    FOR q IN SELECT FORMAT(
+        $q$
+            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+        $q$,
+        t,
+        conname
+    ) FROM pg_constraint
+        WHERE conrelid=t::regclass::oid AND contype='c'
+    LOOP
+        EXECUTE q;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
-    SELECT
-        format('_items_%s', key),
-        c.partition_trunc::text
-    INTO
-        parent_name,
-        partition_trunc
-    FROM pgstac.collections c
-    WHERE c.id = NEW.collection;
-    SELECT (pgstac.partition_name(NEW.collection, mindt)).* INTO partition_name, partition_range;
-    NEW.name := partition_name;
-
-    IF partition_range IS NULL OR partition_range = 'empty'::tstzrange THEN
-        partition_range :=  tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]');
-    END IF;
-
-    NEW.partition_range := partition_range;
-    IF TG_OP = 'UPDATE' THEN
-        mindt := least(mindt, lower(OLD.datetime_range));
-        maxdt := greatest(maxdt, upper(OLD.datetime_range));
-        minedt := least(minedt, lower(OLD.end_datetime_range));
-        maxedt := greatest(maxedt, upper(OLD.end_datetime_range));
-        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
-        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
-    END IF;
-    IF TG_OP = 'INSERT' THEN
-
-        IF partition_range != tstzrange('-infinity'::timestamptz, 'infinity'::timestamptz, '[]') THEN
-
-            RAISE NOTICE '% % %', partition_name, parent_name, partition_range;
-            q := format($q$
-                CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
-                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
-                $q$,
-                partition_name,
-                parent_name,
-                lower(partition_range),
-                upper(partition_range),
-                format('%s_pkey', partition_name),
-                partition_name
-            );
-            BEGIN
-                EXECUTE q;
-            EXCEPTION
-            WHEN duplicate_table THEN
-                RAISE NOTICE 'Partition % already exists.', partition_name;
-            WHEN others THEN
-                GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
-                RAISE INFO 'Error Name:%',SQLERRM;
-                RAISE INFO 'Error State:%', SQLSTATE;
-                RAISE INFO 'Error Context:%', err_context;
-            END;
-        END IF;
-
-    END IF;
-
-    -- Update constraints
-    EXECUTE format($q$
-        SELECT
-            min(datetime),
-            max(datetime),
-            min(end_datetime),
-            max(end_datetime)
-        FROM %I;
-        $q$, partition_name)
-    INTO t_mindt, t_maxdt, t_minedt, t_maxedt;
-    mindt := least(mindt, t_mindt);
-    maxdt := greatest(maxdt, t_maxdt);
-    minedt := least(mindt, minedt, t_minedt);
-    maxedt := greatest(maxdt, maxedt, t_maxedt);
-
-    mindt := date_trunc(coalesce(partition_trunc, 'year'), mindt);
-    maxdt := date_trunc(coalesce(partition_trunc, 'year'), maxdt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
-    minedt := date_trunc(coalesce(partition_trunc, 'year'), minedt);
-    maxedt := date_trunc(coalesce(partition_trunc, 'year'), maxedt - '1 second'::interval) + concat('1 ',coalesce(partition_trunc, 'year'))::interval;
-    c text;
-
-
-    IF mindt IS NOT NULL AND maxdt IS NOT NULL AND minedt IS NOT NULL AND maxedt IS NOT NULL THEN
-        NEW.datetime_range := tstzrange(mindt, maxdt, '[]');
-        NEW.end_datetime_range := tstzrange(minedt, maxedt, '[]');
-        IF
-            TG_OP='UPDATE'
-            AND OLD.datetime_range @> NEW.datetime_range
-            AND OLD.end_datetime_range @> NEW.end_datetime_range
-        THEN
-            RAISE NOTICE 'Range unchanged, not updating constraints.';
-        ELSE
-
-            RAISE NOTICE '
-                SETTING CONSTRAINTS
-                    mindt:  %, maxdt:  %
-                    minedt: %, maxedt: %
-                ', mindt, maxdt, minedt, maxedt;
-            -- DROP existing constraints
-            FOR c SELECT FORMAT(
-                $q$
-                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-                $q$,
-                partition_name,
-                conname
-            ) FROM pg_constraint
-                WHERE conrelid=partition_name::regclass::oid AND contype='c'
-            LOOP
-                EXECUTE cq;
-            END LOOP;
-
-            IF partition_trunc IS NULL THEN
-                cq := format($q$
-                    ALTER TABLE %I
-                        ADD CONSTRAINT %I
-                            CHECK (
-                                (datetime >= %L)
-                                AND (datetime <= $L)
-                                AND (end_datetime >= %L)
-                                AND (end_datetime <= %L)
-                            ) NOT VALID
-                    ;
-                    $q$,
-                    partition_name,
-                    format('%s_dt', partition_name),
-                    mindt,
-                    maxdt,
-                    minedt,
-                    maxedt
-                );
-            ELSE
-                cq := format($q$
-                    ALTER TABLE %I
-                        ADD CONSTRAINT %I
-                            CHECK ((end_datetime >= %L) AND (end_datetime <= %L)) NOT VALID
-                    ;
-                    $q$,
-                    partition_name,
-                    format('%s_dt', partition_name),
-                    minedt,
-                    maxedt
-                );
-
-            END IF;
-            RAISE NOTICE 'Altering Constraints. %', cq;
-            EXECUTE cq;
-            PERFORM run_or_queue(format('ALTER TABLE %I VALIDATE CONSTRAINT %I', partition_name, format('%s_dt', partition_name)));
-        END IF;
-    ELSE
-        NEW.datetime_range = NULL;
-        NEW.end_datetime_range = NULL;
-
-        cq := format($q$
+CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, _edtrange tstzrange) RETURNS text AS $$
+DECLARE
+    q text;
+BEGIN
+    q :=format(
+        $q$
             ALTER TABLE %I
                 ADD CONSTRAINT %I
-                    CHECK ((datetime IS NULL AND end_datetime IS NULL))
-                    NOT VALID
+                    CHECK (
+                        (datetime >= %L)
+                        AND (datetime <= $L)
+                        AND (end_datetime >= %L)
+                        AND (end_datetime <= %L)
+                    ) NOT VALID
             ;
-
-            $q$,
-            partition_name,
-            format('%s_dt', partition_name)
-        );
-        EXECUTE cq;
-    END IF;
-    PERFORM validate_constraints();
-    RETURN NEW;
-
+        $q$,
+        t,
+        format('%s_dt', partition_name),
+        lower(_dtrange),
+        upper(_dtrange),
+        lower(_edtrange),
+        upper(_edtrange)
+    );
+    PERFORM run_or_queue(q);
+    q :=format(
+        $q$
+            ALTER TABLE %I
+                VALIDATE CONSTRAINT %I
+            ;
+        $q$,
+        t,
+        format('%s_dt', partition_name)
+    );
+    PERFORM run_or_queue(q);
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
-CREATE TRIGGER partitions_trigger BEFORE INSERT OR UPDATE ON partitions FOR EACH ROW
-EXECUTE FUNCTION partitions_trigger_func();
+CREATE OR REPLACE FUNCTION check_partition(
+    _collection,
+    _dtrange tstzrange,
+    _edtrange tstzrange
+) RETURNS text AS $$
+DECLARE
+    c RECORD;
+    pm RECORD;
+    _partition_name text;
+    _partition_dtrange tstzrange;
+    _constraint_dtrange tstzrange;
+    _constraint_edtrange tstzrange;
+    q text;
+    deferrable_q text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+
+    IF c.partition_trunc IS NOT NULL THEN
+        _partition_dtrange := tstzrange(lower(_dtrange), lower(_dtrange) + ('1' + c.partition_trunc)::interval, '[)');
+    ELSE
+        _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
+    END IF;
+
+    IF NOT _partition_dtrange @> _dtrange THEN
+        RAISE EXCEPTION 'dtrange % is greater than the partition size % for collection %', _dtrange, c.partition_trunc, _collection;
+    END IF;
+
+
+    IF c.partition_trunc = 'year' THEN
+        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYY'));
+    ELSIF c.partition_trunc = 'month' THEN
+        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYYMM'));
+    ELSE
+        _partition_name := format('_items_%s', c.key);
+    END IF;
+
+    SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
+    IF FOUND THEN
+        _constraint_edtrange := _edtrange + pm.edtrange;
+        _constraint_dtrange := _dtrange + pm.dtrange;
+        IF pm.edtrange @> _edtrange AND pm.dtrange @> _dtrange THEN
+            RETURN pm.partition;
+        ELSE
+            PERFORM drop_table_constraints(_partition_name);
+        END IF;
+    ELSE
+        _constraint_edtrange := _edtrange;
+        _constraint_dtrange := _dtrange;
+    END IF;
+
+    IF c.partition_trunc IS NULL THEN
+        q := format(
+            $q$
+                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
+                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+            $q$,
+            _partition_name,
+            _collection,
+            concat(_partition_name,'_pk'),
+            _partition_name
+        );
+    ELSE
+        q := format(
+            $q$
+                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
+                CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
+                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+            $q$,
+            format('_items_%s', _collection),
+            _collection,
+            _partition_name,
+            format('_items_%s', _collection),
+            lower(_partition_dtrange),
+            upper(_partition_dtrange),
+            format('%s_pk', _partition_name),
+            _partition_name
+        );
+    END IF;
+
+    BEGIN
+        EXECUTE q;
+    EXCEPTION
+        WHEN duplicate_table THEN
+            RAISE NOTICE 'Partition % already exists.', _partition_name;
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
+            RAISE INFO 'Error Name:%',SQLERRM;
+            RAISE INFO 'Error State:%', SQLSTATE;
+            RAISE INFO 'Error Context:%', err_context;
+    END;
+    PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+CREATE OR REPLACE FUNCTION repartition(_collection, _partition_trunc) RETURNS text AS $$
+DECLARE
+    c RECORD;
+    q text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+
+    IF c.partition_trunc = _partition_trunc THEN
+        RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+    END IF;
+
+    PERFORM format(
+        $q$
+            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+            DROP TABLE IF EXISTS %I CASCADE;
+            WITH p AS (
+                SELECT
+                    collection,
+                    date_trunc(c.partition_trunc, datetime) as d,
+                    tstzrange(min(datetime),max(datetime),'[]') as dtrange,
+                    tstzrange(min(datetime),max(datetime),'[]') as edtrange,
+                FROM changepartitionstaging
+                GROUP BY 1,2
+            ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
+        $q$
+    );
+END;
+LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
     INSERT INTO collections (content)
     VALUES (data)
     ;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL
+SET SEARCH_PATH TO pgstac,
+                   public;
+
 
 CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
 DECLARE
@@ -478,7 +384,10 @@ DECLARE
 BEGIN
     UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+$$ LANGUAGE PLPGSQL
+SET SEARCH_PATH TO pgstac,
+                   public;
+
 
 CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
     INSERT INTO collections (content)
@@ -487,7 +396,10 @@ CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
     UPDATE
         SET content=EXCLUDED.content
     ;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL
+SET SEARCH_PATH TO pgstac,
+                   public;
+
 
 CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
 DECLARE
@@ -495,16 +407,23 @@ DECLARE
 BEGIN
     DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+$$ LANGUAGE PLPGSQL
+SET SEARCH_PATH TO pgstac,
+                   public;
 
 
 CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
     SELECT content FROM collections
     WHERE id=$1
     ;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL
+SET SEARCH_PATH TO pgstac,
+                   public;
+
 
 CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
     SELECT jsonb_agg(content) FROM collections;
 ;
-$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL
+SET SEARCH_PATH TO pgstac,
+                   public;

@@ -14,14 +14,7 @@ CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
-CREATE OR REPLACE FUNCTION items_before_trigger_func() RETURNS VOID AS $$
-DECLARE
-
-BEGIN
-    UPDATE partitions SET
-
-END;
-$$ LANGUAGE PLPGSQL;
+CREATE
 
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
@@ -183,17 +176,8 @@ BEGIN
             )).partition_name as name
         FROM ranges
     )
-    INSERT INTO partitions (collection, datetime_range, end_datetime_range)
-        SELECT
-            collection,
-            tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
-            tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
-        FROM p
-            GROUP BY collection, name
-        ON CONFLICT (name) DO UPDATE SET
-            datetime_range = EXCLUDED.datetime_range,
-            end_datetime_range = EXCLUDED.end_datetime_range
-    ;
+    SELECT check_partition(collection, datetime_range, end_datetime_range);
+
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
