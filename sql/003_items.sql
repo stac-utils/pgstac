@@ -317,3 +317,48 @@ UPDATE collections SET
     )
 ;
 $$ LANGUAGE SQL;
+
+
+CREATE OR REPLACE FUNCTION analyze_items(filter text DEFAULT 'items', force boolean DEFAULT FALSE) RETURNS bigint AS $$
+DECLARE
+q text;
+cnt bigint := 0;
+BEGIN
+FOR q IN
+    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
+    FROM pg_stat_user_tables
+    WHERE relname like concat('%_', filter, '%') AND (n_mod_since_analyze>0 OR last_analyze IS NULL OR force)
+LOOP
+        cnt := cnt + 1;
+        EXECUTE q;
+END LOOP;
+RETURN cnt;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION validate_constraints() RETURNS VOID AS $$
+DECLARE
+    q text;
+BEGIN
+    FOR q IN
+    SELECT
+        FORMAT(
+            'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
+            nsp.nspname,
+            cls.relname,
+            con.conname
+        )
+
+    FROM pg_constraint AS con
+        JOIN pg_class AS cls
+        ON con.conrelid = cls.oid
+        JOIN pg_namespace AS nsp
+        ON cls.relnamespace = nsp.oid
+    WHERE convalidated = FALSE AND contype in ('c','f')
+    AND nsp.nspname = 'pgstac'
+    LOOP
+        EXECUTE q;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
