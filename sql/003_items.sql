@@ -279,3 +279,78 @@ CREATE OR REPLACE FUNCTION upsert_items(data jsonb) RETURNS VOID AS $$
     INSERT INTO items_staging_upsert (content)
     SELECT * FROM jsonb_array_elements(data);
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
+    SELECT (replace(replace(replace(st_extent(geometry)::text,'BOX(','[['),')',']]'),' ',','))::jsonb
+    FROM items WHERE collection=$1;
+    ;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS $$
+    SELECT to_jsonb(array[array[min(datetime)::text, max(datetime)::text]])
+    FROM items WHERE collection=$1;
+;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
+
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections SET
+    content = content ||
+    jsonb_build_object(
+        'extent', jsonb_build_object(
+            'spatial', jsonb_build_object(
+                'bbox', collection_bbox(collections.id)
+            ),
+            'temporal', jsonb_build_object(
+                'interval', collection_temporal_extent(collections.id)
+            )
+        )
+    )
+;
+$$ LANGUAGE SQL;
+
+
+CREATE OR REPLACE PROCEDURE analyze_items() AS $$
+DECLARE
+q text;
+BEGIN
+FOR q IN
+    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
+    FROM pg_stat_user_tables
+    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
+LOOP
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
+END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
+DECLARE
+    q text;
+BEGIN
+    FOR q IN
+    SELECT
+        FORMAT(
+            'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
+            nsp.nspname,
+            cls.relname,
+            con.conname
+        )
+
+    FROM pg_constraint AS con
+        JOIN pg_class AS cls
+        ON con.conrelid = cls.oid
+        JOIN pg_namespace AS nsp
+        ON cls.relnamespace = nsp.oid
+    WHERE convalidated = FALSE AND contype in ('c','f')
+    AND nsp.nspname = 'pgstac'
+    LOOP
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;

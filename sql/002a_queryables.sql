@@ -256,6 +256,7 @@ $$ LANGUAGE SQL;
 --     EXECUTE PROCEDURE queryables_trigger_func();
 
 
+
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
 DECLARE
 BEGIN

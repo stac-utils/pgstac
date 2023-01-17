@@ -50,6 +50,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
             echo "Created '$STAGED'. You must review and rename to $FILE before"
             echo "committing and tagging a release."
         fi
-                [ -n "${FORCE}" -a -f "$STAGED" ] &&  mv $STAGED $FILE
+        [ -n "${FORCE}" -a -f "$STAGED" ] &&  mv $STAGED $FILE
     done
 fi
