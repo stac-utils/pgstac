@@ -319,25 +319,24 @@ UPDATE collections SET
 $$ LANGUAGE SQL;
 
 
-CREATE OR REPLACE FUNCTION analyze_items(filter text DEFAULT 'items', force boolean DEFAULT FALSE) RETURNS bigint AS $$
+CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
 q text;
-cnt bigint := 0;
 BEGIN
 FOR q IN
     SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
     FROM pg_stat_user_tables
-    WHERE relname like concat('%_', filter, '%') AND (n_mod_since_analyze>0 OR last_analyze IS NULL OR force)
+    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
 LOOP
-        cnt := cnt + 1;
+        RAISE NOTICE '%', q;
         EXECUTE q;
+        COMMIT;
 END LOOP;
-RETURN cnt;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE OR REPLACE FUNCTION validate_constraints() RETURNS VOID AS $$
+CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
 DECLARE
     q text;
 BEGIN
@@ -358,7 +357,9 @@ BEGIN
     WHERE convalidated = FALSE AND contype in ('c','f')
     AND nsp.nspname = 'pgstac'
     LOOP
+        RAISE NOTICE '%', q;
         EXECUTE q;
+        COMMIT;
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
