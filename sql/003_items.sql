@@ -214,8 +214,7 @@ BEGIN
         INSERT INTO items
         SELECT s.* FROM
             staging_formatted s
-            JOIN deletes d
-            USING (id, collection);
+            ON CONFLICT DO NOTHING;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
@@ -318,3 +317,49 @@ UPDATE collections SET
     )
 ;
 $$ LANGUAGE SQL;
+
+
+CREATE OR REPLACE PROCEDURE analyze_items() AS $$
+DECLARE
+q text;
+BEGIN
+FOR q IN
+    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
+    FROM pg_stat_user_tables
+    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
+LOOP
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
+END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
+DECLARE
+    q text;
+BEGIN
+    FOR q IN
+    SELECT
+        FORMAT(
+            'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
+            nsp.nspname,
+            cls.relname,
+            con.conname
+        )
+
+    FROM pg_constraint AS con
+        JOIN pg_class AS cls
+        ON con.conrelid = cls.oid
+        JOIN pg_namespace AS nsp
+        ON cls.relnamespace = nsp.oid
+    WHERE convalidated = FALSE AND contype in ('c','f')
+    AND nsp.nspname = 'pgstac'
+    LOOP
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;

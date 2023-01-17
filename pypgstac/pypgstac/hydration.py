@@ -12,6 +12,7 @@ def hydrate(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
     This will not perform a deep copy; values of the original item will be referenced
     in the return item.
     """
+
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.

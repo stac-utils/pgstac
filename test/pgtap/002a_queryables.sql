@@ -31,7 +31,7 @@ DELETE FROM collections WHERE id = 'pgstac-test-collection';
 \copy collections (content) FROM 'test/testdata/collections.ndjson';
 
 SELECT results_eq(
-    $$ SELECT get_queryables('pgstac-test-collection') -> 'properties' ? 'id'; $$,
+    $$ SELECT get_queryables('pgstac-test-collection') -> 'properties' ? 'datetime'; $$,
     $$ SELECT true; $$,
     'Make sure valid schema object is returned for a existing collection.'
 );
