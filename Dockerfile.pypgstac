@@ -1,0 +1,25 @@
+FROM python:3.8-slim as python-base
+
+ENV \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PIP_DEFAULT_TIMEOUT=100
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip && \
+    pip install --upgrade psycopg[binary]
+
+RUN mkdir -p /opt/src/pypgstac
+
+WORKDIR /opt/src/pypgstac
+
+COPY src/pypgstac /opt/src/pypgstac
+RUN pip3 install -e /opt/src/pypgstac[dev,psycopg,test]
+
+ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
+
+WORKDIR /opt/src

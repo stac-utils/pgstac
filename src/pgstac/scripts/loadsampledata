@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+cd /opt/src
+psql -f pgstac.sql
+psql -v ON_ERROR_STOP=1 <<-EOSQL
+    \copy collections (content) FROM 'tests/testdata/collections.ndjson'
+    \copy items_staging (content) FROM 'tests/testdata/items.ndjson'
+EOSQL

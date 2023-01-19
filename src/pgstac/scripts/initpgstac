@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+psql -f pgstac.sql
+psql -v ON_ERROR_STOP=1 <<-EOSQL
+    ALTER DATABASE $PGDATABASE SET search_path TO pgstac, public;
+EOSQL

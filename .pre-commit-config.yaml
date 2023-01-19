@@ -1,0 +1,21 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.2.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+    -   id: check-added-large-files
+    -   id: check-toml
+    -   id: detect-aws-credentials
+    -   id: detect-private-key
+    -   id: check-json
+    -   id: mixed-line-ending
+    -   id: check-merge-conflict
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: 'v0.0.225'
+    hooks:
+    -   id: ruff
+        args: ["--force-exclude"]

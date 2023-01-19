@@ -1,0 +1,81 @@
+#!/bin/bash
+pg_isready || startpg
+set -e
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+
+function drop_test_db(){
+    echo "Dropping Test Databases."
+psql -X -q -v ON_ERROR_STOP=1 <<-EOSQL
+    DROP DATABASE IF EXISTS pgstac_test_db_template WITH (force);
+    DROP DATABASE IF EXISTS pgstac_test_db WITH (force);
+EOSQL
+}
+trap drop_test_db 0 2 3 15
+
+function create_db(){
+psql -X -q -v ON_ERROR_STOP=1 <<-EOSQL
+    DROP DATABASE IF EXISTS pgstac_test_db WITH (force);
+    CREATE DATABASE pgstac_test_db TEMPLATE $DB;
+EOSQL
+}
+
+if [[ -z "${1}" ]]; then
+    echo "Creating Fresh Database Template."
+    DB=pgstac_test_db_template
+    psql -X -q -v ON_ERROR_STOP=1 >/dev/null <<-EOSQL
+    DROP DATABASE IF EXISTS pgstac_test_db_template WITH (force);
+    CREATE DATABASE pgstac_test_db_template;
+    \connect pgstac_test_db_template;
+    SET CLIENT_MIN_MESSAGES TO warning;
+    \i pgstac.sql
+EOSQL
+else
+    echo "Using $DB as Test Database Template."
+    DB=$1
+fi
+
+
+create_db
+TESTOUTPUT=$(psql -X -q -v ON_ERROR_STOP=1 -f tests/pgtap.sql pgstac_test_db)
+
+if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
+    echo "PGTap tests failed."
+    echo "$TESTOUTPUT"
+    exit 1
+else
+    echo "All PGTap Tests Passed!"
+fi
+
+TMPFILE=$(mktemp)
+trap 'rm "$TMPFILE"' 0 2 3 15
+
+for SQLFILE in tests/basic/*.sql; do
+    SQLOUTFILE=${SQLFILE}.out
+    create_db
+    echo "Running basic tests for $SQLFILE."
+psql -X -q -v ON_ERROR_STOP=1 pgstac_test_db <<EOSQL >"$TMPFILE"
+BEGIN;
+SET SEARCH_PATH TO pgstac, public;
+SET client_min_messages TO 'warning';
+SET pgstac.context TO 'on';
+SET pgstac."default_filter_lang" TO 'cql-json';
+
+DELETE FROM collections WHERE id = 'pgstac-test-collection';
+\copy collections (content) FROM 'tests/testdata/collections.ndjson';
+\copy items_staging (content) FROM 'tests/testdata/items.ndjson'
+
+\t
+
+\set QUIET 0
+\set ECHO all
+$(cat $SQLFILE)
+\set QUIET 1
+\set ECHO none
+ROLLBACK;
+EOSQL
+
+    diff -Z -b -w -B --strip-trailing-cr "$TMPFILE" $SQLOUTFILE
+    error=$?
+    [[ $error != 0 ]] && { echo "ERROR IN $SQLFILE"; exit $error; } || echo "TEST $SQLFILE PASSED"
+done
