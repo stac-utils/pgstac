@@ -636,12 +636,12 @@ DECLARE
     search_where search_wheres%ROWTYPE;
     id text;
 BEGIN
-CREATE TEMP TABLE results (content jsonb) ON COMMIT DROP;
+CREATE TEMP TABLE results (i int GENERATED ALWAYS AS IDENTITY, content jsonb) ON COMMIT DROP;
 -- if ids is set, short circuit and just use direct ids query for each id
 -- skip any paging or caching
 -- hard codes ordering in the same order as the array of ids
 IF _search ? 'ids' THEN
-    INSERT INTO results
+    INSERT INTO results (content)
     SELECT
         CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
             content_nonhydrated(items, _search->'fields')
@@ -716,7 +716,8 @@ ELSE
     RAISE NOTICE 'Scanned through % partitions.', batches;
 END IF;
 
-SELECT jsonb_agg(content) INTO out_records FROM results WHERE content is not NULL;
+WITH ordered AS (SELECT * FROM results WHERE content IS NOT NULL ORDER BY i)
+SELECT jsonb_agg(content) INTO out_records FROM ordered;
 
 DROP TABLE results;
 

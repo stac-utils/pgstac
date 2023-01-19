@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.6.13]
+
+### Fixed
+- Fix issue with sorting and paging where in some circumstances the aggregation of data changed the expected order
+
+
 ## [v0.6.12]
 
 ### Added
