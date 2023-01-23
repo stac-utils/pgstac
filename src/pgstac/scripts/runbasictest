@@ -1,0 +1,25 @@
+#!/bin/bash
+SQLFILE=$1
+DB=$2
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+psql -X -q -v ON_ERROR_STOP=1 $DB <<EOSQL
+BEGIN;
+SET SEARCH_PATH TO pgstac, public;
+SET client_min_messages TO 'warning';
+SET pgstac.context TO 'on';
+SET pgstac."default_filter_lang" TO 'cql-json';
+
+DELETE FROM collections WHERE id = 'pgstac-test-collection';
+\copy collections (content) FROM 'tests/testdata/collections.ndjson';
+\copy items_staging (content) FROM 'tests/testdata/items.ndjson'
+
+\t
+
+\set QUIET 0
+\set ECHO all
+$(cat $SQLFILE)
+\set QUIET 1
+\set ECHO none
+ROLLBACK;
+EOSQL

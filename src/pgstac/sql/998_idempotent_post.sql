@@ -8,6 +8,21 @@ INSERT INTO queryables (name, definition, property_wrapper, property_index_type)
 ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
 ON CONFLICT DO NOTHING;
 
+
+INSERT INTO pgstac_settings (name, value) VALUES
+  ('context', 'off'),
+  ('context_estimated_count', '100000'),
+  ('context_estimated_cost', '100000'),
+  ('context_stats_ttl', '1 day'),
+  ('default_filter_lang', 'cql2-json'),
+  ('additional_properties', 'true'),
+  ('index_build_on_trigger', 'true'),
+  ('use_queue', 'false'),
+  ('queue_timeout', '10 minutes')
+ON CONFLICT DO NOTHING
+;
+
+
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON SCHEMA pgstac to pgstac_admin;

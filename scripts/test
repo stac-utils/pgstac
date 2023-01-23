@@ -34,18 +34,19 @@ while [[ "$#" > 0 ]]; do case $1 in
     esac; done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "Starting database..."
-    scripts/server --detach;
+    docker-compose run pgstac pgstactest
+    # echo "Starting database..."
+    # scripts/server --detach;
 
-    [ $SKIPMIGRATIONS == '--skipmigrations' ] && scripts/migrate
+    # [ $SKIPMIGRATIONS == '--skipmigrations' ] && scripts/migrate
 
-    echo "Running database tests..."
-    docker-compose \
-        exec -T \
-        database /opt/src/scripts/bin/testdb $SKIPINCREMENTAL $SKIPINCREMENTAL;
+    # echo "Running database tests..."
+    # docker-compose \
+    #     exec -T \
+    #     database /opt/src/scripts/bin/testdb $SKIPINCREMENTAL $SKIPINCREMENTAL;
 
-    echo "Running pypgstac tests..."
-    docker-compose  \
-        run --rm \
-        dev scripts/bin/test;
+    # echo "Running pypgstac tests..."
+    # docker-compose  \
+    #     run --rm \
+    #     dev scripts/bin/test;
 fi

@@ -16,6 +16,39 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
+CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    p text;
+BEGIN
+    RAISE NOTICE 'Updating partition stats';
+    FOR p IN SELECT DISTINCT partition
+        FROM newdata n JOIN partition_sys_meta p
+        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
+    LOOP
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L);', p));
+    END LOOP;
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE TRIGGER items_after_insert_trigger
+AFTER INSERT ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_update_trigger
+AFTER DELETE ON items
+REFERENCING OLD TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_delete_trigger
+AFTER UPDATE ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
     SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
@@ -168,7 +201,7 @@ BEGIN
     ), p AS (
         SELECT
             collection,
-            date_trunc(partition_trunc::text, lower(dtr)) as d,
+            COALESCE(date_trunc(partition_trunc::text, lower(dtr)),'-infinity') as d,
             tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
@@ -224,8 +257,6 @@ CREATE TRIGGER items_staging_insert_ignore_trigger AFTER INSERT ON items_staging
 
 CREATE TRIGGER items_staging_insert_upsert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
-
-
 
 
 CREATE OR REPLACE FUNCTION item_by_id(_id text, _collection text DEFAULT NULL) RETURNS items AS

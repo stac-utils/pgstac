@@ -54,26 +54,7 @@ for SQLFILE in tests/basic/*.sql; do
     SQLOUTFILE=${SQLFILE}.out
     create_db
     echo "Running basic tests for $SQLFILE."
-psql -X -q -v ON_ERROR_STOP=1 pgstac_test_db <<EOSQL >"$TMPFILE"
-BEGIN;
-SET SEARCH_PATH TO pgstac, public;
-SET client_min_messages TO 'warning';
-SET pgstac.context TO 'on';
-SET pgstac."default_filter_lang" TO 'cql-json';
-
-DELETE FROM collections WHERE id = 'pgstac-test-collection';
-\copy collections (content) FROM 'tests/testdata/collections.ndjson';
-\copy items_staging (content) FROM 'tests/testdata/items.ndjson'
-
-\t
-
-\set QUIET 0
-\set ECHO all
-$(cat $SQLFILE)
-\set QUIET 1
-\set ECHO none
-ROLLBACK;
-EOSQL
+    scripts/runbasictest $SQLFILE pgstac_test_db >"$TMPFILE"
 
     diff -Z -b -w -B --strip-trailing-cr "$TMPFILE" $SQLOUTFILE
     error=$?

@@ -1,5 +1,24 @@
 
+CREATE TABLE IF NOT EXISTS migrations (
+  version text PRIMARY KEY,
+  datetime timestamptz DEFAULT clock_timestamp() NOT NULL
+);
 
+CREATE OR REPLACE FUNCTION get_version() RETURNS text AS $$
+  SELECT version FROM pgstac.migrations ORDER BY datetime DESC, version DESC LIMIT 1;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
+  INSERT INTO pgstac.migrations (version) VALUES ($1)
+  ON CONFLICT DO NOTHING
+  RETURNING version;
+$$ LANGUAGE SQL;
+
+
+CREATE TABLE IF NOT EXISTS pgstac_settings (
+  name text PRIMARY KEY,
+  value text NOT NULL
+);
 
 CREATE OR REPLACE FUNCTION table_empty(text) RETURNS boolean AS $$
 DECLARE
@@ -139,40 +158,47 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS bigint AS $$
+CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
     qitem query_queue%ROWTYPE;
-    cnt bigint := 0;
+    timeout text := get_setting('queue_timeout');
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
 BEGIN
-    WHILE TRUE LOOP
+    IF timeout IS NULL THEN
+        timeout := '10 minutes';
+    END IF;
+    timeout_ts := clock_timestamp() + timeout::interval;
+    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
         SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
         IF NOT FOUND THEN
-            EXIT;
+            RETURN cnt;
         END IF;
+        cnt := cnt + 1;
         BEGIN
             RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            cnt := cnt + 1;
             EXECUTE qitem.query;
             EXCEPTION WHEN others THEN
-                INSERT INTO query_queue_errors(query, error) VALUES (
-                    qitem.query,
-                    format('%s | %s', SQLERRM, SQLSTATE)
-                );
+                error := format('%s | %s', SQLERRM, SQLSTATE);
         END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
         DELETE FROM query_queue WHERE query = qitem.query;
     END LOOP;
     RETURN cnt;
 END;
 $$ LANGUAGE PLPGSQL;
 
+
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
 DECLARE
-    use_cron text := COALESCE(get_setting('use_cron'), 'FALSE')::boolean;
+    use_queue text := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
 BEGIN
     IF get_setting_bool('debug') THEN
         RAISE NOTICE '%', query;
     END IF;
-    IF use_cron THEN
+    IF use_queue THEN
         INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
     ELSE
         EXECUTE query;

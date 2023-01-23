@@ -73,6 +73,7 @@ DECLARE
     edtrange tstzrange;
     extent geometry;
 BEGIN
+    RAISE NOTICE 'Updating stats for %', _partition;
     EXECUTE format(
         $q$
             SELECT
@@ -94,7 +95,6 @@ BEGIN
     ;
 END;
 $$ LANGUAGE PLPGSQL STRICT;
-
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -210,7 +210,7 @@ BEGIN
     END IF;
 
     IF c.partition_trunc IS NOT NULL THEN
-        _partition_dtrange := tstzrange(lower(_dtrange), lower(_dtrange) + ('1' + c.partition_trunc)::interval, '[)');
+        _partition_dtrange := tstzrange(lower(_dtrange), lower(_dtrange) + (concat('1 ', c.partition_trunc))::interval, '[)');
     ELSE
         _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
     END IF;
@@ -260,10 +260,10 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
             $q$,
-            format('_items_%s', _collection),
+            format('_items_%s', c.key),
             _collection,
             _partition_name,
-            format('_items_%s', _collection),
+            format('_items_%s', c.key),
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
@@ -288,34 +288,48 @@ END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
-CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT FALSE) RETURNS text AS $$
 DECLARE
     c RECORD;
     q text;
+    from_trunc text;
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
-
-    IF c.partition_trunc = _partition_trunc THEN
-        RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+    IF triggered THEN
+        RAISE NOTICE 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
+    ELSE
+        RAISE NOTICE 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
+        IF c.partition_trunc IS NOT DISTINCT FROM _partition_trunc THEN
+            RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+            RETURN _collection;
+        END IF;
     END IF;
 
-    PERFORM format(
+    EXECUTE format(
         $q$
             CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
             DROP TABLE IF EXISTS %I CASCADE;
             WITH p AS (
                 SELECT
                     collection,
-                    date_trunc(c.partition_trunc, datetime) as d,
+                    CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
+                    ELSE date_trunc(%L, datetime)
+                    END as d,
                     tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                    tstzrange(min(datetime),max(datetime),'[]') as edtrange,
+                    tstzrange(min(datetime),max(datetime),'[]') as edtrange
                 FROM changepartitionstaging
                 GROUP BY 1,2
             ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
-        $q$
+            INSERT INTO items SELECT * FROM changepartitionstaging;
+            DROP TABLE changepartitionstaging;
+        $q$,
+        concat('_items_', c.key),
+        concat('_items_', c.key),
+        c.partition_trunc,
+        c.partition_trunc
     );
     RETURN _collection;
 END;
@@ -332,7 +346,7 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN
-        PERFORM repartition(NEW.id, NEW.partition_trunc);
+        PERFORM repartition(NEW.id, NEW.partition_trunc, TRUE);
     END IF;
     RETURN NEW;
 END;

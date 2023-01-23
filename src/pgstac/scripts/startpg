@@ -26,5 +26,9 @@ if [ -z "$DATABASE_ALREADY_EXISTS" ]; then
 
     echo "DB created"
 else
+    export PGPASSWORD="${PGPASSWORD:-$POSTGRES_PASSWORD}"
+    docker_temp_server_start "$@"
+
+    docker_setup_db
     echo "DB already exists"
 fi
