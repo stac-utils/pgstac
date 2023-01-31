@@ -43,4 +43,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Run tests
-        run: docker run --rm ${{ steps.meta.outputs.images }}  test
+        run: docker run --rm ${{ steps.meta.outputs.tags }}  test
