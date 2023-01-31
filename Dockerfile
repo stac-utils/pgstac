@@ -27,12 +27,16 @@ RUN set -ex \
     && pip3 install --upgrade pip \
     && pip3 install --upgrade migra
 
-
-COPY ./src /opt/src
-COPY ./scripts/bin /opt/bin
+COPY ./src/pypgstac/pyproject.toml /opt/src/pypgstac/pyproject.toml
+COPY ./src/pypgstac/setup.py /opt/src/pypgstac/setup.py
+COPY ./src/pypgstac/README.md /opt/src/pypgstac/README.md
+COPY ./src/pypgstac/pypgstac/__init__.py /opt/src/pypgstac/pypgstac/__init__.py
+COPY ./src/pypgstac/pypgstac/version.py /opt/src/pypgstac/pypgstac/version.py
 
 RUN pip3 install -e /opt/src/pypgstac[dev,test,psycopg]
 
+COPY ./src /opt/src
+COPY ./scripts/bin /opt/bin
 
 RUN echo "initpgstac" > /docker-entrypoint-initdb.d/999_initpgstac.sh
 RUN chmod +x /docker-entrypoint-initdb.d/999_initpgstac.sh
