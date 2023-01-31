@@ -22,10 +22,10 @@ jobs:
         uses: docker/build-push-action@v2
         with:
           context: .
-          tags: pgstac
+          tags: pgstac:latest
           publish: false
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
       - name: Run tests
-        run: docker run --rm  ${{ steps.builder.outputs.imageid }}  test
+        run: docker run --rm pgstac:latest  test
