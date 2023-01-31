@@ -20,9 +20,10 @@ jobs:
       - uses: docker/build-push-action@v2
         with:
           context: .
+          tags: pgstac
           publish: false
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
       - name: Run tests
-        run: docker-compose run --rm  pgstac test
+        run: docker run --rm  pgstac test
