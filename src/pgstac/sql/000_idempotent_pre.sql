@@ -25,9 +25,14 @@ DO $$
   END
 $$;
 
+
 GRANT pgstac_admin TO current_user;
 
 CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
+
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_admin;
+GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_admin;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_admin;
 
 ALTER ROLE pgstac_admin SET SEARCH_PATH TO pgstac, public;
 ALTER ROLE pgstac_read SET SEARCH_PATH TO pgstac, public;
@@ -46,3 +51,6 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_inges
 SET ROLE pgstac_admin;
 
 SET SEARCH_PATH TO pgstac, public;
+
+DROP FUNCTION IF EXISTS analyze_items;
+DROP FUNCTION IF EXISTS validate_constraints;

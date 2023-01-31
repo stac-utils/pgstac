@@ -27,7 +27,7 @@ dependencies = [
     "plpygis==0.2.*",
     "pydantic[dotenv]==1.10.*",
     "tenacity==8.1.*",
-    "methodtools==0.4.5"
+    "methodtools==0.4.5",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +43,8 @@ dev = [
     "types-orjson==0.1.1",
     "ruff==0.0.225",
     "pre-commit",
+    "psycopg2-binary",
+    "migra",
 ]
 psycopg = [
     "psycopg[binary]==3.1.*",
@@ -51,7 +53,7 @@ psycopg = [
 
 
 [project.urls]
-Homepage = 'https://stac-utils.github.io/pgstac/'
+Homepage = "https://stac-utils.github.io/pgstac/"
 Documentation = "https://stac-utils.github.io/pgstac/"
 Issues = "https://github.com/stac-utils/pgstac/issues"
 Source = "https://github.com/stac-utils/pgstac"
@@ -100,7 +102,6 @@ select = [
     "T20", # flake8-print
     # "PT", # flake8-pytest-style
     "Q", # flake8-quotes
-    # "RET", # flake8-return
     # "SIM", # flake8-simplify
     "DTZ", # flake8-datetimez
     "ERA", # eradicate
@@ -114,6 +115,7 @@ ignore = [
     # "E501",  # line too long, handled by black
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "B905",
 ]
 
 [tool.ruff.isort]

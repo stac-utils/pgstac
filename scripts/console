@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -32,19 +33,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     if [[ "${DB_CONSOLE}" ]]; then
         scripts/server --detach
 
-        docker-compose \
-            -f docker-compose.yml \
-            run --rm \
-            database \
-            psql postgres://username:password@database:5432/postgis
+        docker-compose exec pgstac psql
 
         exit 0
     fi
 
-    # Run database migrations
-    docker-compose \
-        -f docker-compose.yml \
-        run --rm dev \
-        /bin/bash
+    docker-compose exec pgstac /bin/bash
 
 fi

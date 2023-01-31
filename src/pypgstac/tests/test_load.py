@@ -10,7 +10,7 @@ from psycopg.errors import UniqueViolation
 from pypgstac.load import Loader, Methods, read_json
 
 HERE = Path(__file__).parent
-TEST_DATA_DIR = HERE.parent.parent / "test" / "testdata"
+TEST_DATA_DIR = HERE.parent.parent / "pgstac" / "tests" / "testdata"
 TEST_COLLECTIONS_JSON = TEST_DATA_DIR / "collections.json"
 TEST_COLLECTIONS = TEST_DATA_DIR / "collections.ndjson"
 TEST_ITEMS = TEST_DATA_DIR / "items.ndjson"

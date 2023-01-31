@@ -6,7 +6,7 @@ INSERT INTO pgstac.migrations SELECT * FROM temp_migrations;
 
 drop function if exists "pgstac"."partition_queries"(_where text, _orderby text);
 
-drop function if exists "pgstac"."search_hash"(jsonb);
+--drop function if exists "pgstac"."search_hash"(jsonb);
 
 drop function if exists "pgstac"."search_query"(_search jsonb, updatestats boolean);
 
@@ -52,6 +52,7 @@ AS $function$
 $function$
 ;
 
+alter table "pgstac"."searches" DROP COLUMN hash;
 alter table "pgstac"."searches" add column "hash" text generated always as ("pgstac".search_hash(search, metadata)) stored primary key;
 
 CREATE UNIQUE INDEX migrations_pkey ON pgstac.migrations USING btree (version);

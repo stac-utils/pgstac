@@ -28,7 +28,7 @@ class TestHydratePG(THydrate):
 
         pgdb = PgstacDB()
         pgdb.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-        Migrate(pgdb)
+        Migrate(pgdb).run_migration()
 
         yield pgdb
 

@@ -6,8 +6,8 @@ BEGIN;
 \i sql/002_collections.sql
 \i sql/002a_queryables.sql
 \i sql/002b_cql.sql
-\i sql/003_items.sql
-\i sql/003a_partitions.sql
+\i sql/003a_items.sql
+\i sql/003b_partitions.sql
 \i sql/004_search.sql
 \i sql/005_tileutils.sql
 \i sql/006_tilesearch.sql

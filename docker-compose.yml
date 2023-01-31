@@ -16,5 +16,6 @@ services:
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
       - ./src:/opt/src
+      - ./scripts/bin:/opt/bin
 volumes:
   pgstac-pgdata:

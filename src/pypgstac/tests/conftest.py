@@ -17,19 +17,38 @@ def db() -> Generator:
 
     with psycopg.connect(autocommit=True) as conn:
         try:
-            conn.execute("CREATE DATABASE pgstactestdb;")
+            conn.execute(
+                """
+                CREATE DATABASE pypgstactestdb
+                TEMPLATE pgstac_test_db_template;
+                """,
+            )
         except psycopg.errors.DuplicateDatabase:
             try:
-                conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
-                conn.execute("CREATE DATABASE pgstactestdb;")
+                conn.execute(
+                    """
+                    DROP DATABASE pypgstactestdb WITH (FORCE);
+                    """,
+                )
+                conn.execute(
+                    """
+                    CREATE DATABASE pypgstactestdb
+                    TEMPLATE pgstac_test_db_template;
+                    """,
+                )
             except psycopg.errors.InsufficientPrivilege:
                 try:
-                    conn.execute("DROP DATABASE pgstactestdb;")
-                    conn.execute("CREATE DATABASE pgstactestdb;")
+                    conn.execute("DROP DATABASE pypgstactestdb;")
+                    conn.execute(
+                    """
+                    CREATE DATABASE pypgstactestdb
+                    TEMPLATE pgstac_test_db_template;
+                    """,
+                )
                 except Exception:
                     pass
 
-    os.environ["PGDATABASE"] = "pgstactestdb"
+    os.environ["PGDATABASE"] = "pypgstactestdb"
 
     pgdb = PgstacDB()
 
@@ -40,10 +59,10 @@ def db() -> Generator:
 
     with psycopg.connect(autocommit=True) as conn:
         try:
-            conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
+            conn.execute("DROP DATABASE pypgstactestdb WITH (FORCE);")
         except psycopg.errors.InsufficientPrivilege:
             try:
-                conn.execute("DROP DATABASE pgstactestdb;")
+                conn.execute("DROP DATABASE pypgstactestdb;")
             except Exception:
                 pass
 
@@ -51,7 +70,8 @@ def db() -> Generator:
 @pytest.fixture(scope="function")
 def loader(db: PgstacDB) -> Generator:
     """Fixture to get a loader and an empty pgstac."""
-    db.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-    Migrate(db)
+    if False:
+        db.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
+        Migrate(db).run_migration()
     ldr = Loader(db)
     return ldr

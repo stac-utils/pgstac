@@ -19,14 +19,16 @@ ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) R
 CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p text;
+    t timestamptz := clock_timestamp();
 BEGIN
-    RAISE NOTICE 'Updating partition stats';
+    RAISE NOTICE 'Updating partition stats %', t;
     FOR p IN SELECT DISTINCT partition
         FROM newdata n JOIN partition_sys_meta p
         ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
     LOOP
         PERFORM run_or_queue(format('SELECT update_partition_stats(%L);', p));
     END LOOP;
+    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -64,6 +66,29 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content_slim(content) as content
     ;
 $$ LANGUAGE SQL STABLE;
+
+CREATE OR REPLACE FUNCTION content_dehydrate(
+    item_content jsonb,
+    collection_content jsonb
+) RETURNS items AS $$
+    SELECT
+        item_content->>'id' as id,
+        stac_geom(item_content) as geometry,
+        item_content->>'collection' as collection,
+        stac_datetime(item_content) as datetime,
+        stac_end_datetime(item_content) as end_datetime,
+        (item_content
+            - '{id,geometry,collection,type,assets}'::text[]
+        )
+            ||
+        jsonb_build_object(
+            'assets',
+            ( strip_jsonb(item_content->'assets', collection_content->'item_assets'
+            )
+            )
+        )
+    ;
+$$ LANGUAGE SQL IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -216,6 +241,7 @@ BEGIN
         SELECT
             (content_dehydrate(content)).*
         FROM newdata;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
@@ -223,6 +249,7 @@ BEGIN
             (content_dehydrate(content)).*
         FROM newdata
         ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
@@ -239,6 +266,7 @@ BEGIN
         SELECT s.* FROM
             staging_formatted s
             ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;

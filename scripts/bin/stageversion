@@ -1,23 +1,32 @@
 #!/bin/bash
-source $(dirname $0)/migra_funcs
 set -e
 
 if [[ "${CI}" ]]; then
     set -x
 fi
+if [ ! $PGSTACDOCKER == 1 ]; then
+    echo "This script should only be run within pgstac docker"; exit 1;
+fi
+
+source $(dirname $0)/tmpdb
+setuptestdb
+
+BASEDIR=/opt/src
+PYPGSTACDIR=$BASEDIR/pypgstac
+MIGRATIONSDIR=$PYPGSTACDIR/pypgstac/migrations
+
 
 function usage() {
     echo -n \
-        "Usage: $(basename "$0") VERSION
-Stage migrations for VERSION
+        "Usage: $(basename "$0"). VERSION FORCE
 
 This scripts is meant to be run inside the dev container.
 
 "
 }
-
 VERSION=$1
-
+FORCE=$2
+[ -n "${FORCE}" ] && echo "Rewriting last migration step directly" || echo "Creating staging file for last migration."
 if [[ -z "${VERSION}" ]]; then
     echo "ERROR: Must supply a version."
     usage
@@ -25,12 +34,107 @@ if [[ -z "${VERSION}" ]]; then
 fi
 
 
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    # Modify 999_version.sql so that base migrations have a reference to the version.
-    echo "SELECT set_version('${VERSION}');" >sql/999_version.sql
+TODBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_to"
+FROMDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_from"
 
-    # Assemble a base migration for the version and put it in the migrations directory.
-    cat sql/*.sql >pypgstac/pypgstac/migrations/pgstac.${VERSION}.sql
+echo $TODBURL
+export | grep PG
 
-    echo $VERSION
-fi
+function base_migrations(){
+    find $MIGRATIONSDIR -regex ".*\/pgstac\.[0-9]+\.[0-9]+\.[0-9]+\.sql"
+}
+
+function base_migration_versions(){
+    base_migrations | sed -En 's/.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql/\1/p' | sort -V
+}
+
+function create_migra_dbs(){
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    CREATE DATABASE migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+    CREATE DATABASE migra_to;
+    DROP DATABASE IF EXISTS base_test;
+    CREATE DATABASE base_test;
+EOSQL
+}
+
+function drop_migra_dbs(){
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+EOSQL
+}
+
+function pgwait(){
+    RETRIES=10
+    until pg_isready >/dev/null 2>&1 || [ $RETRIES -eq 0 ]; do
+    sleep 1
+    done
+}
+
+function calc_migration(){
+    cd $MIGRATIONS_DIR
+    tmpfile=$(mktemp)
+    trap "rm -f $tmpfile" 0 2 3 15
+    MIGRA_FROM_FILE=$1
+    MIGRA_TO_FILE=$2
+    pgwait
+    create_migra_dbs
+    trap drop_migra_dbs 0 2 3 15
+
+    psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $MIGRA_FROM_FILE $FROMDBURL >/dev/null || exit 1;
+    psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $MIGRA_TO_FILE $TODBURL >/dev/null || exit 1;
+
+    migra --schema pgstac --unsafe $FROMDBURL $TODBURL || echo ""
+}
+
+cd $BASEDIR/pgstac/sql
+
+echo "SELECT set_version('${VERSION}');" >999_version.sql
+
+# Assemble a base migration for the version and put it in the migrations directory.
+cat *.sql >$MIGRATIONSDIR/pgstac.${VERSION}.sql
+
+
+cat <<EOD > $PYPGSTACDIR/pypgstac/version.py
+"""Version."""
+__version__ = "${VERSION}"
+EOD
+
+
+# Get Array of available base migration files
+readarray -t VERSIONS < <(base_migration_versions)
+
+# Calculate incremental versions sql migrations
+cnt=$((${#VERSIONS[@]}-1))
+for (( i=0; i<$cnt; i++ )); do
+    F=${VERSIONS[$i]}
+    F_BASE="$MIGRATIONSDIR/pgstac.${F}.sql"
+    T=${VERSIONS[$i+1]}
+    T_BASE="$MIGRATIONSDIR/pgstac.${T}.sql"
+
+    FILE="$MIGRATIONSDIR/pgstac.${F}-${T}.sql"
+    [ -n "${FORCE}" -a -f "$FILE" -a $(( $i + 1 )) -eq $cnt ] && rm $FILE
+    STAGED="$FILE.staged"
+    STAGEDINIT="$STAGED.init"
+    trap "rm $STAGEDINIT" 0 2 3 15
+
+    if [ -f $FILE ]; then
+        echo "Migration $FILE already exists."
+    else
+        echo "Creating migrations from $F to $T"
+        echo "SET client_min_messages TO WARNING;" >$STAGEDINIT
+        echo "SET SEARCH_PATH to pgstac, public;" >>$STAGEDINIT
+        echo "-- BEGIN migra calculated SQL" >>$STAGEDINIT
+        calc_migration $F_BASE $T_BASE >>$STAGEDINIT
+        echo "-- END migra calculated SQL" >>$STAGEDINIT
+        cd /opt/src/pgstac/sql
+        cat 000_idempotent_pre.sql $STAGEDINIT 998_idempotent_post.sql 999_version.sql >$STAGED
+        rm $STAGEDINIT
+        echo "Created '$STAGED'. You must review and rename to $FILE before"
+        echo "committing and tagging a release."
+    fi
+    [ -n "${FORCE}" -a -f "$STAGED" ] &&  mv $STAGED $FILE
+done
+exit 0

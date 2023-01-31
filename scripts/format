@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -15,7 +16,6 @@ Format code in this project
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    docker-compose  \
-        run --rm \
-        dev scripts/bin/format;
+    echo "Formatting pypgstac..."
+    docker-compose run --rm pgstac sh -c "ruff --fix pypgstac/pypgstac; ruff --fix pypgstac/tests"
 fi

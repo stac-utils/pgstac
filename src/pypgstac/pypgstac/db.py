@@ -119,7 +119,7 @@ class PgstacDB:
             try:
                 self.connect()
                 self.query("SELECT 1;")
-                return
+                return None
             except psycopg.errors.OperationalError:
                 time.sleep(1)
                 cnt += 1

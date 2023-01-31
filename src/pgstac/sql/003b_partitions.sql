@@ -67,6 +67,15 @@ WHERE isleaf
 CREATE VIEW partitions AS
 SELECT * FROM partition_sys_meta LEFT JOIN partition_stats USING (partition);
 
+CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text) RETURNS VOID AS $$
+DECLARE
+BEGIN
+    PERFORM run_or_queue(
+        format('SELECT update_partition_stats(%L);', _partition)
+    );
+END;
+$$ LANGUAGE PLPGSQL;
+
 CREATE OR REPLACE FUNCTION update_partition_stats(_partition text) RETURNS VOID AS $$
 DECLARE
     dtrange tstzrange;
@@ -133,6 +142,9 @@ CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
 DECLARE
     q text;
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+        RETURN NULL;
+    END IF;
     FOR q IN SELECT FORMAT(
         $q$
             ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
@@ -152,6 +164,9 @@ CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, 
 DECLARE
     q text;
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+        RETURN NULL;
+    END IF;
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
     q :=format(
         $q$
@@ -210,7 +225,11 @@ BEGIN
     END IF;
 
     IF c.partition_trunc IS NOT NULL THEN
-        _partition_dtrange := tstzrange(lower(_dtrange), lower(_dtrange) + (concat('1 ', c.partition_trunc))::interval, '[)');
+        _partition_dtrange := tstzrange(
+            date_trunc(c.partition_trunc, lower(_dtrange)),
+            date_trunc(c.partition_trunc, lower(_dtrange)) + (concat('1 ', c.partition_trunc))::interval,
+            '[)'
+        );
     ELSE
         _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
     END IF;
@@ -230,8 +249,32 @@ BEGIN
 
     SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
     IF FOUND THEN
-        _constraint_edtrange := _edtrange + pm.constraint_edtrange;
-        _constraint_dtrange := _dtrange + pm.constraint_dtrange;
+        RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
+        _constraint_edtrange :=
+            tstzrange(
+                least(
+                    lower(_edtrange),
+                    nullif(lower(pm.constraint_edtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_edtrange),
+                    nullif(upper(pm.constraint_edtrange), 'infinity')
+                ),
+                '[]'
+            );
+        _constraint_dtrange :=
+            tstzrange(
+                least(
+                    lower(_dtrange),
+                    nullif(lower(pm.constraint_dtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_dtrange),
+                    nullif(upper(pm.constraint_dtrange), 'infinity')
+                ),
+                '[]'
+            );
+
         IF pm.constraint_edtrange @> _edtrange AND pm.constraint_dtrange @> _dtrange THEN
             RETURN pm.partition;
         ELSE
@@ -241,7 +284,7 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
-    RAISE NOTICE 'Creating partition %', _partition_name;
+    RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
             $q$
@@ -283,7 +326,7 @@ BEGIN
             RAISE INFO 'Error Context:%', err_context;
     END;
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
-    RETURN _collection;
+    RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -308,29 +351,31 @@ BEGIN
         END IF;
     END IF;
 
-    EXECUTE format(
-        $q$
-            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
-            DROP TABLE IF EXISTS %I CASCADE;
-            WITH p AS (
-                SELECT
-                    collection,
-                    CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
-                    ELSE date_trunc(%L, datetime)
-                    END as d,
-                    tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                    tstzrange(min(datetime),max(datetime),'[]') as edtrange
-                FROM changepartitionstaging
-                GROUP BY 1,2
-            ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
-            INSERT INTO items SELECT * FROM changepartitionstaging;
-            DROP TABLE changepartitionstaging;
-        $q$,
-        concat('_items_', c.key),
-        concat('_items_', c.key),
-        c.partition_trunc,
-        c.partition_trunc
-    );
+    IF EXISTS (SELECT 1 FROM partitions WHERE collection=_collection LIMIT 1) THEN
+        EXECUTE format(
+            $q$
+                CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+                DROP TABLE IF EXISTS %I CASCADE;
+                WITH p AS (
+                    SELECT
+                        collection,
+                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
+                        ELSE date_trunc(%L, datetime)
+                        END as d,
+                        tstzrange(min(datetime),max(datetime),'[]') as dtrange,
+                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                    FROM changepartitionstaging
+                    GROUP BY 1,2
+                ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
+                INSERT INTO items SELECT * FROM changepartitionstaging;
+                DROP TABLE changepartitionstaging;
+            $q$,
+            concat('_items_', c.key),
+            concat('_items_', c.key),
+            c.partition_trunc,
+            c.partition_trunc
+        );
+    END IF;
     RETURN _collection;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;

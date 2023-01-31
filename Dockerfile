@@ -1,54 +1,41 @@
-ARG POSTGRES_VERSION=14
-
-FROM postgres:${POSTGRES_VERSION} as pg
-
-LABEL maintainer="David Bitner"
-
+FROM postgres:15-bullseye as pg
+ENV PGSTACDOCKER=1
 ENV POSTGIS_MAJOR 3
+ENV POSTGIS_VERSION 3.3.2+dfsg-1.pgdg110+1
+
 ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
-ENV PATH=/opt/src/pgstac/scripts:${PATH}
+ENV PATH=/opt/bin:${PATH}
+ENV PYTHONWRITEBYTECODE=1
+ENV PYTHONBUFFERED=1
 
-ENV POSTGRES_USER username
-ENV POSTGRES_DB postgis
-ENV POSTGRES_PASSWORD password
-
-ENV PGUSER=${POSTGRES_USER}
-ENV PGDATABASE=${POSTGRES_DB}
-ENV PGPASSWORD=${POSTGRES_PASSWORD}
-
-ENV POSTGRES_VERSION=${POSTGRES_VERSION}
-
-ENV PGISDOCKER=1
-
-RUN \
-    apt-get update \
+RUN set -ex \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
+        ca-certificates \
         gnupg \
-        apt-transport-https \
-        debian-archive-keyring \
-        software-properties-common \
-        postgresql-$PG_MAJOR-pgtap \
-        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
+        python3 python3-pip python-is-python3 \
+        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR=$POSTGIS_VERSION \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
-        python3 \
-        python3-pip \
-        python-is-python3 \
+        postgresql-$PG_MAJOR-pgtap \
+        postgresql-$PG_MAJOR-plpgsql-check \
+        postgresql-$PG_MAJOR-plprofiler \
+        postgresql-$PG_MAJOR-pldebugger \
+        postgresql-$PG_MAJOR-partman \
     && apt-get remove -y apt-transport-https \
-    && apt-get -y autoremove \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && apt-get -y autoremove \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --upgrade pip \
+    && pip3 install --upgrade migra
 
-
-# EXPOSE 5432
-
-RUN pip install --upgrade pip && \
-    pip install --upgrade psycopg[binary] psycopg-pool
 
 COPY ./src /opt/src
+COPY ./scripts/bin /opt/bin
 
-RUN pip3 install -e /opt/src/pypgstac[dev,test]
+RUN pip3 install -e /opt/src/pypgstac[dev,test,psycopg]
 
 
 RUN echo "initpgstac" > /docker-entrypoint-initdb.d/999_initpgstac.sh
 RUN chmod +x /docker-entrypoint-initdb.d/999_initpgstac.sh
+RUN chmod +x /opt/bin/*
 
 WORKDIR /opt/src

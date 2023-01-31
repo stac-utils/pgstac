@@ -1,0 +1,63 @@
+#!/bin/bash
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+
+function setuptestdb(){
+
+
+# Run tests using postgres user and trust authentication
+
+export PGDATA=/tmp/pgdata
+export PGLOG=/tmp/pglog
+export POSTGRES_HOST_AUTH_MODE=trust
+export POSTGRES_USER=postgres
+export POSTGRES_DB=postgres
+export PGUSER=postgres
+export PGPASSWORD="${PGPASSWORD:-$POSTGRES_PASSWORD}"
+export PGPORT=5438
+export POSTGRES_PORT=5438
+export POSTGRES_DATABASE=postgres
+
+# Make sure there is no database running from /tmp/pgdata
+gosu postgres pg_ctl stop || echo "..."
+
+# Make sure PGDATA directory is set up from scratch
+rm -fr /tmp/pgdata/*
+
+# Leverage scripts from docker-entrypoint.sh
+source /usr/local/bin/docker-entrypoint.sh
+# docker_setup_env
+# docker_create_db_directories
+# docker_verify_minimum_env
+# ls /docker-entrypoint-initdb.d/ > /dev/null
+gosu postgres initdb --username $POSTGRES_USER --auth=trust -D $PGDATA
+# docker_init_database_dir
+# pg_setup_hba_conf "$@"
+# docker_temp_server_start "$@"
+# docker_setup_db
+# docker_process_init_files /docker-entrypoint-initdb.d/*
+# docker_temp_server_stop
+
+
+# Start postgres with minimal logging settings
+gosu postgres pg_ctl -l "$PGLOG" -w -o "-F -c fsync=off -c full_page_writes=off -c synchronous_commit=off -c archive_mode=off" start
+trap "gosu postgres pg_ctl stop && rm -fr /tmp/pgdata/* " 0 2 3 15
+
+# Get location of script directory
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+cd /opt/src/pgstac
+# Create template database with pgstac installed
+psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+CREATE DATABASE pgstac_test_db_template;
+ALTER DATABASE pgstac_test_db_template SET CLIENT_MIN_MESSAGES TO WARNING;
+ALTER DATABASE pgstac_test_db_template SET SEARCH_PATH to pgstac, public;
+\connect pgstac_test_db_template;
+\i pgstac.sql
+EOSQL
+}
+export -f setuptestdb

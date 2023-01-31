@@ -1,35 +1,29 @@
 SET pgstac.use_queue=TRUE;
---test non-partitioned collection
-INSERT INTO collections (content) VALUES ('{"id":"pgstactest-partitioned"}');
-INSERT INTO items_staging_ignore(content)
+--create base data to use with tests
+CREATE TEMP TABLE test_items AS
 SELECT jsonb_build_object(
     'id', concat('pgstactest-partitioned-', (row_number() over ())::text),
     'collection', 'pgstactest-partitioned',
     'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
     'properties', jsonb_build_object( 'datetime', g::text)
-) FROM generate_series('2020-01-01'::timestamptz, '2022-01-01'::timestamptz, '1 day'::interval) g;
+) as content FROM generate_series('2020-01-01'::timestamptz, '2022-01-01'::timestamptz, '1 week'::interval) g;
+
+--test non-partitioned collection
+INSERT INTO collections (content) VALUES ('{"id":"pgstactest-partitioned"}');
+INSERT INTO items_staging(content)
+SELECT content FROM test_items;
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned';
 
 --test collection partioned by year
 INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-year"}', 'year');
-INSERT INTO items_staging_ignore(content)
-SELECT jsonb_build_object(
-    'id', concat('pgstactest-partitioned-year', (row_number() over ())::text),
-    'collection', 'pgstactest-partitioned-year',
-    'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
-    'properties', jsonb_build_object( 'datetime', g::text)
-) FROM generate_series('2020-01-01'::timestamptz, '2022-01-01'::timestamptz, '1 day'::interval) g;
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-year"}'::jsonb FROM test_items;
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-year';
 
 --test collection partioned by month
 INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-month"}', 'month');
-INSERT INTO items_staging_ignore(content)
-SELECT jsonb_build_object(
-    'id', concat('pgstactest-partitioned-month', (row_number() over ())::text),
-    'collection', 'pgstactest-partitioned-month',
-    'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
-    'properties', jsonb_build_object( 'datetime', g::text)
-) FROM generate_series('2020-01-01'::timestamptz, '2022-01-01'::timestamptz, '1 day'::interval) g;
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-month"}'::jsonb FROM test_items;
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-month';
 
 --test repartitioning from year to non partitioned

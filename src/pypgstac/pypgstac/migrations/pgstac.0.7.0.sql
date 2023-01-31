@@ -25,9 +25,14 @@ DO $$
   END
 $$;
 
+
 GRANT pgstac_admin TO current_user;
 
 CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
+
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_admin;
+GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_admin;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_admin;
 
 ALTER ROLE pgstac_admin SET SEARCH_PATH TO pgstac, public;
 ALTER ROLE pgstac_read SET SEARCH_PATH TO pgstac, public;
@@ -47,313 +52,8 @@ SET ROLE pgstac_admin;
 
 SET SEARCH_PATH TO pgstac, public;
 
-
-CREATE TABLE IF NOT EXISTS migrations (
-  version text PRIMARY KEY,
-  datetime timestamptz DEFAULT clock_timestamp() NOT NULL
-);
-
-CREATE OR REPLACE FUNCTION get_version() RETURNS text AS $$
-  SELECT version FROM pgstac.migrations ORDER BY datetime DESC, version DESC LIMIT 1;
-$$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
-  INSERT INTO pgstac.migrations (version) VALUES ($1)
-  ON CONFLICT DO NOTHING
-  RETURNING version;
-$$ LANGUAGE SQL;
-
-
-CREATE TABLE IF NOT EXISTS pgstac_settings (
-  name text PRIMARY KEY,
-  value text NOT NULL
-);
-
-INSERT INTO pgstac_settings (name, value) VALUES
-  ('context', 'off'),
-  ('context_estimated_count', '100000'),
-  ('context_estimated_cost', '100000'),
-  ('context_stats_ttl', '1 day'),
-  ('default_filter_lang', 'cql2-json'),
-  ('additional_properties', 'true'),
-  ('index_build_on_trigger', 'true'),
-  ('use_cron', 'false'),
-  ('queue_timeout', '10 minutes')
-ON CONFLICT DO NOTHING
-;
-
-
-
-CREATE OR REPLACE FUNCTION table_empty(text) RETURNS boolean AS $$
-DECLARE
-    retval boolean;
-BEGIN
-    EXECUTE format($q$
-        SELECT NOT EXISTS (SELECT 1 FROM %I LIMIT 1)
-        $q$,
-        $1
-    ) INTO retval;
-    RETURN retval;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
-SELECT COALESCE(
-  conf->>_setting,
-  current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
-);
-$$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION get_setting_bool(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS boolean AS $$
-SELECT COALESCE(
-  conf->>_setting,
-  current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),
-  'FALSE'
-)::boolean;
-$$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
-  SELECT pgstac.get_setting('context', conf);
-$$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION context_estimated_count(conf jsonb DEFAULT NULL) RETURNS int AS $$
-  SELECT pgstac.get_setting('context_estimated_count', conf)::int;
-$$ LANGUAGE SQL;
-
-DROP FUNCTION IF EXISTS context_estimated_cost();
-CREATE OR REPLACE FUNCTION context_estimated_cost(conf jsonb DEFAULT NULL) RETURNS float AS $$
-  SELECT pgstac.get_setting('context_estimated_cost', conf)::float;
-$$ LANGUAGE SQL;
-
-DROP FUNCTION IF EXISTS context_stats_ttl();
-CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS interval AS $$
-  SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
-$$ LANGUAGE SQL;
-
-
-CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
-DECLARE
-debug boolean := current_setting('pgstac.debug', true);
-BEGIN
-    IF debug THEN
-        RAISE NOTICE 'NOTICE FROM FUNC: %  >>>>> %', concat_ws(' | ', $1), clock_timestamp();
-        RETURN TRUE;
-    END IF;
-    RETURN FALSE;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION empty_arr(ANYARRAY) RETURNS BOOLEAN AS $$
-SELECT CASE
-  WHEN $1 IS NULL THEN TRUE
-  WHEN cardinality($1)<1 THEN TRUE
-ELSE FALSE
-END;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION array_intersection(_a ANYARRAY, _b ANYARRAY) RETURNS ANYARRAY AS $$
-  SELECT ARRAY ( SELECT unnest(_a) INTERSECT SELECT UNNEST(_b) );
-$$ LANGUAGE SQL IMMUTABLE;
-
-
-CREATE OR REPLACE FUNCTION array_map_ident(_a text[])
-  RETURNS text[] AS $$
-  SELECT array_agg(quote_ident(v)) FROM unnest(_a) v;
-$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION array_map_literal(_a text[])
-  RETURNS text[] AS $$
-  SELECT array_agg(quote_literal(v)) FROM unnest(_a) v;
-$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION array_reverse(anyarray) RETURNS anyarray AS $$
-SELECT ARRAY(
-    SELECT $1[i]
-    FROM generate_subscripts($1,1) AS s(i)
-    ORDER BY i DESC
-);
-$$ LANGUAGE SQL STRICT IMMUTABLE;
-
-DROP TABLE IF EXISTS query_queue;
-CREATE TABLE query_queue (
-    query text PRIMARY KEY,
-    added timestamptz DEFAULT now()
-);
-
-DROP TABLE IF EXISTS query_queue_history;
-CREATE TABLE query_queue_history(
-    query text,
-    added timestamptz NOT NULL,
-    finished timestamptz NOT NULL DEFAULT now(),
-    error text
-);
-
-CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
-DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout text := get_setting('queue_timeout');
-    timeout_ts timestamptz;
-    error text;
-BEGIN
-    IF timeout IS NULL THEN
-        timeout := '10 minutes';
-    END IF;
-    timeout_ts := clock_timestamp() + timeout::interval;
-    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        DELETE FROM query_queue WHERE query = qitem.query;
-        COMMIT;
-    END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS bigint AS $$
-DECLARE
-    qitem query_queue%ROWTYPE;
-    cnt bigint := 0;
-BEGIN
-    WHILE TRUE LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            cnt := cnt + 1;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                INSERT INTO query_queue_errors(query, error) VALUES (
-                    qitem.query,
-                    format('%s | %s', SQLERRM, SQLSTATE)
-                );
-        END;
-        DELETE FROM query_queue WHERE query = qitem.query;
-    END LOOP;
-    RETURN cnt;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
-DECLARE
-    use_cron text := COALESCE(get_setting('use_cron'), 'FALSE')::boolean;
-BEGIN
-    IF use_cron THEN
-        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
-    ELSE
-        PERFORM query;
-    END IF;
-    RETURN;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-
-DROP FUNCTION IF EXISTS check_pgstac_settings;
-CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text) RETURNS VOID AS $$
-DECLARE
-    settingval text;
-    sysmem bigint := pg_size_bytes(_sysmem);
-    effective_cache_size bigint := pg_size_bytes(current_setting('effective_cache_size', TRUE));
-    shared_buffers bigint := pg_size_bytes(current_setting('shared_buffers', TRUE));
-    work_mem bigint := pg_size_bytes(current_setting('work_mem', TRUE));
-    max_connections int := current_setting('max_connections', TRUE);
-    maintenance_work_mem bigint := pg_size_bytes(current_setting('maintenance_work_mem', TRUE));
-    seq_page_cost float := current_setting('seq_page_cost', TRUE);
-    random_page_cost float := current_setting('random_page_cost', TRUE);
-    temp_buffers bigint := pg_size_bytes(current_setting('temp_buffers', TRUE));
-    r record;
-BEGIN
-    IF _sysmem IS NULL THEN
-      RAISE NOTICE 'Call function with the size of your system memory `SELECT check_pgstac_settings(''4GB'')` to get pg system setting recommendations.';
-    ELSE
-        IF effective_cache_size < (sysmem * 0.5) THEN
-            RAISE WARNING 'effective_cache_size of % is set low for a system with %. Recomended value between % and %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.5), pg_size_pretty(sysmem * 0.75);
-        ELSIF effective_cache_size > (sysmem * 0.75) THEN
-            RAISE WARNING 'effective_cache_size of % is set high for a system with %. Recomended value between % and %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.5), pg_size_pretty(sysmem * 0.75);
-        ELSE
-            RAISE NOTICE 'effective_cache_size of % is set appropriately for a system with %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem);
-        END IF;
-
-        IF shared_buffers < (sysmem * 0.2) THEN
-            RAISE WARNING 'shared_buffers of % is set low for a system with %. Recomended value between % and %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.2), pg_size_pretty(sysmem * 0.3);
-        ELSIF shared_buffers > (sysmem * 0.3) THEN
-            RAISE WARNING 'shared_buffers of % is set high for a system with %. Recomended value between % and %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.2), pg_size_pretty(sysmem * 0.3);
-        ELSE
-            RAISE NOTICE 'shared_buffers of % is set appropriately for a system with %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem);
-        END IF;
-        shared_buffers = sysmem * 0.3;
-        IF maintenance_work_mem < (sysmem * 0.2) THEN
-            RAISE WARNING 'maintenance_work_mem of % is set low for shared_buffers of %. Recomended value between % and %', pg_size_pretty(maintenance_work_mem), pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers * 0.2), pg_size_pretty(shared_buffers * 0.3);
-        ELSIF maintenance_work_mem > (shared_buffers * 0.3) THEN
-            RAISE WARNING 'maintenance_work_mem of % is set high for shared_buffers of %. Recomended value between % and %', pg_size_pretty(maintenance_work_mem), pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers * 0.2), pg_size_pretty(shared_buffers * 0.3);
-        ELSE
-            RAISE NOTICE 'maintenance_work_mem of % is set appropriately for shared_buffers of %', pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers);
-        END IF;
-
-        IF work_mem * max_connections > shared_buffers THEN
-            RAISE WARNING 'work_mem setting of % is set high for % max_connections please reduce work_mem to % or decrease max_connections to %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers/max_connections), floor(shared_buffers/work_mem);
-        ELSIF work_mem * max_connections < (shared_buffers * 0.75) THEN
-            RAISE WARNING 'work_mem setting of % is set low for % max_connections you may consider raising work_mem to % or increasing max_connections to %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers/max_connections), floor(shared_buffers/work_mem);
-        ELSE
-            RAISE NOTICE 'work_mem setting of % and max_connections of % are adequate for shared_buffers of %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers);
-        END IF;
-
-        IF random_page_cost / seq_page_cost != 1.1 THEN
-            RAISE WARNING 'random_page_cost (%) /seq_page_cost (%) should be set to 1.1 for SSD. Change random_page_cost to %', random_page_cost, seq_page_cost, 1.1 * seq_page_cost;
-        ELSE
-            RAISE NOTICE 'random_page_cost and seq_page_cost set appropriately for SSD';
-        END IF;
-
-        IF temp_buffers < greatest(pg_size_bytes('128MB'),(maintenance_work_mem / 2)) THEN
-            RAISE WARNING 'pgstac makes heavy use of temp tables, consider raising temp_buffers from % to %', pg_size_pretty(temp_buffers), greatest('128MB', pg_size_pretty((shared_buffers / 16)));
-        END IF;
-    END IF;
-
-    RAISE NOTICE 'VALUES FOR PGSTAC VARIABLES';
-    RAISE NOTICE 'These can be set either as GUC system variables or by setting in the pgstac_settings table.';
-
-    FOR r IN SELECT name, get_setting(name) as setting, CASE WHEN current_setting(concat('pgstac.',name), TRUE) IS NOT NULL THEN concat('pgstac.',name, ' GUC') WHEN value IS NOT NULL THEN 'pgstac_settings table' ELSE 'Not Set' END as loc FROM pgstac_settings LOOP
-      RAISE NOTICE '% is set to % from the %', r.name, r.setting, r.loc;
-    END LOOP;
-
-    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pg_cron';
-    IF NOT FOUND OR settingval IS NULL THEN
-        RAISE NOTICE 'Consider intalling pg_cron which can be used to automate tasks';
-    ELSE
-        RAISE NOTICE 'pg_cron % is installed', settingval;
-    END IF;
-
-    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pgstattuple';
-    IF NOT FOUND OR settingval IS NULL THEN
-        RAISE NOTICE 'Consider installing the pgstattuple extension which can be used to help maintain tables and indexes.';
-    ELSE
-        RAISE NOTICE 'pgstattuple % is installed', settingval;
-    END IF;
-
-    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pg_stat_statements';
-    IF NOT FOUND OR settingval IS NULL THEN
-        RAISE NOTICE 'Consider installing the pg_stat_statements extension which is very helpful for tracking the types of queries on the system';
-    ELSE
-        RAISE NOTICE 'pgstattuple % is installed', settingval;
-    END IF;
-
-END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET CLIENT_MIN_MESSAGES TO NOTICE;
+DROP FUNCTION IF EXISTS analyze_items;
+DROP FUNCTION IF EXISTS validate_constraints;
 CREATE OR REPLACE FUNCTION to_int(jsonb) RETURNS int AS $$
     SELECT floor(($1->>0)::float)::int;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
@@ -624,6 +324,308 @@ CREATE OR REPLACE AGGREGATE jsonb_max(jsonb) (
     STYPE = jsonb,
     SFUNC = jsonb_greatest
 );
+
+CREATE TABLE IF NOT EXISTS migrations (
+  version text PRIMARY KEY,
+  datetime timestamptz DEFAULT clock_timestamp() NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION get_version() RETURNS text AS $$
+  SELECT version FROM pgstac.migrations ORDER BY datetime DESC, version DESC LIMIT 1;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION set_version(text) RETURNS text AS $$
+  INSERT INTO pgstac.migrations (version) VALUES ($1)
+  ON CONFLICT DO NOTHING
+  RETURNING version;
+$$ LANGUAGE SQL;
+
+
+CREATE TABLE IF NOT EXISTS pgstac_settings (
+  name text PRIMARY KEY,
+  value text NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION table_empty(text) RETURNS boolean AS $$
+DECLARE
+    retval boolean;
+BEGIN
+    EXECUTE format($q$
+        SELECT NOT EXISTS (SELECT 1 FROM %I LIMIT 1)
+        $q$,
+        $1
+    ) INTO retval;
+    RETURN retval;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
+SELECT COALESCE(
+  conf->>_setting,
+  current_setting(concat('pgstac.',_setting), TRUE),
+  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
+);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION get_setting_bool(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS boolean AS $$
+SELECT COALESCE(
+  conf->>_setting,
+  current_setting(concat('pgstac.',_setting), TRUE),
+  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),
+  'FALSE'
+)::boolean;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
+  SELECT pgstac.get_setting('context', conf);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION context_estimated_count(conf jsonb DEFAULT NULL) RETURNS int AS $$
+  SELECT pgstac.get_setting('context_estimated_count', conf)::int;
+$$ LANGUAGE SQL;
+
+DROP FUNCTION IF EXISTS context_estimated_cost();
+CREATE OR REPLACE FUNCTION context_estimated_cost(conf jsonb DEFAULT NULL) RETURNS float AS $$
+  SELECT pgstac.get_setting('context_estimated_cost', conf)::float;
+$$ LANGUAGE SQL;
+
+DROP FUNCTION IF EXISTS context_stats_ttl();
+CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS interval AS $$
+  SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
+$$ LANGUAGE SQL;
+
+
+CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
+DECLARE
+debug boolean := current_setting('pgstac.debug', true);
+BEGIN
+    IF debug THEN
+        RAISE NOTICE 'NOTICE FROM FUNC: %  >>>>> %', concat_ws(' | ', $1), clock_timestamp();
+        RETURN TRUE;
+    END IF;
+    RETURN FALSE;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION empty_arr(ANYARRAY) RETURNS BOOLEAN AS $$
+SELECT CASE
+  WHEN $1 IS NULL THEN TRUE
+  WHEN cardinality($1)<1 THEN TRUE
+ELSE FALSE
+END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_intersection(_a ANYARRAY, _b ANYARRAY) RETURNS ANYARRAY AS $$
+  SELECT ARRAY ( SELECT unnest(_a) INTERSECT SELECT UNNEST(_b) );
+$$ LANGUAGE SQL IMMUTABLE;
+
+
+CREATE OR REPLACE FUNCTION array_map_ident(_a text[])
+  RETURNS text[] AS $$
+  SELECT array_agg(quote_ident(v)) FROM unnest(_a) v;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_map_literal(_a text[])
+  RETURNS text[] AS $$
+  SELECT array_agg(quote_literal(v)) FROM unnest(_a) v;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION array_reverse(anyarray) RETURNS anyarray AS $$
+SELECT ARRAY(
+    SELECT $1[i]
+    FROM generate_subscripts($1,1) AS s(i)
+    ORDER BY i DESC
+);
+$$ LANGUAGE SQL STRICT IMMUTABLE;
+
+DROP TABLE IF EXISTS query_queue;
+CREATE TABLE query_queue (
+    query text PRIMARY KEY,
+    added timestamptz DEFAULT now()
+);
+
+DROP TABLE IF EXISTS query_queue_history;
+CREATE TABLE query_queue_history(
+    query text,
+    added timestamptz NOT NULL,
+    finished timestamptz NOT NULL DEFAULT now(),
+    error text
+);
+
+CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout text := get_setting('queue_timeout');
+    timeout_ts timestamptz;
+    error text;
+BEGIN
+    IF timeout IS NULL THEN
+        timeout := '10 minutes';
+    END IF;
+    timeout_ts := clock_timestamp() + timeout::interval;
+    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
+        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
+        BEGIN
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        DELETE FROM query_queue WHERE query = qitem.query;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout text := get_setting('queue_timeout');
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    IF timeout IS NULL THEN
+        timeout := '10 minutes';
+    END IF;
+    timeout_ts := clock_timestamp() + timeout::interval;
+    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
+        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
+        IF NOT FOUND THEN
+            RETURN cnt;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        DELETE FROM query_queue WHERE query = qitem.query;
+    END LOOP;
+    RETURN cnt;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
+DECLARE
+    use_queue text := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+BEGIN
+    IF get_setting_bool('debug') THEN
+        RAISE NOTICE '%', query;
+    END IF;
+    IF use_queue THEN
+        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+    ELSE
+        EXECUTE query;
+    END IF;
+    RETURN;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+
+DROP FUNCTION IF EXISTS check_pgstac_settings;
+CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text) RETURNS VOID AS $$
+DECLARE
+    settingval text;
+    sysmem bigint := pg_size_bytes(_sysmem);
+    effective_cache_size bigint := pg_size_bytes(current_setting('effective_cache_size', TRUE));
+    shared_buffers bigint := pg_size_bytes(current_setting('shared_buffers', TRUE));
+    work_mem bigint := pg_size_bytes(current_setting('work_mem', TRUE));
+    max_connections int := current_setting('max_connections', TRUE);
+    maintenance_work_mem bigint := pg_size_bytes(current_setting('maintenance_work_mem', TRUE));
+    seq_page_cost float := current_setting('seq_page_cost', TRUE);
+    random_page_cost float := current_setting('random_page_cost', TRUE);
+    temp_buffers bigint := pg_size_bytes(current_setting('temp_buffers', TRUE));
+    r record;
+BEGIN
+    IF _sysmem IS NULL THEN
+      RAISE NOTICE 'Call function with the size of your system memory `SELECT check_pgstac_settings(''4GB'')` to get pg system setting recommendations.';
+    ELSE
+        IF effective_cache_size < (sysmem * 0.5) THEN
+            RAISE WARNING 'effective_cache_size of % is set low for a system with %. Recomended value between % and %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.5), pg_size_pretty(sysmem * 0.75);
+        ELSIF effective_cache_size > (sysmem * 0.75) THEN
+            RAISE WARNING 'effective_cache_size of % is set high for a system with %. Recomended value between % and %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.5), pg_size_pretty(sysmem * 0.75);
+        ELSE
+            RAISE NOTICE 'effective_cache_size of % is set appropriately for a system with %', pg_size_pretty(effective_cache_size), pg_size_pretty(sysmem);
+        END IF;
+
+        IF shared_buffers < (sysmem * 0.2) THEN
+            RAISE WARNING 'shared_buffers of % is set low for a system with %. Recomended value between % and %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.2), pg_size_pretty(sysmem * 0.3);
+        ELSIF shared_buffers > (sysmem * 0.3) THEN
+            RAISE WARNING 'shared_buffers of % is set high for a system with %. Recomended value between % and %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem), pg_size_pretty(sysmem * 0.2), pg_size_pretty(sysmem * 0.3);
+        ELSE
+            RAISE NOTICE 'shared_buffers of % is set appropriately for a system with %', pg_size_pretty(shared_buffers), pg_size_pretty(sysmem);
+        END IF;
+        shared_buffers = sysmem * 0.3;
+        IF maintenance_work_mem < (sysmem * 0.2) THEN
+            RAISE WARNING 'maintenance_work_mem of % is set low for shared_buffers of %. Recomended value between % and %', pg_size_pretty(maintenance_work_mem), pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers * 0.2), pg_size_pretty(shared_buffers * 0.3);
+        ELSIF maintenance_work_mem > (shared_buffers * 0.3) THEN
+            RAISE WARNING 'maintenance_work_mem of % is set high for shared_buffers of %. Recomended value between % and %', pg_size_pretty(maintenance_work_mem), pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers * 0.2), pg_size_pretty(shared_buffers * 0.3);
+        ELSE
+            RAISE NOTICE 'maintenance_work_mem of % is set appropriately for shared_buffers of %', pg_size_pretty(shared_buffers), pg_size_pretty(shared_buffers);
+        END IF;
+
+        IF work_mem * max_connections > shared_buffers THEN
+            RAISE WARNING 'work_mem setting of % is set high for % max_connections please reduce work_mem to % or decrease max_connections to %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers/max_connections), floor(shared_buffers/work_mem);
+        ELSIF work_mem * max_connections < (shared_buffers * 0.75) THEN
+            RAISE WARNING 'work_mem setting of % is set low for % max_connections you may consider raising work_mem to % or increasing max_connections to %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers/max_connections), floor(shared_buffers/work_mem);
+        ELSE
+            RAISE NOTICE 'work_mem setting of % and max_connections of % are adequate for shared_buffers of %', pg_size_pretty(work_mem), max_connections, pg_size_pretty(shared_buffers);
+        END IF;
+
+        IF random_page_cost / seq_page_cost != 1.1 THEN
+            RAISE WARNING 'random_page_cost (%) /seq_page_cost (%) should be set to 1.1 for SSD. Change random_page_cost to %', random_page_cost, seq_page_cost, 1.1 * seq_page_cost;
+        ELSE
+            RAISE NOTICE 'random_page_cost and seq_page_cost set appropriately for SSD';
+        END IF;
+
+        IF temp_buffers < greatest(pg_size_bytes('128MB'),(maintenance_work_mem / 2)) THEN
+            RAISE WARNING 'pgstac makes heavy use of temp tables, consider raising temp_buffers from % to %', pg_size_pretty(temp_buffers), greatest('128MB', pg_size_pretty((shared_buffers / 16)));
+        END IF;
+    END IF;
+
+    RAISE NOTICE 'VALUES FOR PGSTAC VARIABLES';
+    RAISE NOTICE 'These can be set either as GUC system variables or by setting in the pgstac_settings table.';
+
+    FOR r IN SELECT name, get_setting(name) as setting, CASE WHEN current_setting(concat('pgstac.',name), TRUE) IS NOT NULL THEN concat('pgstac.',name, ' GUC') WHEN value IS NOT NULL THEN 'pgstac_settings table' ELSE 'Not Set' END as loc FROM pgstac_settings LOOP
+      RAISE NOTICE '% is set to % from the %', r.name, r.setting, r.loc;
+    END LOOP;
+
+    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pg_cron';
+    IF NOT FOUND OR settingval IS NULL THEN
+        RAISE NOTICE 'Consider intalling pg_cron which can be used to automate tasks';
+    ELSE
+        RAISE NOTICE 'pg_cron % is installed', settingval;
+    END IF;
+
+    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pgstattuple';
+    IF NOT FOUND OR settingval IS NULL THEN
+        RAISE NOTICE 'Consider installing the pgstattuple extension which can be used to help maintain tables and indexes.';
+    ELSE
+        RAISE NOTICE 'pgstattuple % is installed', settingval;
+    END IF;
+
+    SELECT installed_version INTO settingval from pg_available_extensions WHERE name = 'pg_stat_statements';
+    IF NOT FOUND OR settingval IS NULL THEN
+        RAISE NOTICE 'Consider installing the pg_stat_statements extension which is very helpful for tracking the types of queries on the system';
+    ELSE
+        RAISE NOTICE 'pgstattuple % is installed', settingval;
+    END IF;
+
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET CLIENT_MIN_MESSAGES TO NOTICE;
 /* looks for a geometry in a stac item first from geometry and falling back to bbox */
 CREATE OR REPLACE FUNCTION stac_geom(value jsonb) RETURNS geometry AS $$
 SELECT
@@ -687,93 +689,6 @@ CREATE TABLE IF NOT EXISTS stac_extensions(
     url text PRIMARY KEY,
     content jsonb
 );
-
-CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS $$
-    SELECT jsonb_build_object(
-        'type', 'Feature',
-        'stac_version', content->'stac_version',
-        'assets', content->'item_assets',
-        'collection', content->'id'
-    );
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE TYPE partition_trunc_strategy AS ENUM ('year', 'month');
-
-
-CREATE TABLE IF NOT EXISTS collections (
-    key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE,
-    content JSONB NOT NULL,
-    base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
-    partition_trunc partition_trunc_strategy
-);
-
-
-
-CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
-    SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content)
-    VALUES (data)
-    ;
-$$ LANGUAGE SQL
-SET SEARCH_PATH TO pgstac,
-                   public;
-
-
-CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
-DECLARE
-    out collections%ROWTYPE;
-BEGIN
-    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
-END;
-$$ LANGUAGE PLPGSQL
-SET SEARCH_PATH TO pgstac,
-                   public;
-
-
-CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content)
-    VALUES (data)
-    ON CONFLICT (id) DO
-    UPDATE
-        SET content=EXCLUDED.content
-    ;
-$$ LANGUAGE SQL
-SET SEARCH_PATH TO pgstac,
-                   public;
-
-
-CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
-DECLARE
-    out collections%ROWTYPE;
-BEGIN
-    DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
-END;
-$$ LANGUAGE PLPGSQL
-SET SEARCH_PATH TO pgstac,
-                   public;
-
-
-CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
-    SELECT content FROM collections
-    WHERE id=$1
-    ;
-$$ LANGUAGE SQL
-SET SEARCH_PATH TO pgstac,
-                   public;
-
-
-CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
-    SELECT jsonb_agg(content) FROM collections;
-;
-$$ LANGUAGE SQL
-SET SEARCH_PATH TO pgstac,
-                   public;
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text NOT NULL,
@@ -1698,6 +1613,73 @@ BEGIN
     RETURN collections;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
+CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS $$
+    SELECT jsonb_build_object(
+        'type', 'Feature',
+        'stac_version', content->'stac_version',
+        'assets', content->'item_assets',
+        'collection', content->'id'
+    );
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE TABLE IF NOT EXISTS collections (
+    key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE,
+    content JSONB NOT NULL,
+    base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
+    partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
+);
+
+
+
+CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
+    SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
+    INSERT INTO collections (content)
+    VALUES (data)
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
+DECLARE
+    out collections%ROWTYPE;
+BEGIN
+    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
+    INSERT INTO collections (content)
+    VALUES (data)
+    ON CONFLICT (id) DO
+    UPDATE
+        SET content=EXCLUDED.content
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
+DECLARE
+    out collections%ROWTYPE;
+BEGIN
+    DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
+    SELECT content FROM collections
+    WHERE id=$1
+    ;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
+    SELECT jsonb_agg(content) FROM collections;
+$$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 CREATE TABLE items (
     id text NOT NULL,
     geometry geometry NOT NULL,
@@ -1716,6 +1698,41 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
+CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    p text;
+    t timestamptz := clock_timestamp();
+BEGIN
+    RAISE NOTICE 'Updating partition stats %', t;
+    FOR p IN SELECT DISTINCT partition
+        FROM newdata n JOIN partition_sys_meta p
+        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
+    LOOP
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L);', p));
+    END LOOP;
+    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE TRIGGER items_after_insert_trigger
+AFTER INSERT ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_update_trigger
+AFTER DELETE ON items
+REFERENCING OLD TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_delete_trigger
+AFTER UPDATE ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
     SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
@@ -1731,6 +1748,29 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content_slim(content) as content
     ;
 $$ LANGUAGE SQL STABLE;
+
+CREATE OR REPLACE FUNCTION content_dehydrate(
+    item_content jsonb,
+    collection_content jsonb
+) RETURNS items AS $$
+    SELECT
+        item_content->>'id' as id,
+        stac_geom(item_content) as geometry,
+        item_content->>'collection' as collection,
+        stac_datetime(item_content) as datetime,
+        stac_end_datetime(item_content) as end_datetime,
+        (item_content
+            - '{id,geometry,collection,type,assets}'::text[]
+        )
+            ||
+        jsonb_build_object(
+            'assets',
+            ( strip_jsonb(item_content->'assets', collection_content->'item_assets'
+            )
+            )
+        )
+    ;
+$$ LANGUAGE SQL IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -1868,7 +1908,7 @@ BEGIN
     ), p AS (
         SELECT
             collection,
-            date_trunc(partition_trunc::text, lower(dtr)) as d,
+            COALESCE(date_trunc(partition_trunc::text, lower(dtr)),'-infinity') as d,
             tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
@@ -1883,6 +1923,7 @@ BEGIN
         SELECT
             (content_dehydrate(content)).*
         FROM newdata;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
@@ -1890,6 +1931,7 @@ BEGIN
             (content_dehydrate(content)).*
         FROM newdata
         ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
@@ -1906,6 +1948,7 @@ BEGIN
         SELECT s.* FROM
             staging_formatted s
             ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
@@ -1924,8 +1967,6 @@ CREATE TRIGGER items_staging_insert_ignore_trigger AFTER INSERT ON items_staging
 
 CREATE TRIGGER items_staging_insert_upsert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
-
-
 
 
 CREATE OR REPLACE FUNCTION item_by_id(_id text, _collection text DEFAULT NULL) RETURNS items AS
@@ -2008,53 +2049,6 @@ UPDATE collections SET
     )
 ;
 $$ LANGUAGE SQL;
-
-DROP FUNCTION IF EXISTS analyze_items;
-CREATE OR REPLACE PROCEDURE analyze_items() AS $$
-DECLARE
-q text;
-BEGIN
-FOR q IN
-    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
-    FROM pg_stat_user_tables
-    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
-LOOP
-        RAISE NOTICE '%', q;
-        EXECUTE q;
-        COMMIT;
-END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-DROP FUNCTION IF EXISTS validate_constraints;
-CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
-DECLARE
-    q text;
-BEGIN
-    FOR q IN
-    SELECT
-        FORMAT(
-            'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
-            nsp.nspname,
-            cls.relname,
-            con.conname
-        )
-
-    FROM pg_constraint AS con
-        JOIN pg_class AS cls
-        ON con.conrelid = cls.oid
-        JOIN pg_namespace AS nsp
-        ON cls.relnamespace = nsp.oid
-    WHERE convalidated = FALSE AND contype in ('c','f')
-    AND nsp.nspname = 'pgstac'
-    LOOP
-        RAISE NOTICE '%', q;
-        EXECUTE q;
-        COMMIT;
-    END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
     dtrange tstzrange,
@@ -2124,12 +2118,22 @@ WHERE isleaf
 CREATE VIEW partitions AS
 SELECT * FROM partition_sys_meta LEFT JOIN partition_stats USING (partition);
 
+CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text) RETURNS VOID AS $$
+DECLARE
+BEGIN
+    PERFORM run_or_queue(
+        format('SELECT update_partition_stats(%L);', _partition)
+    );
+END;
+$$ LANGUAGE PLPGSQL;
+
 CREATE OR REPLACE FUNCTION update_partition_stats(_partition text) RETURNS VOID AS $$
 DECLARE
     dtrange tstzrange;
     edtrange tstzrange;
     extent geometry;
 BEGIN
+    RAISE NOTICE 'Updating stats for %', _partition;
     EXECUTE format(
         $q$
             SELECT
@@ -2151,7 +2155,6 @@ BEGIN
     ;
 END;
 $$ LANGUAGE PLPGSQL STRICT;
-
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -2190,6 +2193,9 @@ CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
 DECLARE
     q text;
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+        RETURN NULL;
+    END IF;
     FOR q IN SELECT FORMAT(
         $q$
             ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
@@ -2209,6 +2215,9 @@ CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, 
 DECLARE
     q text;
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+        RETURN NULL;
+    END IF;
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
     q :=format(
         $q$
@@ -2216,7 +2225,7 @@ BEGIN
                 ADD CONSTRAINT %I
                     CHECK (
                         (datetime >= %L)
-                        AND (datetime <= $L)
+                        AND (datetime <= %L)
                         AND (end_datetime >= %L)
                         AND (end_datetime <= %L)
                     ) NOT VALID
@@ -2267,7 +2276,11 @@ BEGIN
     END IF;
 
     IF c.partition_trunc IS NOT NULL THEN
-        _partition_dtrange := tstzrange(lower(_dtrange), lower(_dtrange) + ('1' + c.partition_trunc)::interval, '[)');
+        _partition_dtrange := tstzrange(
+            date_trunc(c.partition_trunc, lower(_dtrange)),
+            date_trunc(c.partition_trunc, lower(_dtrange)) + (concat('1 ', c.partition_trunc))::interval,
+            '[)'
+        );
     ELSE
         _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
     END IF;
@@ -2287,9 +2300,33 @@ BEGIN
 
     SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
     IF FOUND THEN
-        _constraint_edtrange := _edtrange + pm.edtrange;
-        _constraint_dtrange := _dtrange + pm.dtrange;
-        IF pm.edtrange @> _edtrange AND pm.dtrange @> _dtrange THEN
+        RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
+        _constraint_edtrange :=
+            tstzrange(
+                least(
+                    lower(_edtrange),
+                    nullif(lower(pm.constraint_edtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_edtrange),
+                    nullif(upper(pm.constraint_edtrange), 'infinity')
+                ),
+                '[]'
+            );
+        _constraint_dtrange :=
+            tstzrange(
+                least(
+                    lower(_dtrange),
+                    nullif(lower(pm.constraint_dtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_dtrange),
+                    nullif(upper(pm.constraint_dtrange), 'infinity')
+                ),
+                '[]'
+            );
+
+        IF pm.constraint_edtrange @> _edtrange AND pm.constraint_dtrange @> _dtrange THEN
             RETURN pm.partition;
         ELSE
             PERFORM drop_table_constraints(_partition_name);
@@ -2298,7 +2335,7 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
-    RAISE NOTICE 'Creating partition %', _partition_name;
+    RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
             $q$
@@ -2317,10 +2354,10 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
             $q$,
-            format('_items_%s', _collection),
+            format('_items_%s', c.key),
             _collection,
             _partition_name,
-            format('_items_%s', _collection),
+            format('_items_%s', c.key),
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
@@ -2340,40 +2377,56 @@ BEGIN
             RAISE INFO 'Error Context:%', err_context;
     END;
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
-    RETURN _collection;
+    RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
-CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT FALSE) RETURNS text AS $$
 DECLARE
     c RECORD;
     q text;
+    from_trunc text;
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
-
-    IF c.partition_trunc = _partition_trunc THEN
-        RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+    IF triggered THEN
+        RAISE NOTICE 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
+    ELSE
+        RAISE NOTICE 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
+        IF c.partition_trunc IS NOT DISTINCT FROM _partition_trunc THEN
+            RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+            RETURN _collection;
+        END IF;
     END IF;
 
-    PERFORM format(
-        $q$
-            CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
-            DROP TABLE IF EXISTS %I CASCADE;
-            WITH p AS (
-                SELECT
-                    collection,
-                    date_trunc(c.partition_trunc, datetime) as d,
-                    tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                    tstzrange(min(datetime),max(datetime),'[]') as edtrange,
-                FROM changepartitionstaging
-                GROUP BY 1,2
-            ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
-        $q$
-    );
+    IF EXISTS (SELECT 1 FROM partitions WHERE collection=_collection LIMIT 1) THEN
+        EXECUTE format(
+            $q$
+                CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+                DROP TABLE IF EXISTS %I CASCADE;
+                WITH p AS (
+                    SELECT
+                        collection,
+                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
+                        ELSE date_trunc(%L, datetime)
+                        END as d,
+                        tstzrange(min(datetime),max(datetime),'[]') as dtrange,
+                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                    FROM changepartitionstaging
+                    GROUP BY 1,2
+                ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
+                INSERT INTO items SELECT * FROM changepartitionstaging;
+                DROP TABLE changepartitionstaging;
+            $q$,
+            concat('_items_', c.key),
+            concat('_items_', c.key),
+            c.partition_trunc,
+            c.partition_trunc
+        );
+    END IF;
     RETURN _collection;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -2389,7 +2442,7 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN
-        PERFORM repartition(NEW.id, NEW.partition_trunc);
+        PERFORM repartition(NEW.id, NEW.partition_trunc, TRUE);
     END IF;
     RETURN NEW;
 END;
@@ -2401,12 +2454,12 @@ INSERT
 OR
 UPDATE ON collections
 FOR EACH ROW EXECUTE FUNCTION collections_trigger_func();
-CREATE VIEW partition_steps AS
+CREATE OR REPLACE VIEW partition_steps AS
 SELECT
     partition as name,
-    date_trunc('month',lower(dtrange)) as sdate,
-    date_trunc('month', upper(dtrange)) + '1 month'::interval as edate
-    FROM partitions WHERE dtrange IS NOT NULL AND dtrange != 'empty'::tstzrange
+    date_trunc('month',lower(partition_dtrange)) as sdate,
+    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
+    FROM partitions WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
     ORDER BY dtrange ASC
 ;
 
@@ -3037,12 +3090,12 @@ DECLARE
     search_where search_wheres%ROWTYPE;
     id text;
 BEGIN
-CREATE TEMP TABLE results (content jsonb) ON COMMIT DROP;
+CREATE TEMP TABLE results (i int GENERATED ALWAYS AS IDENTITY, content jsonb) ON COMMIT DROP;
 -- if ids is set, short circuit and just use direct ids query for each id
 -- skip any paging or caching
 -- hard codes ordering in the same order as the array of ids
 IF _search ? 'ids' THEN
-    INSERT INTO results
+    INSERT INTO results (content)
     SELECT
         CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
             content_nonhydrated(items, _search->'fields')
@@ -3117,7 +3170,8 @@ ELSE
     RAISE NOTICE 'Scanned through % partitions.', batches;
 END IF;
 
-SELECT jsonb_agg(content) INTO out_records FROM results WHERE content is not NULL;
+WITH ordered AS (SELECT * FROM results WHERE content IS NOT NULL ORDER BY i)
+SELECT jsonb_agg(content) INTO out_records FROM ordered;
 
 DROP TABLE results;
 
@@ -3393,41 +3447,53 @@ CREATE OR REPLACE FUNCTION xyzsearch(
         skipcovered
     );
 $$ LANGUAGE SQL;
-CREATE OR REPLACE FUNCTION analyze_items(filter text DEFAULT 'items', force boolean DEFAULT FALSE) RETURNS bigint AS $$
+
+DROP FUNCTION IF EXISTS analyze_items;
+CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
 q text;
-cnt bigint := 0;
 BEGIN
 FOR q IN
     SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
     FROM pg_stat_user_tables
-    WHERE relname like concat('%_', filter, '%') AND (n_mod_since_analyze>0 OR last_analyze IS NULL OR force)
+    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
 LOOP
-        cnt := cnt + 1;
-        PERFORM run_or_queue(q);
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
 END LOOP;
-RETURN cnt;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE OR REPLACE FUNCTION validate_constraints() RETURNS VOID AS $$
-    SELECT run_or_queue(
+DROP FUNCTION IF EXISTS validate_constraints;
+CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
+DECLARE
+    q text;
+BEGIN
+    FOR q IN
+    SELECT
         FORMAT(
             'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
             nsp.nspname,
             cls.relname,
             con.conname
         )
-    )
+
     FROM pg_constraint AS con
         JOIN pg_class AS cls
         ON con.conrelid = cls.oid
         JOIN pg_namespace AS nsp
         ON cls.relnamespace = nsp.oid
     WHERE convalidated = FALSE AND contype in ('c','f')
-    AND nsp.nspname = 'pgstac';
-$$ LANGUAGE SQL;
+    AND nsp.nspname = 'pgstac'
+    LOOP
+        RAISE NOTICE '%', q;
+        EXECUTE q;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
 
 
 CREATE OR REPLACE FUNCTION partition_extent(part text) RETURNS jsonb AS $$
@@ -3461,70 +3527,6 @@ BEGIN
     RETURN extent;
 END;
 $$ LANGUAGE PLPGSQL;
-
-
-CREATE OR REPLACE FUNCTION update_collection_extent(_collection text) RETURNS jsonb AS $$
-DECLARE
-    collection_partition collections%ROWTYPE;
-    part text;
-    extent jsonb;
-    query text;
-BEGIN
-    SELECT * INTO collection_partition FROM collections WHERE id=_collection FOR UPDATE SKIP LOCKED;
-    IF NOT FOUND THEN
-        RETURN NULL;
-    END IF;
-    part := concat('_items_', collection_partition.key);
-
-    -- Make sure all partions in collection have recent statistics
-    PERFORM analyze_items(part);
-
-    extent := partition_extent(part);
-    query := format('UPDATE collections SET content = content || %s WHERE id = %L; UPDATE partitions SET update_summaries=false WHERE collection=%L;', extent, _collection, _collection);
-    PERFORM run_or_queue(query);
-    RETURN extent;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION update_changed_collections() RETURNS bigint AS $$
-DECLARE
-    c text;
-    cnt bigint := 0;
-BEGIN
-    FOR c IN
-        SELECT DISTINCT collection
-        FROM partitions WHERE update_summaries
-    LOOP
-        cnt := cnt + 1;
-        PERFORM update_collection_extent(c);
-    END LOOP;
-    RETURN cnt;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-
--- SELECT
---     collection,
---     relname,
---     reltuples,
---     relpages,
---     pg_size_pretty(pg_total_relation_size(relname::regclass)) as total_size,
---     pg_size_pretty(pg_relation_size(relname::regclass)) as table_size,
---     pg_size_pretty(pg_indexes_size(relname::regclass)) as index_size,
---     seq_scan,
---     seq_tup_read,
---     idx_scan,
---     idx_tup_fetch,
---     n_live_tup,
---     n_dead_tup,
---     pg_size_pretty((pg_total_relation_size(relname::regclass)/nullif(reltuples,0))::numeric) as avg_row_size
-
--- FROM pg_class JOIN pg_stat_user_tables USING (relname)
--- JOIN partitions ON (relname=name)
--- WHERE relname ~ '_items_'
--- ORDER BY pg_total_relation_size(relname::regclass)/nullif(reltuples,0) desc
--- ;
 INSERT INTO queryables (name, definition) VALUES
 ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
 ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}'),
@@ -3534,6 +3536,21 @@ ON CONFLICT DO NOTHING;
 INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
 ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
 ON CONFLICT DO NOTHING;
+
+
+INSERT INTO pgstac_settings (name, value) VALUES
+  ('context', 'off'),
+  ('context_estimated_count', '100000'),
+  ('context_estimated_cost', '100000'),
+  ('context_stats_ttl', '1 day'),
+  ('default_filter_lang', 'cql2-json'),
+  ('additional_properties', 'true'),
+  ('index_build_on_trigger', 'true'),
+  ('use_queue', 'false'),
+  ('queue_timeout', '10 minutes')
+ON CONFLICT DO NOTHING
+;
+
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -3549,72 +3566,3 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 SELECT set_version('0.7.0');
-DROP TYPE IF EXISTS flat_jsonb CASCADE;
-CREATE TYPE flat_jsonb AS (p jsonb, v jsonb);
-
-DROP FUNCTION IF EXISTS flatten;
-CREATE OR REPLACE FUNCTION flatten(
-    j jsonb
-) RETURNS
-setof jsonb AS $$
-with recursive extract_all as
-(
-    select
-        '[]'::jsonb || to_jsonb(key::text) as path,
-        value
-    FROM jsonb_each(j)
-union all
-    select
-        path ||
-        CASE WHEN obj_key is not null then to_jsonb(obj_key) ELSE to_jsonb(arr_key::int -1) end,
-        coalesce(obj_value, arr_value)
-    from extract_all
-    left join lateral
-        jsonb_each(case jsonb_typeof(value) when 'object' then value end)
-        as o(obj_key, obj_value)
-        on jsonb_typeof(value) = 'object'
-    left join lateral
-        jsonb_array_elements(case jsonb_typeof(value) when 'array' then value end)
-        with ordinality as a(arr_value, arr_key)
-        on jsonb_typeof(value) = 'array'
-    where obj_key is not null or arr_key is not null
-)
-select path || value
-from extract_all where jsonb_typeof(value) not in ('array','object');
-$$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION unflatten_step(j jsonb[]) returns jsonb[] as $$
-WITH t AS (
-    SELECT * FROM jsonb_array_elements(j)
-),
-   SELECT value - -1 - -2, value->-2, value->-1
-    FROM t
-    WHERE value
-/*
-with recursive t as (
-    select p as path, v as value, 1 as loop from flatten('{"bbox": [-85.379245, 30.933949, -85.308201, 31.003555], "links": [], "assets": {"image": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.tif"}, "metadata": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_fgdc_2011/30085/m_3008506_nw_16_1_20110825.txt"}, "thumbnail": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.200.jpg"}}, "properties": {"gsd": 1, "datetime": "2011-08-25T00:00:00Z", "naip:year": "2011", "proj:bbox": [654842, 3423507, 661516, 3431125], "proj:epsg": 26916, "providers": [{"url": "https://www.fsa.usda.gov/programs-and-services/aerial-photography/imagery-programs/naip-imagery/", "name": "USDA Farm Service Agency", "roles": ["producer", "licensor"]}], "naip:state": "al", "proj:shape": [7618, 6674], "eo:cloud_cover": 28, "proj:transform": [1, 0, 654842, 0, -1, 3431125, 0, 0, 1]}, "stac_extensions": ["eo", "projection"]}'::jsonb)
-    UNION ALL
-    SELECT
-        path - -1,
-        jsonb_agg(value),
-        loop + 1
-    FROM t
-    WHERE jsonb_array_length(path) > 1 AND jsonb_typeof(path - -1) = 'number'
-    GROUP BY 1, 3
-)
-SELECT * FROM t limit 100;
-*/
-
-DROP FUNCTION IF EXISTS unflat;
-CREATE OR REPLACE FUNCTION unflat(f flat_jsonb[], out p jsonb, out v jsonb) RETURNS SETOF record AS $$
-WITH t AS (
-    SELECT ((f).* FROM unnest(f)
-)
-SELECT * FROM t WHERE jsonb_array_length(p) = 1 OR jsonb_typeof(v) = 'string'
-UNION ALL
-SELECT p - -1, jsonb_agg(v) FROM t WHERE jsonb_array_length > 1 AND jsonb_typeof(v) = 'number'
-;
-$$ LANGUAGE SQL IMMUTABLE;
-
-with t as (select array_agg(flatten('{"bbox": [-85.379245, 30.933949, -85.308201, 31.003555], "links": [], "assets": {"image": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.tif"}, "metadata": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_fgdc_2011/30085/m_3008506_nw_16_1_20110825.txt"}, "thumbnail": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.200.jpg"}}, "properties": {"gsd": 1, "datetime": "2011-08-25T00:00:00Z", "naip:year": "2011", "proj:bbox": [654842, 3423507, 661516, 3431125], "proj:epsg": 26916, "providers": [{"url": "https://www.fsa.usda.gov/programs-and-services/aerial-photography/imagery-programs/naip-imagery/", "name": "USDA Farm Service Agency", "roles": ["producer", "licensor"]}], "naip:state": "al", "proj:shape": [7618, 6674], "eo:cloud_cover": 28, "proj:transform": [1, 0, 654842, 0, -1, 3431125, 0, 0, 1]}, "stac_extensions": ["eo", "projection"]}'::jsonb)) as agg)
-select unflat(agg) from t;

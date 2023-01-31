@@ -24,7 +24,7 @@ def hydrate(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
                 elif isinstance(b[key], list) and isinstance(i.get(key), list):
                     # Merge unequal lists, assume uniform types
                     if len(b[key]) == len(i[key]):
-                        for bb, ii in zip(b[key], i[key], strict=True):
+                        for bb, ii in zip(b[key], i[key]):
                             # Make sure we're merging two dicts
                             if isinstance(bb, dict) and isinstance(ii, dict):
                                 merge(bb, ii)
@@ -75,7 +75,7 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
                     # Equal length lists dehydrate dicts at each matching index
                     # and use incoming item values for other types
                     out[key] = []
-                    for bv, v in zip(base_value[key], value, strict=True):
+                    for bv, v in zip(base_value[key], value):
                         if isinstance(bv, dict) and isinstance(v, dict):
                             dehydrated = strip(bv, v)
                             apply_marked_keys(bv, v, dehydrated)

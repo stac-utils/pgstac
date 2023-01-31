@@ -24,14 +24,23 @@ jobs:
       - name: Install release dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+          pip install setuptools wheel twine build
 
-      - name: Build and publish package
+      - name: Build pypgstac release
+        run: |
+          pushd src/pypgstac
+          rm -rf dist
+          python -m build --sdist --wheel
+          popd
+
+      - name: Publish pypgstac release
         env:
           TWINE_USERNAME: ${{ secrets.PYPI_STACUTILS_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.PYPI_STACUTILS_PASSWORD }}
         run: |
-          scripts/cipublish
+          pushd src/pypgstac
+          twine upload dist/*
+          popd
 
       - name: Tag Release
         uses: "marvinpinto/action-automatic-releases@v1.2.1"

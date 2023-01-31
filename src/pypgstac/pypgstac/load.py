@@ -268,19 +268,12 @@ class Loader:
             if partition.requires_update:
                 with conn.transaction():
                     cur.execute(
-                        "SELECT * FROM partitions WHERE name = %s FOR UPDATE;",
-                        (partition.name,),
-                    )
-                    cur.execute(
                         """
-                        INSERT INTO partitions
-                        (collection, datetime_range, end_datetime_range)
-                        VALUES
-                            (%s, tstzrange(%s, %s, '[]'), tstzrange(%s,%s, '[]'))
-                        ON CONFLICT (name) DO UPDATE SET
-                            datetime_range = EXCLUDED.datetime_range,
-                            end_datetime_range = EXCLUDED.end_datetime_range
-                        ;
+                        SELECT check_partition(
+                            %s,
+                            tstzrange(%s, %s, '[]'),
+                            tstzrange(%s, %s, '[]')
+                        );
                     """,
                         (
                             partition.collection,
@@ -290,6 +283,7 @@ class Loader:
                             partition.end_datetime_range_max,
                         ),
                     )
+
                     logger.debug(
                         f"Adding or updating partition {partition.name} "
                         f"took {time.perf_counter() - t}s",
@@ -299,6 +293,8 @@ class Loader:
                 logger.debug(f"Partition {partition.name} does not require an update.")
 
             with conn.transaction():
+
+
                 t = time.perf_counter()
                 if insert_mode in (
                     None,
@@ -421,8 +417,9 @@ class Loader:
                                     JOIN deletes d
                                     USING (id, collection);
                                 ;
-                            """,
+                                """,
                             ).format(sql.Identifier(partition.name)),
+
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
@@ -431,6 +428,7 @@ class Loader:
                         "Available modes are insert, ignore, upsert, and delsert."
                         f"You entered {insert_mode}.",
                     )
+                cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
         logger.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds",
         )
@@ -462,8 +460,8 @@ class Loader:
             # Read the partition information from the database if it exists
             db_rows = list(
                 self.db.query(
-                    "SELECT datetime_range, end_datetime_range "
-                    "FROM partitions WHERE name=%s;",
+                    "SELECT constraint_dtrange, constraint_edtrange "
+                    "FROM partitions WHERE partition=%s;",
                     [partition_name],
                 ),
             )
