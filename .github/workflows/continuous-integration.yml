@@ -28,6 +28,6 @@ jobs:
           cache-to: type=gha, mode=max
 
       - name: Show Docker ImageId
-        run: echo "imageid ${{ steps.builder.outputs.imageid }}"
+        run: echo "imageid ${{ steps.builder.outputs }}"
       - name: Run tests
         run: docker run --rm ${{ steps.builder.outputs.imageid }}  test
