@@ -23,7 +23,7 @@ jobs:
         with:
           context: .
           tags: pgstac:latest
-          publish: false
+          push: false
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
