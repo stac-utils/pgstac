@@ -22,8 +22,8 @@ jobs:
         uses: docker/build-push-action@v2
         with:
           context: .
-          tags: pgstac:latest
-          push: false
+          tags: stac-utils/pgstac:latest
+          push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
