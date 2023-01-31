@@ -27,5 +27,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
+      - name: Show Docker ImageId
+        run: echo "imageid ${{ steps.builder.outputs.imageid }}"
       - name: Run tests
-        run: docker run --rm pgstac:latest  test
+        run: docker run --rm ${{ steps.builder.outputs.imageid }}  test
