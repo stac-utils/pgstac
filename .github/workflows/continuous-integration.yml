@@ -17,8 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Build PGStac Docker
-        run: docker buildx build --cache-from=type=gha --cache-to=type=gha,mode=max --tag=pgstac .
+        run: docker-compose build .
 
 
       - name: Run tests
-        run: docker run --rm  pgstac test
+        run: docker-compose run --rm  pgstac test
