@@ -44,5 +44,5 @@ jobs:
 
       - name: Run tests
         run: |
-          docker pull ${{ steps.meta.outputs.tags }}
-          docker run --rm ${{ steps.meta.outputs.tags }}  test
+          docker pull ${{ steps.builder.outputs.imageid }}
+          docker run --rm  ${{ env.IMAGE_NAME }} test
