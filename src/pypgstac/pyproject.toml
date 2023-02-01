@@ -123,6 +123,9 @@ known-first-party = ["pypgstac"]
 
 [tool.mypy]
 no_strict_optional = "True"
+ignore_missing_imports = "True"
+disallow_untyped_defs = "True"
+namespace_packages = "True"
 
 [tool.pydocstyle]
 select = "D1"

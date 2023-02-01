@@ -27,8 +27,12 @@ This scripts is meant to be run inside the dev container.
 
 function test_formatting(){
     cd /opt/src/pypgstac
+
     echo "Running ruff"
-    ruff --cache-dir=/tmp/ pypgstac tests
+    ruff --cache-dir=/tmp/.ruff pypgstac tests
+
+    echo "Running mypy"
+    mypy --cache-dir=/tmp/.mypy pypgstac
 
     echo "Checking if there are any staged migrations."
     find pypgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
@@ -37,7 +41,7 @@ function test_formatting(){
     VERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
     echo $VERSION
 
-    echo "Checking whether base sql migration exists..."
+    echo "Checking whether base sql migration exists for pypgstac version."
     [ -f pypgstac/migrations/pgstac."${VERSION}".sql ] || { echo "****FAIL No Migration exists pypgstac/migrations/pgstac.${VERSION}.sql"; exit 1; }
 
     echo "Congratulations! All formatting tests pass."
