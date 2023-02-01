@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -27,4 +28,5 @@ fi
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Updating Version..."
     docker-compose run --rm pgstac stageversion $VERSION $FORCE
+    chown -R $USER:$USER src/pgstac/migrations
 fi

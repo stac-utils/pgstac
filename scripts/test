@@ -16,5 +16,6 @@ function usage() {
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # docker-compose build
-    docker-compose run --rm pgstac test
+    echo "test $@"
+    docker-compose run --rm pgstac test $@
 fi
