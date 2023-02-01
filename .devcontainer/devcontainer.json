@@ -1,14 +1,6 @@
 {
-	"name": "Ubuntu",
-	"build": {
-		"dockerfile": "../docker/Dockerfile"
-	},
-	"settings": {
-		"terminal.integrated.shell.linux": "/bin/bash"
-	},
-	"extensions": [],
-	"forwardPorts": [5432],
-	"overrideCommand": false,
-	"containerEnv": {"POSTGRES_HOST_AUTH_METHOD": "trust","POSTGRES_USER":"postgres"},
-	"remoteUser": "root"
+	"name": "PGStac",
+	"dockerComposeFile": "../docker-compose.yml",
+	"service": "pgstac",
+	"workspaceFolder": "/opt/src"
 }

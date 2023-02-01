@@ -21,19 +21,10 @@ repos:
 
 -   repo: local
     hooks:
-    -   id: pgtap
-        name: pgtap
+    -   id: sql
+        name: sql
         entry: scripts/test
-        args: [--pgtap]
-        language: script
-        pass_filenames: false
-        verbose: true
-        fail_fast: true
-        files: sql\/.*\.sql$
-    -   id: basicsql
-        name: basicsql
-        entry: scripts/test
-        args: [--basicsql]
+        args: [--basicsql, --pgtap]
         language: script
         pass_filenames: false
         verbose: true
