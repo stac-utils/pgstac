@@ -34,13 +34,13 @@ BEGIN
         RAISE EXCEPTION 'Timestamp cannot have more than 2 values';
     END IF;
 
-    IF timestrs[1] = '..' THEN
+    IF timestrs[1] = '..' OR timestrs[1] = '' THEN
         s := '-infinity'::timestamptz;
         e := timestrs[2]::timestamptz;
         RETURN tstzrange(s,e,'[)');
     END IF;
 
-    IF timestrs[2] = '..' THEN
+    IF timestrs[2] = '..' OR timestrs[2] = '' THEN
         s := timestrs[1]::timestamptz;
         e := 'infinity'::timestamptz;
         RETURN tstzrange(s,e,'[)');
