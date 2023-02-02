@@ -2,17 +2,23 @@
 DROP FUNCTION IF EXISTS analyze_items;
 CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
-q text;
+    q text;
+    timeout_ts timestamptz;
 BEGIN
-FOR q IN
-    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
-    FROM pg_stat_user_tables
-    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
-LOOP
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        RAISE NOTICE '% % %', clock_timestamp(), timeout_ts, current_setting('statement_timeout', TRUE);
+        SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname) INTO q
+        FROM pg_stat_user_tables
+        WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL) LIMIT 1;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
         RAISE NOTICE '%', q;
         EXECUTE q;
         COMMIT;
-END LOOP;
+        RAISE NOTICE '%', queue_timeout();
+    END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
@@ -40,7 +46,7 @@ BEGIN
     AND nsp.nspname = 'pgstac'
     LOOP
         RAISE NOTICE '%', q;
-        EXECUTE q;
+        PERFORM run_or_queue(q);
         COMMIT;
     END LOOP;
 END;

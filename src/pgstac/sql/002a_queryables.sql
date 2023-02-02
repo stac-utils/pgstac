@@ -79,8 +79,26 @@ END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
 
-DROP VIEW IF EXISTS pgstac_indexes;
+DROP VIEW IF EXISTS pgstac_index;
 CREATE VIEW pgstac_indexes AS
+SELECT
+    i.schemaname,
+    i.tablename,
+    i.indexname,
+    indexdef,
+    COALESCE(
+        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+    ) AS field,
+    pg_table_size(i.indexname::text) as index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty
+FROM
+    pg_indexes i
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+
+DROP VIEW IF EXISTS pgstac_index_stats;
+CREATE VIEW pgstac_indexes_stats AS
 SELECT
     i.schemaname,
     i.tablename,
@@ -124,8 +142,12 @@ DECLARE
     q text;
     idx text;
     collection_partition bigint;
+    _concurrently text := '';
 BEGIN
     RAISE NOTICE 'Maintaining partition: %', part;
+    IF get_setting_bool('use_queue') THEN
+        _concurrently='CONCURRENTLY';
+    END IF;
 
     -- Get root partition
     SELECT parentrelid::text, pt.isleaf, pt.level
@@ -207,19 +229,20 @@ BEGIN
         RETURNING * INTO deletedidx;
         RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
         IF NOT FOUND THEN -- index did not exist, create it
-            RETURN NEXT format('CREATE INDEX CONCURRENTLY %s;', baseidx);
+            RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
         ELSIF rebuildindexes THEN
-            RETURN NEXT format('REINDEX %I CONCURRENTLY;', deletedidx.indexname);
+            RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
         END IF;
     END LOOP;
 
     -- Remove indexes that were not expected
-    IF dropindexes THEN
-        FOR idx IN SELECT indexname::text FROM existing_indexes
-        LOOP
+    FOR idx IN SELECT indexname::text FROM existing_indexes
+    LOOP
+        RAISE WARNING 'Index: % is not defined by queryables.', idx;
+        IF dropindexes THEN
             RETURN NEXT format('DROP INDEX IF EXISTS %I;', idx);
-        END LOOP;
-    END IF;
+        END IF;
+    END LOOP;
 
     DROP TABLE existing_indexes;
     RETURN;
@@ -233,28 +256,21 @@ CREATE OR REPLACE FUNCTION maintain_partitions(
     rebuildindexes boolean DEFAULT FALSE
 ) RETURNS VOID AS $$
     WITH t AS (
-        SELECT run_or_queue(q) FROM maintain_partitions_queries(part, dropindexes, rebuildindexes) q
+        SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
     ) SELECT count(*) FROM t;
 $$ LANGUAGE SQL;
 
 
--- CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
--- DECLARE
--- BEGIN
---     PERFORM maintain_partitions();
---     RETURN NEW;
--- END;
--- $$ LANGUAGE PLPGSQL;
+CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    PERFORM maintain_partitions();
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
 
--- CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
--- FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
-
--- CREATE TRIGGER queryables_collection_trigger
---     AFTER INSERT OR UPDATE ON collections
---     FOR EACH STATEMENT
---     WHEN OLD.partition_trunc IS DISTINCT FROM NEW.partition_trunc
---     EXECUTE PROCEDURE queryables_trigger_func();
-
+CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
 
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$

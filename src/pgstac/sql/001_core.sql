@@ -36,9 +36,9 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
 SELECT COALESCE(
-  conf->>_setting,
-  current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
+  nullif(conf->>_setting, ''),
+  nullif(current_setting(concat('pgstac.',_setting), TRUE),''),
+  nullif((SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),'')
 );
 $$ LANGUAGE SQL;
 
@@ -69,6 +69,20 @@ CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS in
   SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
+    SELECT extract(epoch FROM $1::interval)::text || ' s';
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
+    SELECT set_config(
+        'statement_timeout',
+        t2s(coalesce(
+            get_setting('queue_timeout'),
+            '1h'
+        )),
+        false
+    )::interval;
+$$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
 DECLARE
@@ -131,19 +145,17 @@ CREATE TABLE query_queue_history(
 CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
 DECLARE
     qitem query_queue%ROWTYPE;
-    timeout text := get_setting('queue_timeout');
     timeout_ts timestamptz;
     error text;
+    cnt int := 0;
 BEGIN
-    IF timeout IS NULL THEN
-        timeout := '10 minutes';
-    END IF;
-    timeout_ts := clock_timestamp() + timeout::interval;
-    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
         SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
         IF NOT FOUND THEN
             EXIT;
         END IF;
+        cnt := cnt + 1;
         BEGIN
             RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
             EXECUTE qitem.query;
@@ -161,16 +173,12 @@ $$ LANGUAGE PLPGSQL;
 CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
     qitem query_queue%ROWTYPE;
-    timeout text := get_setting('queue_timeout');
     timeout_ts timestamptz;
     error text;
     cnt int := 0;
 BEGIN
-    IF timeout IS NULL THEN
-        timeout := '10 minutes';
-    END IF;
-    timeout_ts := clock_timestamp() + timeout::interval;
-    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
         SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
         IF NOT FOUND THEN
             RETURN cnt;
@@ -295,7 +303,10 @@ BEGIN
     IF NOT FOUND OR settingval IS NULL THEN
         RAISE NOTICE 'Consider installing the pg_stat_statements extension which is very helpful for tracking the types of queries on the system';
     ELSE
-        RAISE NOTICE 'pgstattuple % is installed', settingval;
+        RAISE NOTICE 'pg_stat_statements % is installed', settingval;
+        IF current_setting('pg_stat_statements.track_statements', TRUE) IS DISTINCT FROM 'all' THEN
+            RAISE WARNING 'SET pg_stat_statements.track_statements TO ''all''; --In order to track statements within functions.';
+        END IF;
     END IF;
 
 END;

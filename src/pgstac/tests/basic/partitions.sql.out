@@ -69,11 +69,11 @@ pgstactest-partitioned-year | [-infinity,infinity] | [-infinity,infinity] | [-in
 
 --check that queue has items
 SELECT count(*) FROM query_queue;
-90
+120
 
 --run queue items to update partition stats
 SELECT run_queued_queries_intransaction();
-90
+120
 
 --check that partition stats have been updated
 SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange, spatial FROM partitions WHERE collection='pgstactest-partitioned-year';

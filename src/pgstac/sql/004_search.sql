@@ -424,6 +424,7 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
 CREATE TABLE IF NOT EXISTS search_wheres(
     id bigint generated always as identity primary key,
     _where text NOT NULL,
@@ -549,7 +550,7 @@ BEGIN
     ;
     RETURN sw;
 END;
-$$ LANGUAGE PLPGSQL ;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION search_query(
@@ -594,7 +595,7 @@ BEGIN
     RETURN search;
 
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
@@ -776,7 +777,7 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
 
 
 CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$

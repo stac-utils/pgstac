@@ -67,29 +67,6 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     ;
 $$ LANGUAGE SQL STABLE;
 
-CREATE OR REPLACE FUNCTION content_dehydrate(
-    item_content jsonb,
-    collection_content jsonb
-) RETURNS items AS $$
-    SELECT
-        item_content->>'id' as id,
-        stac_geom(item_content) as geometry,
-        item_content->>'collection' as collection,
-        stac_datetime(item_content) as datetime,
-        stac_end_datetime(item_content) as end_datetime,
-        (item_content
-            - '{id,geometry,collection,type,assets}'::text[]
-        )
-            ||
-        jsonb_build_object(
-            'assets',
-            ( strip_jsonb(item_content->'assets', collection_content->'item_assets'
-            )
-            )
-        )
-    ;
-$$ LANGUAGE SQL IMMUTABLE;
-
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
     includes jsonb := fields->'include';
@@ -295,11 +272,11 @@ BEGIN
     SELECT * INTO i FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection) LIMIT 1;
     RETURN i;
 END;
-$$ LANGUAGE PLPGSQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE PLPGSQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text, _collection text DEFAULT NULL) RETURNS jsonb AS $$
     SELECT content_hydrate(items) FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection);
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION delete_item(_id text, _collection text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE

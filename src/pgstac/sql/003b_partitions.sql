@@ -326,6 +326,7 @@ BEGIN
             RAISE INFO 'Error Context:%', err_context;
     END;
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
+    PERFORM maintain_partitions(_partition_name);
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
