@@ -4,7 +4,6 @@ from typing import Any, Dict, cast
 
 from pypgstac.load import Loader
 
-
 HERE = Path(__file__).parent
 LANDSAT_COLLECTION = (
     HERE / ".." / "data-files" / "hydration" / "collections" / "landsat-c2-l1.json"
@@ -13,7 +12,9 @@ LANDSAT_COLLECTION = (
 
 def test_landsat_c2_l1(loader: Loader) -> None:
     """Test that a base item is created when a collection is loaded and that it
-    is equal to the item_assets of the collection"""
+    is equal to the item_assets of the collection
+    .
+    """
     with open(LANDSAT_COLLECTION) as f:
         collection = json.load(f)
     loader.load_collections(str(LANDSAT_COLLECTION))
@@ -21,7 +22,7 @@ def test_landsat_c2_l1(loader: Loader) -> None:
     base_item = cast(
         Dict[str, Any],
         loader.db.query_one(
-            "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],)
+            "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],),
         ),
     )
 

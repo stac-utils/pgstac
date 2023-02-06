@@ -6,7 +6,6 @@ from pypgstac import hydration
 from pypgstac.hydration import DO_NOT_MERGE_MARKER
 from pypgstac.load import Loader
 
-
 HERE = Path(__file__).parent
 LANDSAT_COLLECTION = (
     HERE / ".." / "data-files" / "hydration" / "collections" / "landsat-c2-l1.json"
@@ -24,14 +23,14 @@ LANDSAT_ITEM = (
 
 class TestDehydrate:
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any]
+        self, base_item: Dict[str, Any], item: Dict[str, Any],
     ) -> Dict[str, Any]:
         return hydration.dehydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
         """
         Test that a dehydrated item is created properly from a raw item against a
-        base item from a collection
+        base item from a collection.
         """
         with open(LANDSAT_COLLECTION) as f:
             collection = json.load(f)
@@ -43,7 +42,7 @@ class TestDehydrate:
         base_item = cast(
             Dict[str, Any],
             loader.db.query_one(
-                "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],)
+                "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],),
             ),
         )
 
@@ -77,7 +76,7 @@ class TestDehydrate:
         assert list(red["raster:bands"][0].keys()) == ["scale", "offset"]
         item_red_rb = item["assets"]["red"]["raster:bands"][0]
         assert red["raster:bands"] == [
-            {"scale": item_red_rb["scale"], "offset": item_red_rb["offset"]}
+            {"scale": item_red_rb["scale"], "offset": item_red_rb["offset"]},
         ]
 
         # nir09 asset raster bands does not have a `unit` attribute, which is
@@ -115,7 +114,7 @@ class TestDehydrate:
         assert dehydrated == {"c": {"e": "fourth", "f": "fifth"}}
 
     def test_list_of_dicts_extra_keys(self) -> None:
-        """Test that an equal length list of dicts is dehydrated correctly"""
+        """Test that an equal length list of dicts is dehydrated correctly."""
         base_item = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
         item = {"a": [{"b1": 1, "b2": 2, "b3": 3}, {"c1": 1, "c2": 2, "c3": 3}]}
 
@@ -136,7 +135,7 @@ class TestDehydrate:
                 "far",
                 {"c1": 1, "c2": 2, "c3": 3},
                 "boo",
-            ]
+            ],
         }
 
         dehydrated = self.dehydrate(base_item, item)
@@ -144,7 +143,7 @@ class TestDehydrate:
         assert dehydrated["a"] == [{"b3": 3}, "far", {"c3": 3}, "boo"]
 
     def test_unequal_len_list(self) -> None:
-        """Test that unequal length lists preserve the item value exactly"""
+        """Test that unequal length lists preserve the item value exactly."""
         base_item = {"a": [{"b1": 1}, {"c1": 1}, {"d1": 1}]}
         item = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
 
@@ -164,7 +163,7 @@ class TestDehydrate:
 
     def test_marked_non_merged_fields_in_list(self) -> None:
         base_item = {
-            "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}]
+            "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}],
         }
         item = {"a": [{"b": "first"}, {"c": "second", "f": "fifth"}]}
 
@@ -173,7 +172,7 @@ class TestDehydrate:
             "a": [
                 {"d": DO_NOT_MERGE_MARKER},
                 {"e": DO_NOT_MERGE_MARKER, "f": "fifth"},
-            ]
+            ],
         }
 
     def test_deeply_nested_dict(self) -> None:
@@ -184,10 +183,10 @@ class TestDehydrate:
         assert dehydrated == {"a": {"b": {"c": {"d2": "third"}}}}
 
     def test_equal_list_of_non_dicts(self) -> None:
-        """Values of lists that match base_item should be dehydrated off"""
+        """Values of lists that match base_item should be dehydrated off."""
         base_item = {"assets": {"thumbnail": {"roles": ["thumbnail"]}}}
         item = {
-            "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}}
+            "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}},
         }
 
         dehydrated = self.dehydrate(base_item, item)
@@ -207,7 +206,7 @@ class TestDehydrate:
             },
         }
         hydrated = {
-            "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}}
+            "assets": {"asset1": {"name": "Asset one", "href": "http://foo.com"}},
         }
 
         dehydrated = self.dehydrate(base_item, hydrated)

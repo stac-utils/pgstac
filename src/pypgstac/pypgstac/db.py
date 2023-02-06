@@ -1,14 +1,15 @@
 """Base library for database interaction with PgStac."""
+import atexit
+import logging
 import time
 from types import TracebackType
-from typing import Any, List, Optional, Tuple, Type, Union, Generator
+from typing import Any, Generator, List, Optional, Tuple, Type, Union
+
 import orjson
 import psycopg
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-import atexit
-import logging
 from pydantic import BaseSettings
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
@@ -86,7 +87,7 @@ class PgstacDB:
                 num_workers=settings.db_num_workers,
                 kwargs={
                     "options": "-c search_path=pgstac,public"
-                    " -c application_name=pypgstac"
+                    " -c application_name=pypgstac",
                 },
             )
         return self.pool
@@ -132,12 +133,12 @@ class PgstacDB:
                     self.connection.commit()
                 if self.connection is not None:
                     self.connection.rollback()
-        except:
+        except Exception:
             pass
         try:
             if self.pool is not None and self.connection is not None:
                 self.pool.putconn(self.connection)
-        except:
+        except Exception:
             pass
 
         self.connection = None
@@ -215,7 +216,7 @@ class PgstacDB:
                 """
                 SELECT version from pgstac.migrations
                 order by datetime desc, version desc limit 1;
-                """
+                """,
             )
             logger.debug(f"VERSION: {version}")
             if isinstance(version, bytes):
@@ -234,7 +235,7 @@ class PgstacDB:
         version = self.query_one(
             """
             SHOW server_version;
-            """
+            """,
         )
         logger.debug(f"PG VERSION: {version}.")
         if isinstance(version, bytes):

@@ -1,58 +1,35 @@
-"""pypgstac: python utilities for working with pgstac."""
+"""Fake pypgstac setup.py for github."""
+import sys
 
-from setuptools import find_namespace_packages, setup
+from setuptools import setup
 
-with open("README.md") as f:
-    desc = f.read()
+sys.stderr.write(
+    """
+===============================
+Unsupported installation method
+===============================
+pypgstac no longer supports installation with `python setup.py install`.
+Please use `python -m pip install .` instead.
+""",
+)
+sys.exit(1)
 
-install_requires = [
-    "smart-open[html]>=4.2,<7.0",
-    "orjson>=3.5.2",
-    "python-dateutil==2.8.*",
-    "fire==0.4.*",
-    "plpygis==0.2.*",
-    "pydantic[dotenv]==1.10.*",
-    "tenacity==8.1.*",
-]
 
-extra_reqs = {
-    "dev": [
-        "pytest==5.*",
-        "flake8==3.9.*",
-        "black>=21.7b0",
-        "mypy>=0.910",
-        "types-orjson==0.1.1",
-        "pystac[validation]==1.*"
-    ],
-    "psycopg": [
-        "psycopg[binary]==3.1.*",
-        "psycopg-pool==3.1.*",
-    ],
-}
-
+# The below code will never execute, however GitHub is particularly
+# picky about where it finds Python packaging metadata.
+# See: https://github.com/github/feedback/discussions/6456
+#
+# To be removed once GitHub catches up.
 
 setup(
     name="pypgstac",
-    description="Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL",
-    long_description=desc,
-    long_description_content_type="text/markdown",
-    python_requires=">=3.7",
-    classifiers=[
-        "Intended Audience :: Developers",
-        "Intended Audience :: Information Technology",
-        "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.7",
-        "License :: OSI Approved :: MIT License",
+    install_requires=[
+        "smart-open>=4.2,<7.0",
+        "orjson>=3.5.2",
+        "python-dateutil==2.8.*",
+        "fire==0.4.*",
+        "plpygis==0.2.*",
+        "pydantic[dotenv]==1.10.*",
+        "tenacity==8.1.*",
     ],
-    keywords="stac, postgres",
-    author="David Bitner",
-    author_email="bitner@dbspatial.com",
-    url="https://github.com/stac-utils/pgstac",
-    license="MIT",
-    packages=find_namespace_packages(exclude=["tests", "scripts"]),
-    package_data={"": ["migrations/pgstac*.sql", "py.typed"]},
-    zip_safe=False,
-    install_requires=install_requires,
-    tests_require=[extra_reqs["dev"], extra_reqs["psycopg"]],
-    extras_require=extra_reqs,
 )

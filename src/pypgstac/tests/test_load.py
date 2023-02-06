@@ -2,13 +2,15 @@
 import json
 from pathlib import Path
 from unittest import mock
-from pypgstac.load import Methods, Loader, read_json
-from psycopg.errors import UniqueViolation
-import pytest
+
 import pystac
+import pytest
+from psycopg.errors import UniqueViolation
+
+from pypgstac.load import Loader, Methods, read_json
 
 HERE = Path(__file__).parent
-TEST_DATA_DIR = HERE.parent.parent / "test" / "testdata"
+TEST_DATA_DIR = HERE.parent.parent / "pgstac" / "tests" / "testdata"
 TEST_COLLECTIONS_JSON = TEST_DATA_DIR / "collections.json"
 TEST_COLLECTIONS = TEST_DATA_DIR / "collections.ndjson"
 TEST_ITEMS = TEST_DATA_DIR / "items.ndjson"
@@ -181,7 +183,7 @@ def test_partition_loads_default(loader: Loader) -> None:
     partitions = loader.db.query_one(
         """
         SELECT count(*) from partitions;
-    """
+    """,
     )
 
     assert partitions == 1
@@ -197,7 +199,7 @@ def test_partition_loads_month(loader: Loader) -> None:
         loader.db.connection.execute(
             """
             UPDATE collections SET partition_trunc='month';
-        """
+        """,
         )
 
     loader.load_items(
@@ -208,7 +210,7 @@ def test_partition_loads_month(loader: Loader) -> None:
     partitions = loader.db.query_one(
         """
         SELECT count(*) from partitions;
-    """
+    """,
     )
 
     assert partitions == 2
@@ -224,7 +226,7 @@ def test_partition_loads_year(loader: Loader) -> None:
         loader.db.connection.execute(
             """
             UPDATE collections SET partition_trunc='year';
-        """
+        """,
         )
 
     loader.load_items(
@@ -235,7 +237,7 @@ def test_partition_loads_year(loader: Loader) -> None:
     partitions = loader.db.query_one(
         """
         SELECT count(*) from partitions;
-    """
+    """,
     )
 
     assert partitions == 1
@@ -249,11 +251,11 @@ def test_load_items_dehydrated_ignore_succeeds(loader: Loader) -> None:
     )
 
     loader.load_items(
-        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.insert, dehydrated=True
+        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.insert, dehydrated=True,
     )
 
     loader.load_items(
-        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.ignore, dehydrated=True
+        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.ignore, dehydrated=True,
     )
 
 
@@ -317,7 +319,7 @@ def test_s1_grd_load_and_query(loader: Loader) -> None:
         loader.db.func(
             "search",
             search_body,
-        )
+        ),
     )[0]
     item = res["features"][0]
     pystac.Item.from_dict(item).validate()
@@ -338,14 +340,14 @@ def test_load_dehydrated(loader: Loader) -> None:
     dehydrated_items = HERE / "data-files" / "load" / "dehydrated.txt"
 
     loader.load_items(
-        str(dehydrated_items), insert_mode=Methods.insert, dehydrated=True
+        str(dehydrated_items), insert_mode=Methods.insert, dehydrated=True,
     )
 
 
 def test_load_collections_incompatible_version(loader: Loader) -> None:
     """Test pypgstac collections loader raises an exception for incompatible version."""
     with mock.patch(
-        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock
+        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
         with pytest.raises(Exception):
@@ -358,7 +360,7 @@ def test_load_collections_incompatible_version(loader: Loader) -> None:
 def test_load_items_incompatible_version(loader: Loader) -> None:
     """Test pypgstac items loader raises an exception for incompatible version."""
     with mock.patch(
-        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock
+        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
         with pytest.raises(Exception):

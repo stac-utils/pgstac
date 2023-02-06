@@ -7,7 +7,6 @@ from pypgstac import hydration
 from pypgstac.hydration import DO_NOT_MERGE_MARKER
 from pypgstac.load import Loader
 
-
 HERE = Path(__file__).parent
 LANDSAT_COLLECTION = (
     HERE / ".." / "data-files" / "hydration" / "collections" / "landsat-c2-l1.json"
@@ -35,13 +34,15 @@ LANDSAT_ITEM = (
 
 class TestHydrate:
     def hydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any]
+        self, base_item: Dict[str, Any], item: Dict[str, Any],
     ) -> Dict[str, Any]:
         return hydration.hydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
         """Test that a dehydrated item is is equal to the raw item it was dehydrated
-        from, against the base item of the collection"""
+        from, against the base item of the collection
+        .
+        """
         with open(LANDSAT_COLLECTION) as f:
             collection = json.load(f)
         loader.load_collections(str(LANDSAT_COLLECTION))
@@ -95,13 +96,13 @@ class TestHydrate:
         }
 
     def test_list_of_dicts_extra_keys(self) -> None:
-        """Test that an equal length list of dicts is hydrated correctly"""
+        """Test that an equal length list of dicts is hydrated correctly."""
         base_item = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
         dehydrated = {"a": [{"b3": 3}, {"c3": 3}]}
 
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == {
-            "a": [{"b1": 1, "b2": 2, "b3": 3}, {"c1": 1, "c2": 2, "c3": 3}]
+            "a": [{"b1": 1, "b2": 2, "b3": 3}, {"c1": 1, "c2": 2, "c3": 3}],
         }
 
     def test_equal_len_list_of_mixed_types(self) -> None:
@@ -120,11 +121,11 @@ class TestHydrate:
                 "far",
                 {"c1": 1, "c2": 2, "c3": 3},
                 "boo",
-            ]
+            ],
         }
 
     def test_unequal_len_list(self) -> None:
-        """Test that unequal length lists preserve the item value exactly"""
+        """Test that unequal length lists preserve the item value exactly."""
         base_item = {"a": [{"b1": 1}, {"c1": 1}, {"d1": 1}]}
         dehydrated = {"a": [{"b1": 1, "b2": 2}, {"c1": 1, "c2": 2}]}
 
@@ -148,13 +149,13 @@ class TestHydrate:
 
     def test_marked_non_merged_fields_in_list(self) -> None:
         base_item = {
-            "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}]
+            "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}],
         }
         dehydrated = {
             "a": [
                 {"d": DO_NOT_MERGE_MARKER},
                 {"e": DO_NOT_MERGE_MARKER, "f": "fifth"},
-            ]
+            ],
         }
 
         hydrated = self.hydrate(base_item, dehydrated)
@@ -166,24 +167,24 @@ class TestHydrate:
 
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == {
-            "a": {"b": {"c": {"d": "first", "d1": "second", "d2": "third"}}}
+            "a": {"b": {"c": {"d": "first", "d1": "second", "d2": "third"}}},
         }
 
     def test_equal_list_of_non_dicts(self) -> None:
-        """Values of lists that match base_item should be hydrated back on"""
+        """Values of lists that match base_item should be hydrated back on."""
         base_item = {"assets": {"thumbnail": {"roles": ["thumbnail"]}}}
         dehydrated = {"assets": {"thumbnail": {"href": "http://foo.com"}}}
 
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == {
-            "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}}
+            "assets": {"thumbnail": {"roles": ["thumbnail"], "href": "http://foo.com"}},
         }
 
     def test_invalid_assets_removed(self) -> None:
         """
         Assets can be included on item-assets that are not uniformly included on
         individual items. Ensure that item asset keys from base_item aren't included
-        after hydration
+        after hydration.
         """
         base_item = {
             "type": "Feature",

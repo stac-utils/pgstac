@@ -1,11 +1,13 @@
-from .test_dehydrate import TestDehydrate as TDehydrate
-from typing import Dict, Any
 import os
-from typing import Generator
+from contextlib import contextmanager
+from typing import Any, Dict, Generator
+
+import psycopg
+
 from pypgstac.db import PgstacDB
 from pypgstac.migrate import Migrate
-import psycopg
-from contextlib import contextmanager
+
+from .test_dehydrate import TestDehydrate as TDehydrate
 
 
 class TestDehydratePG(TDehydrate):
@@ -14,7 +16,6 @@ class TestDehydratePG(TDehydrate):
     @contextmanager
     def db(self) -> Generator:
         """Set up database connection."""
-        print("Setting up db.")
         origdb: str = os.getenv("PGDATABASE", "")
         with psycopg.connect(autocommit=True) as conn:
             try:
@@ -26,17 +27,15 @@ class TestDehydratePG(TDehydrate):
 
         pgdb = PgstacDB()
         pgdb.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-        migrator = Migrate(pgdb)
-        print(migrator.run_migration())
+        Migrate(pgdb).run_migration()
 
         yield pgdb
 
-        print("Closing Connection to DB")
         pgdb.close()
         os.environ["PGDATABASE"] = origdb
 
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any]
+        self, base_item: Dict[str, Any], item: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Dehydrate item using pgstac."""
         with self.db() as db:

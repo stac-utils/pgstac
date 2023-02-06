@@ -1,27 +1,25 @@
 """Command utilities for managing pgstac."""
 
-from typing import Optional
-import sys
-import fire
-from pypgstac.db import PgstacDB
-from pypgstac.migrate import Migrate
-from pypgstac.load import Loader, Methods, Tables
-from pypgstac.version import __version__
 import logging
+import sys
+from typing import Optional
+
+import fire
 from smart_open import open
 
-# sys.tracebacklimit = 0
+from pypgstac.db import PgstacDB
+from pypgstac.load import Loader, Methods, Tables
+from pypgstac.migrate import Migrate
 
 
 class PgstacCLI:
     """CLI for PgStac."""
 
     def __init__(
-        self, dsn: Optional[str] = "", version: bool = False, debug: bool = False
+        self, dsn: Optional[str] = "", version: bool = False, debug: bool = False,
     ):
         """Initialize PgStac CLI."""
         if version:
-            print(__version__)
             sys.exit(0)
 
         self.dsn = dsn
@@ -86,19 +84,18 @@ class PgstacCLI:
                 )
                 FROM collections
                 ON CONFLICT DO NOTHING;
-            """
+            """,
             )
             conn.commit()
 
         urls = self._db.query(
             """
                 SELECT url FROM stac_extensions WHERE content IS NULL;
-            """
+            """,
         )
         if urls:
             for u in urls:
                 url = u[0]
-                print(f"Fetching content from {url}")
                 try:
                     with open(url, "r") as f:
                         content = f.read()
@@ -112,8 +109,8 @@ class PgstacCLI:
                             [content, url],
                         )
                         conn.commit()
-                except Exception as e:
-                    print(f"Unable to load {url} into pgstac. {e}")
+                except Exception:
+                    pass
 
 
 def cli() -> fire.Fire:

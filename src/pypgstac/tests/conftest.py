@@ -1,11 +1,13 @@
 """Fixtures for pypgstac tests."""
-from typing import Generator
-import pytest
 import os
+from typing import Generator
+
 import psycopg
+import pytest
+
 from pypgstac.db import PgstacDB
-from pypgstac.migrate import Migrate
 from pypgstac.load import Loader
+from pypgstac.migrate import Migrate
 
 
 @pytest.fixture(scope="function")
@@ -15,43 +17,61 @@ def db() -> Generator:
 
     with psycopg.connect(autocommit=True) as conn:
         try:
-            conn.execute("CREATE DATABASE pgstactestdb;")
+            conn.execute(
+                """
+                CREATE DATABASE pypgstactestdb
+                TEMPLATE pgstac_test_db_template;
+                """,
+            )
         except psycopg.errors.DuplicateDatabase:
             try:
-                conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
-                conn.execute("CREATE DATABASE pgstactestdb;")
+                conn.execute(
+                    """
+                    DROP DATABASE pypgstactestdb WITH (FORCE);
+                    """,
+                )
+                conn.execute(
+                    """
+                    CREATE DATABASE pypgstactestdb
+                    TEMPLATE pgstac_test_db_template;
+                    """,
+                )
             except psycopg.errors.InsufficientPrivilege:
                 try:
-                    conn.execute("DROP DATABASE pgstactestdb;")
-                    conn.execute("CREATE DATABASE pgstactestdb;")
-                except:
+                    conn.execute("DROP DATABASE pypgstactestdb;")
+                    conn.execute(
+                    """
+                    CREATE DATABASE pypgstactestdb
+                    TEMPLATE pgstac_test_db_template;
+                    """,
+                )
+                except Exception:
                     pass
 
-    os.environ["PGDATABASE"] = "pgstactestdb"
+    os.environ["PGDATABASE"] = "pypgstactestdb"
 
     pgdb = PgstacDB()
 
     yield pgdb
 
-    print("Closing Connection and Dropping DB")
     pgdb.close()
     os.environ["PGDATABASE"] = origdb
 
     with psycopg.connect(autocommit=True) as conn:
         try:
-            conn.execute("DROP DATABASE pgstactestdb WITH (FORCE);")
+            conn.execute("DROP DATABASE pypgstactestdb WITH (FORCE);")
         except psycopg.errors.InsufficientPrivilege:
             try:
-                conn.execute("DROP DATABASE pgstactestdb;")
-            except:
+                conn.execute("DROP DATABASE pypgstactestdb;")
+            except Exception:
                 pass
 
 
 @pytest.fixture(scope="function")
 def loader(db: PgstacDB) -> Generator:
     """Fixture to get a loader and an empty pgstac."""
-    db.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-    migrator = Migrate(db)
-    print(migrator.run_migration())
+    if False:
+        db.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
+        Migrate(db).run_migration()
     ldr = Loader(db)
-    yield ldr
+    return ldr

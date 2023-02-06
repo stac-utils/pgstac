@@ -1,13 +1,14 @@
 """Utilities to help migrate pgstac schema."""
 import glob
+import logging
 import os
 from collections import defaultdict
-from typing import Optional, Dict, List, Iterator, Any
-from smart_open import open
-import logging
+from typing import Any, Dict, Iterator, List, Optional
 
-from .db import PgstacDB
+from smart_open import open
+
 from . import __version__
+from .db import PgstacDB
 
 dirname = os.path.dirname(__file__)
 migrations_dir = os.path.join(dirname, "migrations")
@@ -34,7 +35,7 @@ class MigrationPath:
     def parse_filename(self, filename: str) -> List[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", ""
+            "pgstac.", "",
         )
         return filename.split("-")
 
@@ -79,7 +80,7 @@ class MigrationPath:
         path = self.build_path()
         if path is None:
             raise Exception(
-                f"Could not determine path to get from {self.f} to {self.t}."
+                f"Could not determine path to get from {self.f} to {self.t}.",
             )
         if len(path) == 1:
             return [f"pgstac.{path[0]}.sql"]
@@ -152,7 +153,7 @@ class Migrate:
             else:
                 conn.rollback()
                 raise Exception(
-                    "Migration failed, database rolled back to previous state."
+                    "Migration failed, database rolled back to previous state.",
                 )
 
         logger.debug(f"New Version: {newversion}")
