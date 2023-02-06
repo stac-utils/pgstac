@@ -1,26 +1,6 @@
 {
-	"name": "Ubuntu",
-	"build": {
-		"dockerfile": "../docker/Dockerfile",
-	},
-
-	// Set *default* container specific settings.json values on container create.
-	"settings": {
-		"terminal.integrated.shell.linux": "/bin/bash"
-	},
-
-	// Add the IDs of extensions you want installed when the container is created.
-	"extensions": [],
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	"forwardPorts": [5432],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	//"postCreateCommand": "/docker-entrypoint.sh postgres",
-	"overrideCommand": false,
-
-	"containerEnv": {"POSTGRES_HOST_AUTH_METHOD": "trust","POSTGRES_USER":"postgres"},
-
-	// Comment out connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
-	"remoteUser": "root"
+	"name": "PGStac",
+	"dockerComposeFile": "../docker-compose.yml",
+	"service": "pgstac",
+	"workspaceFolder": "/opt/src"
 }

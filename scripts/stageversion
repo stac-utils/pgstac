@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -24,13 +25,9 @@ if [[ -z "${VERSION}" ]]; then
     exit 1
 fi
 
-cat <<EOD > $(dirname $0)/../pypgstac/pypgstac/version.py
-"""Version."""
-__version__ = "${VERSION}"
-EOD
-
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Updating Version..."
-    docker-compose run --rm dev scripts/bin/stageversion ${VERSION}
-    docker-compose exec -T database scripts/bin/stageversiondb ${FORCE}
+    docker-compose build
+    docker-compose run --rm pgstac stageversion $VERSION $FORCE
+    sudo chown -R $USER:$USER src/pgstac/migrations
 fi

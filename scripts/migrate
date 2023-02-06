@@ -16,9 +16,9 @@ Run migrations against the development database.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
     # Run database migrations
+    docker-compose up -d pgstac
     docker-compose \
-        -f docker-compose.yml \
-        run --rm dev \
+        exec pgstac \
         bash -c "pypgstac pgready && pypgstac migrate --debug"
 
 fi
