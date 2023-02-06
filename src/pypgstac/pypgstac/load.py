@@ -1,29 +1,27 @@
 """Utilities to bulk load data into pgstac from json/ndjson."""
 import contextlib
+from datetime import datetime
 import itertools
 import logging
+from pathlib import Path
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
-from pathlib import Path
+from functools import lru_cache
 from typing import (
     Any,
     BinaryIO,
     Dict,
-    Generator,
     Iterable,
     Iterator,
     Optional,
-    TextIO,
     Tuple,
     Union,
+    Generator,
+    TextIO,
 )
-
 import orjson
 import psycopg
-from methodtools import lru_cache
 from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
@@ -36,9 +34,11 @@ from tenacity import (
     wait_random_exponential,
 )
 
+
 from .db import PgstacDB
 from .hydration import dehydrate
 from .version import __version__
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class Methods(str, Enum):
 
 @contextlib.contextmanager
 def open_std(
-    filename: str, mode: str = "r", *args: Any, **kwargs: Any,
+    filename: str, mode: str = "r", *args: Any, **kwargs: Any
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
     fh: Union[TextIO, BinaryIO]
@@ -93,8 +93,14 @@ def open_std(
         or filename == "stdin"
         or filename == "stdout"
     ):
-        stream = sys.stdin if "r" in mode else sys.stdout
-        fh = stream.buffer if "b" in mode else stream
+        if "r" in mode:
+            stream = sys.stdin
+        else:
+            stream = sys.stdout
+        if "b" in mode:
+            fh = stream.buffer
+        else:
+            fh = stream
         close = False
     else:
         fh = open(filename, mode, *args, **kwargs)
@@ -158,7 +164,7 @@ class Loader:
         if self.db.version != __version__:
             raise Exception(
                 f"pypgstac version {__version__} is not compatible with the target"
-                f" database version {self.db.version}.",
+                f" database version {self.db.version}."
             )
 
     @lru_cache(maxsize=128)
@@ -174,7 +180,7 @@ class Loader:
             raise Exception(f"Error getting info for {collection_id}.")
         if key is None:
             raise Exception(
-                f"Collection {collection_id} is not present in the database",
+                f"Collection {collection_id} is not present in the database"
             )
         logger.debug(f"Found {collection_id} with base_item {base_item}")
         return base_item, key, partition_trunc
@@ -197,7 +203,7 @@ class Loader:
                     DROP TABLE IF EXISTS tmp_collections;
                     CREATE TEMP TABLE tmp_collections
                     (content jsonb) ON COMMIT DROP;
-                    """,
+                    """
                 )
                 with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
                     for collection in read_json(file):
@@ -210,7 +216,7 @@ class Loader:
                         """
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections;
-                        """,
+                        """
                     )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
@@ -223,7 +229,7 @@ class Loader:
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections
                         ON CONFLICT DO NOTHING;
-                        """,
+                        """
                     )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
@@ -234,14 +240,14 @@ class Loader:
                         SELECT content FROM tmp_collections
                         ON CONFLICT (id) DO
                         UPDATE SET content=EXCLUDED.content;
-                        """,
+                        """
                     )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, and upsert."
-                        f"You entered {insert_mode}.",
+                        f"You entered {insert_mode}."
                     )
 
     @retry(
@@ -268,12 +274,19 @@ class Loader:
             if partition.requires_update:
                 with conn.transaction():
                     cur.execute(
+                        "SELECT * FROM partitions WHERE name = %s FOR UPDATE;",
+                        (partition.name,),
+                    )
+                    cur.execute(
                         """
-                        SELECT check_partition(
-                            %s,
-                            tstzrange(%s, %s, '[]'),
-                            tstzrange(%s, %s, '[]')
-                        );
+                        INSERT INTO partitions
+                        (collection, datetime_range, end_datetime_range)
+                        VALUES
+                            (%s, tstzrange(%s, %s, '[]'), tstzrange(%s,%s, '[]'))
+                        ON CONFLICT (name) DO UPDATE SET
+                            datetime_range = EXCLUDED.datetime_range,
+                            end_datetime_range = EXCLUDED.end_datetime_range
+                        ;
                     """,
                         (
                             partition.collection,
@@ -283,18 +296,15 @@ class Loader:
                             partition.end_datetime_range_max,
                         ),
                     )
-
                     logger.debug(
                         f"Adding or updating partition {partition.name} "
-                        f"took {time.perf_counter() - t}s",
+                        f"took {time.perf_counter() - t}s"
                     )
                 partition.requires_update = False
             else:
                 logger.debug(f"Partition {partition.name} does not require an update.")
 
             with conn.transaction():
-
-
                 t = time.perf_counter()
                 if insert_mode in (
                     None,
@@ -306,8 +316,8 @@ class Loader:
                             COPY {}
                             (id, collection, datetime, end_datetime, geometry, content)
                             FROM stdin;
-                            """,
-                        ).format(sql.Identifier(partition.name)),
+                            """
+                        ).format(sql.Identifier(partition.name))
                     ) as copy:
                         for item in items:
                             item.pop("partition")
@@ -319,7 +329,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
-                                ),
+                                )
                             )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
@@ -334,14 +344,14 @@ class Loader:
                         DROP TABLE IF EXISTS items_ingest_temp;
                         CREATE TEMP TABLE items_ingest_temp
                         ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
-                        """,
+                        """
                     )
                     with cur.copy(
                         """
                         COPY items_ingest_temp
                         (id, collection, datetime, end_datetime, geometry, content)
                         FROM stdin;
-                        """,
+                        """
                     ) as copy:
                         for item in items:
                             item.pop("partition")
@@ -353,7 +363,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
-                                ),
+                                )
                             )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Copied rows: {cur.rowcount}")
@@ -362,8 +372,8 @@ class Loader:
                         sql.SQL(
                             """
                                 LOCK TABLE ONLY {} IN EXCLUSIVE MODE;
-                            """,
-                        ).format(sql.Identifier(partition.name)),
+                            """
+                        ).format(sql.Identifier(partition.name))
                     )
                     if insert_mode in (
                         Methods.ignore,
@@ -375,8 +385,8 @@ class Loader:
                                 INSERT INTO {}
                                 SELECT *
                                 FROM items_ingest_temp ON CONFLICT DO NOTHING;
-                                """,
-                            ).format(sql.Identifier(partition.name)),
+                                """
+                            ).format(sql.Identifier(partition.name))
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
@@ -394,8 +404,8 @@ class Loader:
                                     content = EXCLUDED.content
                                 WHERE t IS DISTINCT FROM EXCLUDED
                                 ;
-                            """,
-                            ).format(sql.Identifier(partition.name)),
+                            """
+                            ).format(sql.Identifier(partition.name))
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
@@ -417,20 +427,18 @@ class Loader:
                                     JOIN deletes d
                                     USING (id, collection);
                                 ;
-                                """,
-                            ).format(sql.Identifier(partition.name)),
-
+                            """
+                            ).format(sql.Identifier(partition.name))
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
                 else:
                     raise Exception(
                         "Available modes are insert, ignore, upsert, and delsert."
-                        f"You entered {insert_mode}.",
+                        f"You entered {insert_mode}."
                     )
-                cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
         logger.debug(
-            f"Copying data for {partition} took {time.perf_counter() - t} seconds",
+            f"Copying data for {partition} took {time.perf_counter() - t} seconds"
         )
 
     def _partition_update(self, item: Dict[str, Any]) -> str:
@@ -460,10 +468,10 @@ class Loader:
             # Read the partition information from the database if it exists
             db_rows = list(
                 self.db.query(
-                    "SELECT constraint_dtrange, constraint_edtrange "
-                    "FROM partitions WHERE partition=%s;",
+                    "SELECT datetime_range, end_datetime_range "
+                    "FROM partitions WHERE name=%s;",
                     [partition_name],
-                ),
+                )
             )
             if db_rows:
                 datetime_range: Optional[Range[datetime]] = db_rows[0][0]
@@ -554,7 +562,7 @@ class Loader:
                     yield item
 
     def read_hydrated(
-        self, file: Union[Path, str, Iterator[Any]] = "stdin",
+        self, file: Union[Path, str, Iterator[Any]] = "stdin"
     ) -> Generator:
         for line in read_json(file):
             item = self.format_item(line)
@@ -596,8 +604,8 @@ class Loader:
         if not isinstance(_item, dict):
             try:
                 item = orjson.loads(str(_item).replace("\\\\", "\\"))
-            except Exception:
-                raise
+            except:
+                raise Exception(f"Could not load {_item}")
         else:
             item = _item
 
@@ -622,7 +630,7 @@ class Loader:
 
         if out["datetime"] is None or out["end_datetime"] is None:
             raise Exception(
-                f"Datetime must be set. OUT: {out} Properties: {properties}",
+                f"Datetime must be set. OUT: {out} Properties: {properties}"
             )
 
         if partition_trunc == "year":

@@ -28,7 +28,7 @@ SELECT results_eq(
 );
 
 DELETE FROM collections WHERE id = 'pgstac-test-collection';
-\copy collections (content) FROM 'test/testdata/collections.ndjson';
+\copy collections (content) FROM 'tests/testdata/collections.ndjson';
 
 SELECT results_eq(
     $$ SELECT get_queryables('pgstac-test-collection') -> 'properties' ? 'datetime'; $$,

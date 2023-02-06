@@ -58,6 +58,3 @@ SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
 
 SELECT search from search_query('{"collections":["pgstac-test-collection"]}');
  {"collections": ["pgstac-test-collection"]}
-
-\set QUIET 1
-\set ECHO none

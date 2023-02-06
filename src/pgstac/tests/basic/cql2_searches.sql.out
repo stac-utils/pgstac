@@ -157,8 +157,3 @@ SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0054","sortby":[
 "pgstac-test-item-0085"
 "pgstac-test-item-0012"
 "pgstac-test-item-0048"
-
-
-
-\set QUIET 1
-\set ECHO none

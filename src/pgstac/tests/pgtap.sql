@@ -25,17 +25,17 @@ SELECT plan(72);
 -- Run the tests.
 
 -- Core
-\i test//pgtap/001_core.sql
-\i test/pgtap/001a_jsonutils.sql
-\i test/pgtap/001b_cursorutils.sql
-\i test/pgtap/001s_stacutils.sql
-\i test/pgtap/002_collections.sql
-\i test/pgtap/002a_queryables.sql
-\i test/pgtap/003_items.sql
-\i test/pgtap/004_search.sql
-\i test/pgtap/005_tileutils.sql
-\i test/pgtap/006_tilesearch.sql
-\i test/pgtap/999_version.sql
+\i tests/pgtap/001_core.sql
+\i tests/pgtap/001a_jsonutils.sql
+\i tests/pgtap/001b_cursorutils.sql
+\i tests/pgtap/001s_stacutils.sql
+\i tests/pgtap/002_collections.sql
+\i tests/pgtap/002a_queryables.sql
+\i tests/pgtap/003_items.sql
+\i tests/pgtap/004_search.sql
+\i tests/pgtap/005_tileutils.sql
+\i tests/pgtap/006_tilesearch.sql
+\i tests/pgtap/999_version.sql
 
 -- Finish the tests and clean up.
 SELECT * FROM finish();

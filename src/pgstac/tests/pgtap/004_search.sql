@@ -1,6 +1,6 @@
 -- CREATE fixtures for testing search - as tests are run within a transaction, these will not persist
 
-\copy items_staging (content) FROM 'test/testdata/items.ndjson'
+\copy items_staging (content) FROM 'tests/testdata/items.ndjson'
 
 SET pgstac.context TO 'on';
 SET pgstac."default_filter_lang" TO 'cql-json';

@@ -7,8 +7,6 @@ import pytest
 
 from pypgstac.db import PgstacDB
 from pypgstac.load import Loader
-from pypgstac.migrate import Migrate
-
 
 @pytest.fixture(scope="function")
 def db() -> Generator:
@@ -70,8 +68,5 @@ def db() -> Generator:
 @pytest.fixture(scope="function")
 def loader(db: PgstacDB) -> Generator:
     """Fixture to get a loader and an empty pgstac."""
-    if False:
-        db.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-        Migrate(db).run_migration()
     ldr = Loader(db)
     return ldr
