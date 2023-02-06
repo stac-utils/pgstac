@@ -151,7 +151,7 @@ DECLARE
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
         IF NOT FOUND THEN
             EXIT;
         END IF;
@@ -164,7 +164,6 @@ BEGIN
         END;
         INSERT INTO query_queue_history (query, added, finished, error)
             VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        DELETE FROM query_queue WHERE query = qitem.query;
         COMMIT;
     END LOOP;
 END;
@@ -179,20 +178,22 @@ DECLARE
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
         IF NOT FOUND THEN
             RETURN cnt;
         END IF;
         cnt := cnt + 1;
         BEGIN
+            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
             RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+
             EXECUTE qitem.query;
             EXCEPTION WHEN others THEN
                 error := format('%s | %s', SQLERRM, SQLSTATE);
+                RAISE WARNING '%', error;
         END;
         INSERT INTO query_queue_history (query, added, finished, error)
             VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        DELETE FROM query_queue WHERE query = qitem.query;
     END LOOP;
     RETURN cnt;
 END;
@@ -218,7 +219,7 @@ $$ LANGUAGE PLPGSQL;
 
 
 DROP FUNCTION IF EXISTS check_pgstac_settings;
-CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
     settingval text;
     sysmem bigint := pg_size_bytes(_sysmem);

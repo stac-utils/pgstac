@@ -7,12 +7,7 @@ fi
 if [ ! $PGSTACDOCKER == 1 ]; then
     echo "This script should only be run within pgstac docker"; exit 1;
 fi
-# Always run this as the system postgres user
-# if [ $(whoami) != postgres ]; then
-#     mkdir -p /tmp/pgdata
-#     chown postgres:postgres /tmp/pgdata
-#     exec gosu postgres "${BASH_SOURCE}" "$@";
-# fi
+
 source $(dirname $0)/tmpdb
 
 function usage() {

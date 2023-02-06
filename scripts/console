@@ -30,8 +30,9 @@ while [[ "$#" > 0 ]]; do case $1 in
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
+    docker-compose up -d
+
     if [[ "${DB_CONSOLE}" ]]; then
-        scripts/server --detach
 
         docker-compose exec pgstac psql
 

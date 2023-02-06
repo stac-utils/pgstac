@@ -13,7 +13,7 @@ setuptestdb
 
 BASEDIR=/opt/src
 PYPGSTACDIR=$BASEDIR/pypgstac
-MIGRATIONSDIR=$PYPGSTACDIR/pypgstac/migrations
+MIGRATIONSDIR=$BASEDIR/pgstac/migrations
 
 
 function usage() {

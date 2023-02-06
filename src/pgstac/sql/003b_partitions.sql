@@ -25,12 +25,12 @@ DECLARE
     expr text := pg_get_constraintdef(coid);
     matches timestamptz[];
 BEGIN
-    IF expr = 'CHECK (((datetime IS NULL) AND (end_datetime IS NULL)))' THEN
-        dt := tstzrange('-infinity','-infinity');
-        edt := tstzrange('-infinity', '-infinity');
+    IF expr LIKE '%NULL%' THEN
+        dt := tstzrange(null::timestamptz, null::timestamptz);
+        edt := tstzrange(null::timestamptz, null::timestamptz);
         RETURN;
     END IF;
-    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9])', 'g'))[1] f)
+    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]\.?[0-9]*)', 'g'))[1] f)
     SELECT array_agg(f::timestamptz) INTO matches FROM f;
     IF cardinality(matches) = 4 THEN
         dt := tstzrange(matches[1], matches[2],'[]');
@@ -67,22 +67,25 @@ WHERE isleaf
 CREATE VIEW partitions AS
 SELECT * FROM partition_sys_meta LEFT JOIN partition_stats USING (partition);
 
-CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
 BEGIN
     PERFORM run_or_queue(
-        format('SELECT update_partition_stats(%L);', _partition)
+        format('SELECT update_partition_stats(%L, %L);', _partition, istrigger)
     );
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION update_partition_stats(_partition text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION update_partition_stats(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
     dtrange tstzrange;
     edtrange tstzrange;
+    cdtrange tstzrange;
+    cedtrange tstzrange;
     extent geometry;
+    collection text;
 BEGIN
-    RAISE NOTICE 'Updating stats for %', _partition;
+    RAISE NOTICE 'Updating stats for %.', _partition;
     EXECUTE format(
         $q$
             SELECT
@@ -102,6 +105,39 @@ BEGIN
                 spatial=EXCLUDED.spatial,
                 last_updated=EXCLUDED.last_updated
     ;
+    SELECT
+        constraint_dtrange, constraint_edtrange, partitions.collection
+        INTO cdtrange, cedtrange, collection
+    FROM partitions WHERE partition = _partition;
+
+    RAISE NOTICE 'Checking if we need to modify constraints.';
+    IF
+        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
+        AND NOT istrigger
+    THEN
+        RAISE NOTICE 'Modifying Constraints';
+        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
+        RAISE NOTICE 'New      % %', dtrange, edtrange;
+        PERFORM drop_table_constraints(_partition);
+        PERFORM create_table_constraints(_partition, dtrange, edtrange);
+    END IF;
+    RAISE NOTICE 'Checking if we need to update collection extents.';
+    IF get_setting_bool('update_collection_extent') THEN
+        RAISE NOTICE 'updating collection extent for %', collection;
+        PERFORM run_or_queue(format($q$
+            UPDATE collections
+            SET content = jsonb_set_lax(
+                content,
+                '{extent}'::text[],
+                collection_extent(%L),
+                true,
+                'use_json_null'
+            ) WHERE id=%L
+            ;
+        $q$, collection, collection));
+    ELSE
+        RAISE NOTICE 'Not updating collection extent for %', collection;
+    END IF;
 END;
 $$ LANGUAGE PLPGSQL STRICT;
 
@@ -168,35 +204,48 @@ BEGIN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
-    q :=format(
-        $q$
-            ALTER TABLE %I
-                ADD CONSTRAINT %I
-                    CHECK (
-                        (datetime >= %L)
-                        AND (datetime <= %L)
-                        AND (end_datetime >= %L)
-                        AND (end_datetime <= %L)
-                    ) NOT VALID
-            ;
-        $q$,
-        t,
-        format('%s_dt', t),
-        lower(_dtrange),
-        upper(_dtrange),
-        lower(_edtrange),
-        upper(_edtrange)
-    );
-    PERFORM run_or_queue(q);
-    q :=format(
-        $q$
-            ALTER TABLE %I
-                VALIDATE CONSTRAINT %I
-            ;
-        $q$,
-        t,
-        format('%s_dt', t)
-    );
+    IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
+        q :=format(
+            $q$
+                ALTER TABLE %I
+                    ADD CONSTRAINT %I
+                        CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
+                ;
+                ALTER TABLE %I
+                    VALIDATE CONSTRAINT %I
+                ;
+            $q$,
+            t,
+            format('%s_dt', t),
+            t,
+            format('%s_dt', t)
+        );
+    ELSE
+        q :=format(
+            $q$
+                ALTER TABLE %I
+                    ADD CONSTRAINT %I
+                        CHECK (
+                            (datetime >= %L)
+                            AND (datetime <= %L)
+                            AND (end_datetime >= %L)
+                            AND (end_datetime <= %L)
+                        ) NOT VALID
+                ;
+                ALTER TABLE %I
+                    VALIDATE CONSTRAINT %I
+                ;
+            $q$,
+            t,
+            format('%s_dt', t),
+            lower(_dtrange),
+            upper(_dtrange),
+            lower(_edtrange),
+            upper(_edtrange),
+            t,
+            format('%s_dt', t)
+        );
+    END IF;
     PERFORM run_or_queue(q);
     RETURN t;
 END;
@@ -327,6 +376,7 @@ BEGIN
     END;
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
+    PERFORM update_partition_stats_q(_partition_name, true);
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;

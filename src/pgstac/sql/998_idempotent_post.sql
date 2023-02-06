@@ -16,9 +16,9 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_stats_ttl', '1 day'),
   ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true'),
-  ('index_build_on_trigger', 'true'),
   ('use_queue', 'false'),
-  ('queue_timeout', '10 minutes')
+  ('queue_timeout', '10 minutes'),
+  ('update_collection_extent', 'true')
 ON CONFLICT DO NOTHING
 ;
 
@@ -36,3 +36,5 @@ GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
+
+SELECT update_partition_stats_q(partition) FROM partitions;

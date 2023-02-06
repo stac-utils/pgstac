@@ -224,15 +224,18 @@ BEGIN
         RAISE NOTICE 'BASEIDX: %', baseidx;
         RAISE NOTICE 'IDXSEARCH: %', format($q$[(']%s[')]$q$, queryable_name);
         -- If index already exists, delete it from existing indexes type table
-        DELETE FROM existing_indexes
-        WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
-        RETURNING * INTO deletedidx;
-        RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
-        IF NOT FOUND THEN -- index did not exist, create it
-            RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
-        ELSIF rebuildindexes THEN
-            RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
-        END IF;
+        FOR deletedidx IN
+            DELETE FROM existing_indexes
+            WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
+            RETURNING *
+        LOOP
+            RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
+            IF NOT FOUND THEN -- index did not exist, create it
+                RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+            ELSIF rebuildindexes THEN
+                RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
+            END IF;
+        END LOOP;
     END LOOP;
 
     -- Remove indexes that were not expected
@@ -245,6 +248,7 @@ BEGIN
     END LOOP;
 
     DROP TABLE existing_indexes;
+    RAISE NOTICE 'Returning from maintain_partition_queries.';
     RETURN;
 
 END;

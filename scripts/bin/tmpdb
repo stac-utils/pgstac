@@ -5,6 +5,9 @@ if [[ "${CI}" ]]; then
     set -x
 fi
 
+if [ ! $PGSTACDOCKER == 1 ]; then
+    echo "This script should only be run within pgstac docker"; exit 1;
+fi
 
 function setuptestdb(){
 
@@ -16,6 +19,7 @@ export PGLOG=/tmp/pglog
 export POSTGRES_HOST_AUTH_MODE=trust
 export POSTGRES_USER=postgres
 export POSTGRES_DB=postgres
+export PGDATABASE=postgres
 export PGUSER=postgres
 export PGPASSWORD="${PGPASSWORD:-$POSTGRES_PASSWORD}"
 export PGPORT=5438

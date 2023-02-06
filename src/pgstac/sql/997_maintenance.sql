@@ -53,34 +53,41 @@ END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE OR REPLACE FUNCTION partition_extent(part text) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION collection_extent(_collection text, runupdate boolean default false) RETURNS jsonb AS $$
 DECLARE
-    collection_partition collections%ROWTYPE;
     geom_extent geometry;
     mind timestamptz;
     maxd timestamptz;
     extent jsonb;
 BEGIN
-    EXECUTE FORMAT(
-        '
-        SELECT
-            min(datetime),
-            max(end_datetime)
-        FROM %I;
-        ',
-        part
-    ) INTO mind, maxd;
-    geom_extent := ST_EstimatedExtent(part, 'geometry');
-    extent := jsonb_build_object(
-        'extent', jsonb_build_object(
-            'spatial', jsonb_build_object(
-                'bbox', to_jsonb(array[array[st_xmin(geom_extent), st_ymin(geom_extent), st_xmax(geom_extent), st_ymax(geom_extent)]])
-            ),
-            'temporal', jsonb_build_object(
-                'interval', to_jsonb(array[array[mind, maxd]])
+    IF runupdate THEN
+        PERFORM update_partition_stats_q(partition)
+        FROM partitions WHERE collection=_collection;
+    END IF;
+    SELECT
+        min(lower(dtrange)),
+        max(upper(edtrange)),
+        st_extent(spatial)
+    INTO
+        mind,
+        maxd,
+        geom_extent
+    FROM partitions
+    WHERE collection=_collection;
+
+    IF geom_extent IS NOT NULL AND mind IS NOT NULL AND maxd IS NOT NULL THEN
+        extent := jsonb_build_object(
+            'extent', jsonb_build_object(
+                'spatial', jsonb_build_object(
+                    'bbox', to_jsonb(array[array[st_xmin(geom_extent), st_ymin(geom_extent), st_xmax(geom_extent), st_ymax(geom_extent)]])
+                ),
+                'temporal', jsonb_build_object(
+                    'interval', to_jsonb(array[array[mind, maxd]])
+                )
             )
-        )
-    );
-    RETURN extent;
+        );
+        RETURN extent;
+    END IF;
+    RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;

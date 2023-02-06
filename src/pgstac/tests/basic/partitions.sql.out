@@ -1,5 +1,11 @@
-SET pgstac.use_queue=TRUE;
+SET pgstac.use_queue=FALSE;
 SET
+SELECT get_setting_bool('use_queue');
+f
+SET pgstac.update_collection_extent=TRUE;
+SET
+SELECT get_setting_bool('update_collection_extent');
+t
 --create base data to use with tests
 CREATE TEMP TABLE test_items AS
 SELECT jsonb_build_object(
@@ -54,6 +60,10 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned';
 SELECT count(*) FROM items WHERE collection='pgstactest-partitioned';
 105
 
+--check that partition stats have been updated
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned' and spatial IS NULL;
+0
+
 --test noop for repartitioning
 UPDATE collections SET content=content || '{"foo":"bar"}'::jsonb WHERE id='pgstactest-partitioned-month';
 UPDATE 1
@@ -63,18 +73,42 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-month';
 SELECT count(*) FROM items WHERE collection='pgstactest-partitioned-month';
 105
 
+--test using query queue
+SET pgstac.use_queue=TRUE;
+SET
+SELECT get_setting_bool('use_queue');
+t
+INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-q"}', 'month');
+INSERT 0 1
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-q"}'::jsonb FROM test_items;
+INSERT 0 105
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q';
+24
+
 --check that partition stats haven't been updated
-SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange, spatial FROM partitions WHERE collection='pgstactest-partitioned-year';
-pgstactest-partitioned-year | [-infinity,infinity] | [-infinity,infinity] | [-infinity,infinity] |         |          |
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and spatial IS NULL;
+24
 
 --check that queue has items
-SELECT count(*) FROM query_queue;
-120
+SELECT count(*)>0 FROM query_queue;
+t
 
 --run queue items to update partition stats
+SELECT run_queued_queries_intransaction()>0;
+t
+
+--check that queue has been emptied
+SELECT count(*) FROM query_queue;
+0
+
 SELECT run_queued_queries_intransaction();
-120
+0
 
 --check that partition stats have been updated
-SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange, spatial FROM partitions WHERE collection='pgstactest-partitioned-year';
-pgstactest-partitioned-year | [-infinity,infinity] | ["2020-01-01 00:00:00+00","2021-12-29 00:00:00+00"] | ["2020-01-01 00:00:00+00","2021-12-29 00:00:00+00"] | ["2020-01-01 00:00:00+00","2021-12-29 00:00:00+00"] | ["2020-01-01 00:00:00+00","2021-12-29 00:00:00+00"] | 01030000000100000005000000000000A0455855C00000004017EF3E40000000A0455855C000000000E9003F4000000080B95355C000000000E9003F4000000080B95355C00000004017EF3E40000000A0455855C00000004017EF3E40
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and spatial IS NULL;
+0
+
+--check that collection extents have been updated
+SELECT DISTINCT content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%';
+{"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}

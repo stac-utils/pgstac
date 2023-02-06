@@ -29,5 +29,5 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     echo "Updating Version..."
     docker-compose build
     docker-compose run --rm pgstac stageversion $VERSION $FORCE
-    chown -R $USER:$USER src/pgstac/migrations
+    sudo chown -R $USER:$USER src/pgstac/migrations
 fi

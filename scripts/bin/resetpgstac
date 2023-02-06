@@ -1,6 +1,8 @@
 #!/bin/bash
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd $SCRIPT_DIR/..
+if [ ! $PGSTACDOCKER == 1 ]; then
+    echo "This script should only be run within pgstac docker"; exit 1;
+fi
+cd /opt/src/pgstac
 set -e
 psql -f pgstac.sql
 psql -v ON_ERROR_STOP=1 <<-EOSQL

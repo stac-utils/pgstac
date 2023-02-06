@@ -1,4 +1,7 @@
-SET pgstac.use_queue=TRUE;
+SET pgstac.use_queue=FALSE;
+SELECT get_setting_bool('use_queue');
+SET pgstac.update_collection_extent=TRUE;
+SELECT get_setting_bool('update_collection_extent');
 --create base data to use with tests
 CREATE TEMP TABLE test_items AS
 SELECT jsonb_build_object(
@@ -36,19 +39,38 @@ UPDATE collections SET partition_trunc='year' WHERE id='pgstactest-partitioned';
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned';
 SELECT count(*) FROM items WHERE collection='pgstactest-partitioned';
 
+--check that partition stats have been updated
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned' and spatial IS NULL;
+
 --test noop for repartitioning
 UPDATE collections SET content=content || '{"foo":"bar"}'::jsonb WHERE id='pgstactest-partitioned-month';
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-month';
 SELECT count(*) FROM items WHERE collection='pgstactest-partitioned-month';
 
+--test using query queue
+SET pgstac.use_queue=TRUE;
+SELECT get_setting_bool('use_queue');
+
+INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-q"}', 'month');
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-q"}'::jsonb FROM test_items;
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q';
+
 --check that partition stats haven't been updated
-SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange, spatial FROM partitions WHERE collection='pgstactest-partitioned-year';
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and spatial IS NULL;
 
 --check that queue has items
-SELECT count(*) FROM query_queue;
+SELECT count(*)>0 FROM query_queue;
 
 --run queue items to update partition stats
+SELECT run_queued_queries_intransaction()>0;
+
+--check that queue has been emptied
+SELECT count(*) FROM query_queue;
 SELECT run_queued_queries_intransaction();
 
 --check that partition stats have been updated
-SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange, spatial FROM partitions WHERE collection='pgstactest-partitioned-year';
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and spatial IS NULL;
+
+--check that collection extents have been updated
+SELECT DISTINCT content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%';

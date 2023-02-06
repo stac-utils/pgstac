@@ -26,7 +26,7 @@ BEGIN
         FROM newdata n JOIN partition_sys_meta p
         ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
     LOOP
-        PERFORM run_or_queue(format('SELECT update_partition_stats(%L);', p));
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
     END LOOP;
     RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;

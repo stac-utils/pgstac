@@ -1,5 +1,14 @@
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS btree_gist;
+DO $$
+DECLARE
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='postgis') THEN
+    CREATE EXTENSION IF NOT EXISTS postgis;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='btree_gist') THEN
+    CREATE EXTENSION IF NOT EXISTS btree_gist;
+  END IF;
+END;
+$$ LANGUAGE PLPGSQL;
 
 DO $$
   BEGIN
@@ -27,6 +36,60 @@ $$;
 
 
 GRANT pgstac_admin TO current_user;
+
+-- Function to make sure pgstac_admin is the owner of items
+CREATE OR REPLACE FUNCTION pgstac_admin_owns() RETURNS VOID AS $$
+DECLARE
+  f RECORD;
+BEGIN
+  FOR f IN (
+    SELECT
+      concat(
+        oid::regproc::text,
+        '(',
+        coalesce(pg_get_function_identity_arguments(oid),''),
+        ')'
+      ) AS name,
+      CASE prokind WHEN 'f' THEN 'FUNCTION' WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' END as typ
+    FROM pg_proc
+    WHERE
+      pronamespace=to_regnamespace('pgstac')
+      AND proowner != to_regrole('pgstac_admin')
+      AND proname NOT LIKE 'pg_stat%'
+  )
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER %s %s OWNER TO pgstac_admin;', f.typ, f.name);
+    EXCEPTION WHEN others THEN
+      RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+    END;
+  END LOOP;
+  FOR f IN (
+    SELECT
+      oid::regclass::text as name,
+      CASE relkind
+        WHEN 'i' THEN 'INDEX'
+        WHEN 'I' THEN 'INDEX'
+        WHEN 'p' THEN 'TABLE'
+        WHEN 'r' THEN 'TABLE'
+        WHEN 'v' THEN 'VIEW'
+        WHEN 'S' THEN 'SEQUENCE'
+        ELSE NULL
+      END as typ
+    FROM pg_class
+    WHERE relnamespace=to_regnamespace('pgstac') and relowner != to_regrole('pgstac_admin') AND relkind IN ('r','p','v','S') AND relname NOT LIKE 'pg_stat'
+  )
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER %s %s OWNER TO pgstac_admin;', f.typ, f.name);
+    EXCEPTION WHEN others THEN
+      RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+    END;
+  END LOOP;
+  RETURN;
+END;
+$$ LANGUAGE PLPGSQL;
+SELECT pgstac_admin_owns();
 
 CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
 
@@ -362,9 +425,9 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
 SELECT COALESCE(
-  conf->>_setting,
-  current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
+  nullif(conf->>_setting, ''),
+  nullif(current_setting(concat('pgstac.',_setting), TRUE),''),
+  nullif((SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),'')
 );
 $$ LANGUAGE SQL;
 
@@ -395,6 +458,20 @@ CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS in
   SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
+    SELECT extract(epoch FROM $1::interval)::text || ' s';
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
+    SELECT set_config(
+        'statement_timeout',
+        t2s(coalesce(
+            get_setting('queue_timeout'),
+            '1h'
+        )),
+        false
+    )::interval;
+$$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
 DECLARE
@@ -457,49 +534,15 @@ CREATE TABLE query_queue_history(
 CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
 DECLARE
     qitem query_queue%ROWTYPE;
-    timeout text := get_setting('queue_timeout');
-    timeout_ts timestamptz;
-    error text;
-BEGIN
-    IF timeout IS NULL THEN
-        timeout := '10 minutes';
-    END IF;
-    timeout_ts := clock_timestamp() + timeout::interval;
-    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        DELETE FROM query_queue WHERE query = qitem.query;
-        COMMIT;
-    END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
-DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout text := get_setting('queue_timeout');
     timeout_ts timestamptz;
     error text;
     cnt int := 0;
 BEGIN
-    IF timeout IS NULL THEN
-        timeout := '10 minutes';
-    END IF;
-    timeout_ts := clock_timestamp() + timeout::interval;
-    WHILE TRUE AND clock_timestamp() < timeout_ts LOOP
-        SELECT * INTO qitem FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED;
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
         IF NOT FOUND THEN
-            RETURN cnt;
+            EXIT;
         END IF;
         cnt := cnt + 1;
         BEGIN
@@ -510,7 +553,36 @@ BEGIN
         END;
         INSERT INTO query_queue_history (query, added, finished, error)
             VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        DELETE FROM query_queue WHERE query = qitem.query;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
+        IF NOT FOUND THEN
+            RETURN cnt;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+                RAISE WARNING '%', error;
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
     END LOOP;
     RETURN cnt;
 END;
@@ -536,7 +608,7 @@ $$ LANGUAGE PLPGSQL;
 
 
 DROP FUNCTION IF EXISTS check_pgstac_settings;
-CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION check_pgstac_settings(_sysmem text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
     settingval text;
     sysmem bigint := pg_size_bytes(_sysmem);
@@ -621,7 +693,10 @@ BEGIN
     IF NOT FOUND OR settingval IS NULL THEN
         RAISE NOTICE 'Consider installing the pg_stat_statements extension which is very helpful for tracking the types of queries on the system';
     ELSE
-        RAISE NOTICE 'pgstattuple % is installed', settingval;
+        RAISE NOTICE 'pg_stat_statements % is installed', settingval;
+        IF current_setting('pg_stat_statements.track_statements', TRUE) IS DISTINCT FROM 'all' THEN
+            RAISE WARNING 'SET pg_stat_statements.track_statements TO ''all''; --In order to track statements within functions.';
+        END IF;
     END IF;
 
 END;
@@ -770,8 +845,26 @@ END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
 
-DROP VIEW IF EXISTS pgstac_indexes;
+DROP VIEW IF EXISTS pgstac_index;
 CREATE VIEW pgstac_indexes AS
+SELECT
+    i.schemaname,
+    i.tablename,
+    i.indexname,
+    indexdef,
+    COALESCE(
+        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+    ) AS field,
+    pg_table_size(i.indexname::text) as index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty
+FROM
+    pg_indexes i
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+
+DROP VIEW IF EXISTS pgstac_index_stats;
+CREATE VIEW pgstac_indexes_stats AS
 SELECT
     i.schemaname,
     i.tablename,
@@ -815,8 +908,12 @@ DECLARE
     q text;
     idx text;
     collection_partition bigint;
+    _concurrently text := '';
 BEGIN
     RAISE NOTICE 'Maintaining partition: %', part;
+    IF get_setting_bool('use_queue') THEN
+        _concurrently='CONCURRENTLY';
+    END IF;
 
     -- Get root partition
     SELECT parentrelid::text, pt.isleaf, pt.level
@@ -893,26 +990,31 @@ BEGIN
         RAISE NOTICE 'BASEIDX: %', baseidx;
         RAISE NOTICE 'IDXSEARCH: %', format($q$[(']%s[')]$q$, queryable_name);
         -- If index already exists, delete it from existing indexes type table
-        DELETE FROM existing_indexes
-        WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
-        RETURNING * INTO deletedidx;
-        RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
-        IF NOT FOUND THEN -- index did not exist, create it
-            RETURN NEXT format('CREATE INDEX CONCURRENTLY %s;', baseidx);
-        ELSIF rebuildindexes THEN
-            RETURN NEXT format('REINDEX %I CONCURRENTLY;', deletedidx.indexname);
-        END IF;
+        FOR deletedidx IN
+            DELETE FROM existing_indexes
+            WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
+            RETURNING *
+        LOOP
+            RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
+            IF NOT FOUND THEN -- index did not exist, create it
+                RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+            ELSIF rebuildindexes THEN
+                RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
+            END IF;
+        END LOOP;
     END LOOP;
 
     -- Remove indexes that were not expected
-    IF dropindexes THEN
-        FOR idx IN SELECT indexname::text FROM existing_indexes
-        LOOP
+    FOR idx IN SELECT indexname::text FROM existing_indexes
+    LOOP
+        RAISE WARNING 'Index: % is not defined by queryables.', idx;
+        IF dropindexes THEN
             RETURN NEXT format('DROP INDEX IF EXISTS %I;', idx);
-        END LOOP;
-    END IF;
+        END IF;
+    END LOOP;
 
     DROP TABLE existing_indexes;
+    RAISE NOTICE 'Returning from maintain_partition_queries.';
     RETURN;
 
 END;
@@ -924,28 +1026,21 @@ CREATE OR REPLACE FUNCTION maintain_partitions(
     rebuildindexes boolean DEFAULT FALSE
 ) RETURNS VOID AS $$
     WITH t AS (
-        SELECT run_or_queue(q) FROM maintain_partitions_queries(part, dropindexes, rebuildindexes) q
+        SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
     ) SELECT count(*) FROM t;
 $$ LANGUAGE SQL;
 
 
--- CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
--- DECLARE
--- BEGIN
---     PERFORM maintain_partitions();
---     RETURN NEW;
--- END;
--- $$ LANGUAGE PLPGSQL;
+CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+BEGIN
+    PERFORM maintain_partitions();
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
 
--- CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
--- FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
-
--- CREATE TRIGGER queryables_collection_trigger
---     AFTER INSERT OR UPDATE ON collections
---     FOR EACH STATEMENT
---     WHEN OLD.partition_trunc IS DISTINCT FROM NEW.partition_trunc
---     EXECUTE PROCEDURE queryables_trigger_func();
-
+CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
+FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
 
 CREATE OR REPLACE FUNCTION get_queryables(_collection_ids text[] DEFAULT NULL) RETURNS jsonb AS $$
@@ -1708,7 +1803,7 @@ BEGIN
         FROM newdata n JOIN partition_sys_meta p
         ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
     LOOP
-        PERFORM run_or_queue(format('SELECT update_partition_stats(%L);', p));
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
     END LOOP;
     RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
@@ -1748,29 +1843,6 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content_slim(content) as content
     ;
 $$ LANGUAGE SQL STABLE;
-
-CREATE OR REPLACE FUNCTION content_dehydrate(
-    item_content jsonb,
-    collection_content jsonb
-) RETURNS items AS $$
-    SELECT
-        item_content->>'id' as id,
-        stac_geom(item_content) as geometry,
-        item_content->>'collection' as collection,
-        stac_datetime(item_content) as datetime,
-        stac_end_datetime(item_content) as end_datetime,
-        (item_content
-            - '{id,geometry,collection,type,assets}'::text[]
-        )
-            ||
-        jsonb_build_object(
-            'assets',
-            ( strip_jsonb(item_content->'assets', collection_content->'item_assets'
-            )
-            )
-        )
-    ;
-$$ LANGUAGE SQL IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -1977,11 +2049,11 @@ BEGIN
     SELECT * INTO i FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection) LIMIT 1;
     RETURN i;
 END;
-$$ LANGUAGE PLPGSQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE PLPGSQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text, _collection text DEFAULT NULL) RETURNS jsonb AS $$
     SELECT content_hydrate(items) FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection);
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION delete_item(_id text, _collection text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
@@ -2076,12 +2148,12 @@ DECLARE
     expr text := pg_get_constraintdef(coid);
     matches timestamptz[];
 BEGIN
-    IF expr = 'CHECK (((datetime IS NULL) AND (end_datetime IS NULL)))' THEN
-        dt := tstzrange('-infinity','-infinity');
-        edt := tstzrange('-infinity', '-infinity');
+    IF expr LIKE '%NULL%' THEN
+        dt := tstzrange(null::timestamptz, null::timestamptz);
+        edt := tstzrange(null::timestamptz, null::timestamptz);
         RETURN;
     END IF;
-    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9])', 'g'))[1] f)
+    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]\.?[0-9]*)', 'g'))[1] f)
     SELECT array_agg(f::timestamptz) INTO matches FROM f;
     IF cardinality(matches) = 4 THEN
         dt := tstzrange(matches[1], matches[2],'[]');
@@ -2118,22 +2190,25 @@ WHERE isleaf
 CREATE VIEW partitions AS
 SELECT * FROM partition_sys_meta LEFT JOIN partition_stats USING (partition);
 
-CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
 BEGIN
     PERFORM run_or_queue(
-        format('SELECT update_partition_stats(%L);', _partition)
+        format('SELECT update_partition_stats(%L, %L);', _partition, istrigger)
     );
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION update_partition_stats(_partition text) RETURNS VOID AS $$
+CREATE OR REPLACE FUNCTION update_partition_stats(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
     dtrange tstzrange;
     edtrange tstzrange;
+    cdtrange tstzrange;
+    cedtrange tstzrange;
     extent geometry;
+    collection text;
 BEGIN
-    RAISE NOTICE 'Updating stats for %', _partition;
+    RAISE NOTICE 'Updating stats for %.', _partition;
     EXECUTE format(
         $q$
             SELECT
@@ -2153,6 +2228,39 @@ BEGIN
                 spatial=EXCLUDED.spatial,
                 last_updated=EXCLUDED.last_updated
     ;
+    SELECT
+        constraint_dtrange, constraint_edtrange, partitions.collection
+        INTO cdtrange, cedtrange, collection
+    FROM partitions WHERE partition = _partition;
+
+    RAISE NOTICE 'Checking if we need to modify constraints.';
+    IF
+        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
+        AND NOT istrigger
+    THEN
+        RAISE NOTICE 'Modifying Constraints';
+        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
+        RAISE NOTICE 'New      % %', dtrange, edtrange;
+        PERFORM drop_table_constraints(_partition);
+        PERFORM create_table_constraints(_partition, dtrange, edtrange);
+    END IF;
+    RAISE NOTICE 'Checking if we need to update collection extents.';
+    IF get_setting_bool('update_collection_extent') THEN
+        RAISE NOTICE 'updating collection extent for %', collection;
+        PERFORM run_or_queue(format($q$
+            UPDATE collections
+            SET content = jsonb_set_lax(
+                content,
+                '{extent}'::text[],
+                collection_extent(%L),
+                true,
+                'use_json_null'
+            ) WHERE id=%L
+            ;
+        $q$, collection, collection));
+    ELSE
+        RAISE NOTICE 'Not updating collection extent for %', collection;
+    END IF;
 END;
 $$ LANGUAGE PLPGSQL STRICT;
 
@@ -2219,35 +2327,48 @@ BEGIN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
-    q :=format(
-        $q$
-            ALTER TABLE %I
-                ADD CONSTRAINT %I
-                    CHECK (
-                        (datetime >= %L)
-                        AND (datetime <= %L)
-                        AND (end_datetime >= %L)
-                        AND (end_datetime <= %L)
-                    ) NOT VALID
-            ;
-        $q$,
-        t,
-        format('%s_dt', t),
-        lower(_dtrange),
-        upper(_dtrange),
-        lower(_edtrange),
-        upper(_edtrange)
-    );
-    PERFORM run_or_queue(q);
-    q :=format(
-        $q$
-            ALTER TABLE %I
-                VALIDATE CONSTRAINT %I
-            ;
-        $q$,
-        t,
-        format('%s_dt', t)
-    );
+    IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
+        q :=format(
+            $q$
+                ALTER TABLE %I
+                    ADD CONSTRAINT %I
+                        CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
+                ;
+                ALTER TABLE %I
+                    VALIDATE CONSTRAINT %I
+                ;
+            $q$,
+            t,
+            format('%s_dt', t),
+            t,
+            format('%s_dt', t)
+        );
+    ELSE
+        q :=format(
+            $q$
+                ALTER TABLE %I
+                    ADD CONSTRAINT %I
+                        CHECK (
+                            (datetime >= %L)
+                            AND (datetime <= %L)
+                            AND (end_datetime >= %L)
+                            AND (end_datetime <= %L)
+                        ) NOT VALID
+                ;
+                ALTER TABLE %I
+                    VALIDATE CONSTRAINT %I
+                ;
+            $q$,
+            t,
+            format('%s_dt', t),
+            lower(_dtrange),
+            upper(_dtrange),
+            lower(_edtrange),
+            upper(_edtrange),
+            t,
+            format('%s_dt', t)
+        );
+    END IF;
     PERFORM run_or_queue(q);
     RETURN t;
 END;
@@ -2377,6 +2498,8 @@ BEGIN
             RAISE INFO 'Error Context:%', err_context;
     END;
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
+    PERFORM maintain_partitions(_partition_name);
+    PERFORM update_partition_stats_q(_partition_name, true);
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -2880,6 +3003,7 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
 CREATE TABLE IF NOT EXISTS search_wheres(
     id bigint generated always as identity primary key,
     _where text NOT NULL,
@@ -3005,7 +3129,7 @@ BEGIN
     ;
     RETURN sw;
 END;
-$$ LANGUAGE PLPGSQL ;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION search_query(
@@ -3050,7 +3174,7 @@ BEGIN
     RETURN search;
 
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
@@ -3232,7 +3356,7 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
 
 
 CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$
@@ -3451,17 +3575,23 @@ $$ LANGUAGE SQL;
 DROP FUNCTION IF EXISTS analyze_items;
 CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
-q text;
+    q text;
+    timeout_ts timestamptz;
 BEGIN
-FOR q IN
-    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
-    FROM pg_stat_user_tables
-    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
-LOOP
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        RAISE NOTICE '% % %', clock_timestamp(), timeout_ts, current_setting('statement_timeout', TRUE);
+        SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname) INTO q
+        FROM pg_stat_user_tables
+        WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL) LIMIT 1;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
         RAISE NOTICE '%', q;
         EXECUTE q;
         COMMIT;
-END LOOP;
+        RAISE NOTICE '%', queue_timeout();
+    END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
@@ -3489,42 +3619,49 @@ BEGIN
     AND nsp.nspname = 'pgstac'
     LOOP
         RAISE NOTICE '%', q;
-        EXECUTE q;
+        PERFORM run_or_queue(q);
         COMMIT;
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE OR REPLACE FUNCTION partition_extent(part text) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION collection_extent(_collection text, runupdate boolean default false) RETURNS jsonb AS $$
 DECLARE
-    collection_partition collections%ROWTYPE;
     geom_extent geometry;
     mind timestamptz;
     maxd timestamptz;
     extent jsonb;
 BEGIN
-    EXECUTE FORMAT(
-        '
-        SELECT
-            min(datetime),
-            max(end_datetime)
-        FROM %I;
-        ',
-        part
-    ) INTO mind, maxd;
-    geom_extent := ST_EstimatedExtent(part, 'geometry');
-    extent := jsonb_build_object(
-        'extent', jsonb_build_object(
-            'spatial', jsonb_build_object(
-                'bbox', to_jsonb(array[array[st_xmin(geom_extent), st_ymin(geom_extent), st_xmax(geom_extent), st_ymax(geom_extent)]])
-            ),
-            'temporal', jsonb_build_object(
-                'interval', to_jsonb(array[array[mind, maxd]])
+    IF runupdate THEN
+        PERFORM update_partition_stats_q(partition)
+        FROM partitions WHERE collection=_collection;
+    END IF;
+    SELECT
+        min(lower(dtrange)),
+        max(upper(edtrange)),
+        st_extent(spatial)
+    INTO
+        mind,
+        maxd,
+        geom_extent
+    FROM partitions
+    WHERE collection=_collection;
+
+    IF geom_extent IS NOT NULL AND mind IS NOT NULL AND maxd IS NOT NULL THEN
+        extent := jsonb_build_object(
+            'extent', jsonb_build_object(
+                'spatial', jsonb_build_object(
+                    'bbox', to_jsonb(array[array[st_xmin(geom_extent), st_ymin(geom_extent), st_xmax(geom_extent), st_ymax(geom_extent)]])
+                ),
+                'temporal', jsonb_build_object(
+                    'interval', to_jsonb(array[array[mind, maxd]])
+                )
             )
-        )
-    );
-    RETURN extent;
+        );
+        RETURN extent;
+    END IF;
+    RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
 INSERT INTO queryables (name, definition) VALUES
@@ -3545,9 +3682,9 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_stats_ttl', '1 day'),
   ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true'),
-  ('index_build_on_trigger', 'true'),
   ('use_queue', 'false'),
-  ('queue_timeout', '10 minutes')
+  ('queue_timeout', '10 minutes'),
+  ('update_collection_extent', 'true')
 ON CONFLICT DO NOTHING
 ;
 
@@ -3565,4 +3702,6 @@ GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
+
+SELECT update_partition_stats_q(partition) FROM partitions;
 SELECT set_version('0.7.0');
