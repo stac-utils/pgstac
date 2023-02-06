@@ -138,6 +138,8 @@ drop function if exists "pgstac"."partitions_delete_trigger_func"();
 
 drop function if exists "pgstac"."partitions_trigger_func"();
 
+drop function if exists "pgstac"."parse_dtrange"(_indate jsonb, relative_base timestamp with time zone);
+
 drop view if exists "pgstac"."partition_steps";
 
 alter table "pgstac"."partitions" drop constraint "partitions_pkey";
@@ -1249,6 +1251,79 @@ BEGIN
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+
+    RETURN NULL;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.parse_dtrange(_indate jsonb, relative_base timestamp with time zone DEFAULT date_trunc('hour'::text, CURRENT_TIMESTAMP))
+ RETURNS tstzrange
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE STRICT
+ SET "TimeZone" TO 'UTC'
+AS $function$
+DECLARE
+    timestrs text[];
+    s timestamptz;
+    e timestamptz;
+BEGIN
+    timestrs :=
+    CASE
+        WHEN _indate ? 'timestamp' THEN
+            ARRAY[_indate->>'timestamp']
+        WHEN _indate ? 'interval' THEN
+            to_text_array(_indate->'interval')
+        WHEN jsonb_typeof(_indate) = 'array' THEN
+            to_text_array(_indate)
+        ELSE
+            regexp_split_to_array(
+                _indate->>0,
+                '/'
+            )
+    END;
+    RAISE NOTICE 'TIMESTRS %', timestrs;
+    IF cardinality(timestrs) = 1 THEN
+        IF timestrs[1] ILIKE 'P%' THEN
+            RETURN tstzrange(relative_base - upper(timestrs[1])::interval, relative_base, '[)');
+        END IF;
+        s := timestrs[1]::timestamptz;
+        RETURN tstzrange(s, s, '[]');
+    END IF;
+
+    IF cardinality(timestrs) != 2 THEN
+        RAISE EXCEPTION 'Timestamp cannot have more than 2 values';
+    END IF;
+
+    IF timestrs[1] = '..' OR timestrs[1] = '' THEN
+        s := '-infinity'::timestamptz;
+        e := timestrs[2]::timestamptz;
+        RETURN tstzrange(s,e,'[)');
+    END IF;
+
+    IF timestrs[2] = '..' OR timestrs[2] = '' THEN
+        s := timestrs[1]::timestamptz;
+        e := 'infinity'::timestamptz;
+        RETURN tstzrange(s,e,'[)');
+    END IF;
+
+    IF timestrs[1] ILIKE 'P%' AND timestrs[2] NOT ILIKE 'P%' THEN
+        e := timestrs[2]::timestamptz;
+        s := e - upper(timestrs[1])::interval;
+        RETURN tstzrange(s,e,'[)');
+    END IF;
+
+    IF timestrs[2] ILIKE 'P%' AND timestrs[1] NOT ILIKE 'P%' THEN
+        s := timestrs[1]::timestamptz;
+        e := s + upper(timestrs[2])::interval;
+        RETURN tstzrange(s,e,'[)');
+    END IF;
+
+    s := timestrs[1]::timestamptz;
+    e := timestrs[2]::timestamptz;
+
+    RETURN tstzrange(s,e,'[)');
 
     RETURN NULL;
 
