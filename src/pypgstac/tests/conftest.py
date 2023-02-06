@@ -8,6 +8,7 @@ import pytest
 from pypgstac.db import PgstacDB
 from pypgstac.load import Loader
 
+
 @pytest.fixture(scope="function")
 def db() -> Generator:
     """Fixture to get a fresh database."""

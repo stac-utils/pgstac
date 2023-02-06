@@ -41,7 +41,7 @@ dev = [
     "black>=21.7b0",
     "mypy>=0.910",
     "types-orjson==0.1.1",
-    "ruff==0.0.225",
+    "ruff==0.0.231",
     "pre-commit",
     "psycopg2-binary",
     "migra",
