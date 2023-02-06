@@ -57,7 +57,7 @@ CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS
     SELECT upper(stac_daterange(value));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
-CREATE TABLE stac_extensions(
+CREATE TABLE IF NOT EXISTS stac_extensions(
     url text PRIMARY KEY,
     content jsonb
 );

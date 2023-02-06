@@ -1,11 +1,4 @@
 SELECT results_eq(
-    $$ SELECT property_wrapper FROM queryables WHERE name='eo:cloud_cover'; $$,
-    $$ SELECT 'to_int'; $$,
-    'Make sure that cloud_cover is set to to_int wrapper.'
-);
-
-
-SELECT results_eq(
     $$ SELECT sort_sqlorderby('{"sortby":{"field":"properties.eo:cloud_cover"}}'); $$,
     $$ SELECT sort_sqlorderby('{"sortby":{"field":"eo:cloud_cover"}}'); $$,
     'Make sure that sortby with/without properties prefix return the same sort statement.'

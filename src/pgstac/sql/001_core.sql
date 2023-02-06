@@ -1,38 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-
-DO $$
-  BEGIN
-    CREATE ROLE pgstac_admin;
-    CREATE ROLE pgstac_read;
-    CREATE ROLE pgstac_ingest;
-  EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
-GRANT pgstac_admin TO current_user;
-
-CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
-
-ALTER ROLE pgstac_admin SET SEARCH_PATH TO pgstac, public;
-ALTER ROLE pgstac_read SET SEARCH_PATH TO pgstac, public;
-ALTER ROLE pgstac_ingest SET SEARCH_PATH TO pgstac, public;
-
-GRANT USAGE ON SCHEMA pgstac to pgstac_read;
-ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
-ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
-ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
-
-GRANT pgstac_read TO pgstac_ingest;
-GRANT ALL ON SCHEMA pgstac TO pgstac_ingest;
-ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
-ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
-
-SET ROLE pgstac_admin;
-
-SET SEARCH_PATH TO pgstac, public;
-
 
 CREATE TABLE IF NOT EXISTS migrations (
   version text PRIMARY KEY,
@@ -55,23 +20,35 @@ CREATE TABLE IF NOT EXISTS pgstac_settings (
   value text NOT NULL
 );
 
-INSERT INTO pgstac_settings (name, value) VALUES
-  ('context', 'off'),
-  ('context_estimated_count', '100000'),
-  ('context_estimated_cost', '100000'),
-  ('context_stats_ttl', '1 day'),
-  ('default_filter_lang', 'cql2-json'),
-  ('additional_properties', 'true')
-ON CONFLICT DO NOTHING
-;
+CREATE OR REPLACE FUNCTION table_empty(text) RETURNS boolean AS $$
+DECLARE
+    retval boolean;
+BEGIN
+    EXECUTE format($q$
+        SELECT NOT EXISTS (SELECT 1 FROM %I LIMIT 1)
+        $q$,
+        $1
+    ) INTO retval;
+    RETURN retval;
+END;
+$$ LANGUAGE PLPGSQL;
 
 
 CREATE OR REPLACE FUNCTION get_setting(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS text AS $$
 SELECT COALESCE(
+  nullif(conf->>_setting, ''),
+  nullif(current_setting(concat('pgstac.',_setting), TRUE),''),
+  nullif((SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),'')
+);
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION get_setting_bool(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS boolean AS $$
+SELECT COALESCE(
   conf->>_setting,
   current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting)
-);
+  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),
+  'FALSE'
+)::boolean;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
@@ -92,6 +69,20 @@ CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS in
   SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
+    SELECT extract(epoch FROM $1::interval)::text || ' s';
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
+    SELECT set_config(
+        'statement_timeout',
+        t2s(coalesce(
+            get_setting('queue_timeout'),
+            '1h'
+        )),
+        false
+    )::interval;
+$$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
 DECLARE
@@ -136,6 +127,95 @@ SELECT ARRAY(
     ORDER BY i DESC
 );
 $$ LANGUAGE SQL STRICT IMMUTABLE;
+
+DROP TABLE IF EXISTS query_queue;
+CREATE TABLE query_queue (
+    query text PRIMARY KEY,
+    added timestamptz DEFAULT now()
+);
+
+DROP TABLE IF EXISTS query_queue_history;
+CREATE TABLE query_queue_history(
+    query text,
+    added timestamptz NOT NULL,
+    finished timestamptz NOT NULL DEFAULT now(),
+    error text
+);
+
+CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
+        IF NOT FOUND THEN
+            RETURN cnt;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+                RAISE WARNING '%', error;
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+    END LOOP;
+    RETURN cnt;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
+DECLARE
+    use_queue text := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+BEGIN
+    IF get_setting_bool('debug') THEN
+        RAISE NOTICE '%', query;
+    END IF;
+    IF use_queue THEN
+        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+    ELSE
+        EXECUTE query;
+    END IF;
+    RETURN;
+END;
+$$ LANGUAGE PLPGSQL;
+
 
 
 DROP FUNCTION IF EXISTS check_pgstac_settings;
@@ -224,7 +304,10 @@ BEGIN
     IF NOT FOUND OR settingval IS NULL THEN
         RAISE NOTICE 'Consider installing the pg_stat_statements extension which is very helpful for tracking the types of queries on the system';
     ELSE
-        RAISE NOTICE 'pgstattuple % is installed', settingval;
+        RAISE NOTICE 'pg_stat_statements % is installed', settingval;
+        IF current_setting('pg_stat_statements.track_statements', TRUE) IS DISTINCT FROM 'all' THEN
+            RAISE WARNING 'SET pg_stat_statements.track_statements TO ''all''; --In order to track statements within functions.';
+        END IF;
     END IF;
 
 END;

@@ -1,10 +1,10 @@
-CREATE VIEW partition_steps AS
+CREATE OR REPLACE VIEW partition_steps AS
 SELECT
-    name,
-    date_trunc('month',lower(datetime_range)) as sdate,
-    date_trunc('month', upper(datetime_range)) + '1 month'::interval as edate
-    FROM partitions WHERE datetime_range IS NOT NULL AND datetime_range != 'empty'::tstzrange
-    ORDER BY datetime_range ASC
+    partition as name,
+    date_trunc('month',lower(partition_dtrange)) as sdate,
+    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
+    FROM partitions WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
+    ORDER BY dtrange ASC
 ;
 
 CREATE OR REPLACE FUNCTION chunker(
@@ -424,6 +424,7 @@ CREATE TABLE IF NOT EXISTS searches(
     usecount bigint DEFAULT 0,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
 CREATE TABLE IF NOT EXISTS search_wheres(
     id bigint generated always as identity primary key,
     _where text NOT NULL,
@@ -549,11 +550,9 @@ BEGIN
     ;
     RETURN sw;
 END;
-$$ LANGUAGE PLPGSQL ;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
-
-DROP FUNCTION IF EXISTS search_query;
 CREATE OR REPLACE FUNCTION search_query(
     _search jsonb = '{}'::jsonb,
     updatestats boolean = false,
@@ -596,7 +595,7 @@ BEGIN
     RETURN search;
 
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
@@ -778,7 +777,7 @@ collection := jsonb_build_object(
 
 RETURN collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET cursor_tuple_fraction TO 1;
 
 
 CREATE OR REPLACE FUNCTION search_cursor(_search jsonb = '{}'::jsonb) RETURNS refcursor AS $$

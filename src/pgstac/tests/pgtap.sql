@@ -9,7 +9,6 @@
 \timing off
 
 -- Revert all changes on failure.
-\set ON_ERROR_ROLLBACK 1
 \set ON_ERROR_STOP true
 
 -- Load the TAP functions.
@@ -19,7 +18,7 @@ SET SEARCH_PATH TO pgstac, pgtap, public;
 SET CLIENT_MIN_MESSAGES TO 'warning';
 
 -- Plan the tests.
-SELECT plan(72);
+SELECT plan(71);
 --SELECT * FROM no_plan();
 
 -- Run the tests.

@@ -11,15 +11,7 @@ CREATE INDEX queryables_name_idx ON queryables (name);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
 
-INSERT INTO queryables (name, definition) VALUES
-('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
-('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}'),
-('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}')
-ON CONFLICT DO NOTHING;
 
-INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
-ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
     SELECT string_agg(
@@ -86,50 +78,202 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
-CREATE OR REPLACE FUNCTION create_queryable_indexes() RETURNS VOID AS $$
+
+DROP VIEW IF EXISTS pgstac_index;
+CREATE VIEW pgstac_indexes AS
+SELECT
+    i.schemaname,
+    i.tablename,
+    i.indexname,
+    indexdef,
+    COALESCE(
+        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+    ) AS field,
+    pg_table_size(i.indexname::text) as index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty
+FROM
+    pg_indexes i
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+
+DROP VIEW IF EXISTS pgstac_index_stats;
+CREATE VIEW pgstac_indexes_stats AS
+SELECT
+    i.schemaname,
+    i.tablename,
+    i.indexname,
+    indexdef,
+    COALESCE(
+        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+    ) AS field,
+    pg_table_size(i.indexname::text) as index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty,
+    n_distinct,
+    most_common_vals::text::text[],
+    most_common_freqs::text::text[],
+    histogram_bounds::text::text[],
+    correlation
+FROM
+    pg_indexes i
+    LEFT JOIN pg_stats s ON (s.tablename = i.indexname)
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+
+set check_function_bodies to off;
+CREATE OR REPLACE FUNCTION maintain_partition_queries(
+    part text DEFAULT 'items',
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE
+) RETURNS SETOF text AS $$
 DECLARE
-    queryable RECORD;
+    parent text;
+    level int;
+    isleaf bool;
+    collection collections%ROWTYPE;
+    subpart text;
+    baseidx text;
+    queryable_name text;
+    queryable_property_index_type text;
+    queryable_property_wrapper text;
+    queryable_parsed RECORD;
+    deletedidx pg_indexes%ROWTYPE;
     q text;
+    idx text;
+    collection_partition bigint;
+    _concurrently text := '';
 BEGIN
-    FOR queryable IN
-        SELECT
-            queryables.id as qid,
-            CASE WHEN collections.key IS NULL THEN 'items' ELSE format('_items_%s',collections.key) END AS part,
-            property_index_type,
-            expression
-            FROM
-            queryables
-            LEFT JOIN collections ON (collections.id = ANY (queryables.collection_ids))
-            JOIN LATERAL queryable(queryables.name) ON (queryables.property_index_type IS NOT NULL)
+    RAISE NOTICE 'Maintaining partition: %', part;
+    IF get_setting_bool('use_queue') THEN
+        _concurrently='CONCURRENTLY';
+    END IF;
+
+    -- Get root partition
+    SELECT parentrelid::text, pt.isleaf, pt.level
+        INTO parent, isleaf, level
+    FROM pg_partition_tree('items') pt
+    WHERE relid::text = part;
+    IF NOT FOUND THEN
+        RAISE NOTICE 'Partition % Does Not Exist In Partition Tree', part;
+        RETURN;
+    END IF;
+
+    -- If this is a parent partition, recurse to leaves
+    IF NOT isleaf THEN
+        FOR subpart IN
+            SELECT relid::text
+            FROM pg_partition_tree(part)
+            WHERE relid::text != part
         LOOP
-        q := format(
-            $q$
-                CREATE INDEX IF NOT EXISTS %I ON %I USING %s ((%s));
-            $q$,
-            format('%s_%s_idx', queryable.part, queryable.qid),
-            queryable.part,
-            COALESCE(queryable.property_index_type, 'to_text'),
-            queryable.expression
-            );
-        RAISE NOTICE '%',q;
-        EXECUTE q;
+            RAISE NOTICE 'Recursing to %', subpart;
+            RETURN QUERY SELECT * FROM maintain_partition_queries(subpart, dropindexes, rebuildindexes);
+        END LOOP;
+        RETURN; -- Don't continue since not an end leaf
+    END IF;
+
+
+    -- Get collection
+    collection_partition := ((regexp_match(part, E'^_items_([0-9]+)'))[1])::bigint;
+    RAISE NOTICE 'COLLECTION PARTITION: %', collection_partition;
+    SELECT * INTO STRICT collection
+    FROM collections
+    WHERE key = collection_partition;
+    RAISE NOTICE 'COLLECTION ID: %s', collection.id;
+
+
+    -- Create temp table with existing indexes
+    CREATE TEMP TABLE existing_indexes ON COMMIT DROP AS
+    SELECT *
+    FROM pg_indexes
+    WHERE schemaname='pgstac' AND tablename=part;
+
+
+    -- Check if index exists for each queryable.
+    FOR
+        queryable_name,
+        queryable_property_index_type,
+        queryable_property_wrapper
+    IN
+        SELECT
+            name,
+            COALESCE(property_index_type, 'BTREE'),
+            COALESCE(property_wrapper, 'to_text')
+        FROM queryables
+        WHERE
+            name NOT in ('id', 'datetime', 'geometry')
+            AND (
+                collection_ids IS NULL
+                OR collection_ids = '{}'::text[]
+                OR collection.id = ANY (collection_ids)
+            )
+        UNION ALL
+        SELECT 'datetime desc, end_datetime', 'BTREE', ''
+        UNION ALL
+        SELECT 'geometry', 'GIST', ''
+        UNION ALL
+        SELECT 'id', 'BTREE', ''
+    LOOP
+        baseidx := format(
+            $q$ ON %I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            part,
+            queryable_property_index_type,
+            queryable_property_wrapper,
+            queryable_name
+        );
+        RAISE NOTICE 'BASEIDX: %', baseidx;
+        RAISE NOTICE 'IDXSEARCH: %', format($q$[(']%s[')]$q$, queryable_name);
+        -- If index already exists, delete it from existing indexes type table
+        FOR deletedidx IN
+            DELETE FROM existing_indexes
+            WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
+            RETURNING *
+        LOOP
+            RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
+            IF NOT FOUND THEN -- index did not exist, create it
+                RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+            ELSIF rebuildindexes THEN
+                RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
+            END IF;
+        END LOOP;
     END LOOP;
+
+    -- Remove indexes that were not expected
+    FOR idx IN SELECT indexname::text FROM existing_indexes
+    LOOP
+        RAISE WARNING 'Index: % is not defined by queryables.', idx;
+        IF dropindexes THEN
+            RETURN NEXT format('DROP INDEX IF EXISTS %I;', idx);
+        END IF;
+    END LOOP;
+
+    DROP TABLE existing_indexes;
+    RAISE NOTICE 'Returning from maintain_partition_queries.';
     RETURN;
+
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION maintain_partitions(
+    part text DEFAULT 'items',
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE
+) RETURNS VOID AS $$
+    WITH t AS (
+        SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
+    ) SELECT count(*) FROM t;
+$$ LANGUAGE SQL;
+
 
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-PERFORM create_queryable_indexes();
-RETURN NEW;
+    PERFORM maintain_partitions();
+    RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
-FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
-
-CREATE TRIGGER queryables_collection_trigger AFTER INSERT OR UPDATE ON collections
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
 
 

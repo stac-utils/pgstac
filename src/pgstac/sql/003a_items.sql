@@ -14,8 +14,42 @@ CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
-
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
+
+CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    p text;
+    t timestamptz := clock_timestamp();
+BEGIN
+    RAISE NOTICE 'Updating partition stats %', t;
+    FOR p IN SELECT DISTINCT partition
+        FROM newdata n JOIN partition_sys_meta p
+        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
+    LOOP
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
+    END LOOP;
+    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE TRIGGER items_after_insert_trigger
+AFTER INSERT ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_update_trigger
+AFTER DELETE ON items
+REFERENCING OLD TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE TRIGGER items_after_delete_trigger
+AFTER UPDATE ON items
+REFERENCING NEW TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
@@ -155,36 +189,28 @@ CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p record;
     _partitions text[];
+    part text;
     ts timestamptz := clock_timestamp();
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
-    WITH ranges AS (
+
+    FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
-            stac_daterange(n.content->'properties') as dtr
-        FROM newdata n
+            stac_daterange(n.content->'properties') as dtr,
+            partition_trunc
+        FROM newdata n JOIN collections ON (n.content->>'collection'=collections.id)
     ), p AS (
         SELECT
             collection,
-            lower(dtr) as datetime,
-            upper(dtr) as end_datetime,
-            (partition_name(
-                collection,
-                lower(dtr)
-            )).partition_name as name
-        FROM ranges
-    )
-    INSERT INTO partitions (collection, datetime_range, end_datetime_range)
-        SELECT
-            collection,
-            tstzrange(min(datetime), max(datetime), '[]') as datetime_range,
-            tstzrange(min(end_datetime), max(end_datetime), '[]') as end_datetime_range
-        FROM p
-            GROUP BY collection, name
-        ON CONFLICT (name) DO UPDATE SET
-            datetime_range = EXCLUDED.datetime_range,
-            end_datetime_range = EXCLUDED.end_datetime_range
-    ;
+            COALESCE(date_trunc(partition_trunc::text, lower(dtr)),'-infinity') as d,
+            tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
+            tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
+        FROM t
+        GROUP BY 1,2
+    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+        RAISE NOTICE 'Partition %', part;
+    END LOOP;
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
@@ -192,6 +218,7 @@ BEGIN
         SELECT
             (content_dehydrate(content)).*
         FROM newdata;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
@@ -199,6 +226,7 @@ BEGIN
             (content_dehydrate(content)).*
         FROM newdata
         ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_ignore;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         WITH staging_formatted AS (
@@ -215,6 +243,7 @@ BEGIN
         SELECT s.* FROM
             staging_formatted s
             ON CONFLICT DO NOTHING;
+        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
         DELETE FROM items_staging_upsert;
     END IF;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
@@ -235,8 +264,6 @@ CREATE TRIGGER items_staging_insert_upsert_trigger AFTER INSERT ON items_staging
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
 
 
-
-
 CREATE OR REPLACE FUNCTION item_by_id(_id text, _collection text DEFAULT NULL) RETURNS items AS
 $$
 DECLARE
@@ -245,11 +272,11 @@ BEGIN
     SELECT * INTO i FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection) LIMIT 1;
     RETURN i;
 END;
-$$ LANGUAGE PLPGSQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE PLPGSQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION get_item(_id text, _collection text DEFAULT NULL) RETURNS jsonb AS $$
     SELECT content_hydrate(items) FROM items WHERE id=_id AND (_collection IS NULL OR collection=_collection);
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+$$ LANGUAGE SQL STABLE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION delete_item(_id text, _collection text DEFAULT NULL) RETURNS VOID AS $$
 DECLARE
@@ -317,49 +344,3 @@ UPDATE collections SET
     )
 ;
 $$ LANGUAGE SQL;
-
-
-CREATE OR REPLACE PROCEDURE analyze_items() AS $$
-DECLARE
-q text;
-BEGIN
-FOR q IN
-    SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname)
-    FROM pg_stat_user_tables
-    WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL)
-LOOP
-        RAISE NOTICE '%', q;
-        EXECUTE q;
-        COMMIT;
-END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;
-
-
-CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
-DECLARE
-    q text;
-BEGIN
-    FOR q IN
-    SELECT
-        FORMAT(
-            'ALTER TABLE %I.%I VALIDATE CONSTRAINT %I;',
-            nsp.nspname,
-            cls.relname,
-            con.conname
-        )
-
-    FROM pg_constraint AS con
-        JOIN pg_class AS cls
-        ON con.conrelid = cls.oid
-        JOIN pg_namespace AS nsp
-        ON cls.relnamespace = nsp.oid
-    WHERE convalidated = FALSE AND contype in ('c','f')
-    AND nsp.nspname = 'pgstac'
-    LOOP
-        RAISE NOTICE '%', q;
-        EXECUTE q;
-        COMMIT;
-    END LOOP;
-END;
-$$ LANGUAGE PLPGSQL;

@@ -58,7 +58,15 @@ This will create a base migration for the new version and will create incrementa
 All changes to SQL should only be made in the `/sql` directory. SQL Files will be run in alphabetical order.
 
 ### Adding Tests
-PGStac uses PGTap to test SQL. Tests can be found in tests/pgtap.sql and are run using `scripts/test`
+PGStac tests can be written using PGTap or basic SQL output comparisons. Additional testing is available using PyTest in the PyPgSTAC module. Tests can be run using the `scripts/test` command.
+
+PGTap tests can be written using [PGTap](https://pgtap.org/) syntax. Tests should be added to the `/tests/pgtap` directory. Any new sql files added to this directory must be added to `tests/pgtap.sql`.
+
+The Basic SQL tests will run any file ending in '.sql' in the `tests/basic` directory and will compare the exact results to the corresponding '.sql.out' file.
+
+PyPgSTAC tests are located in `pypgstac/tests`.
+
+All tests can be found in tests/pgtap.sql and are run using `scripts/test`
 
 
 ### Release Process
