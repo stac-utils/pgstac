@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.0]
+
+### Added
+- Reorganize code base to create clearer separation between pgstac sql code and pypgstac.
+- Move Python tooling to use hatch with all python project configuration in pyproject.toml
+- Rework testing framework to not rely on pypgstac or migrations. This allows to run tests on any code updates without creating a version first. If a new version has been staged, the tests will still run through all incremental migrations to make sure they pass as well.
+- Add pre-commit to run formatting as well as the tests appropriate for which files have changed.
+- Add a query queue to allow for deferred processing of steps that do not change the ability to get results, but enhance performance. The query queue allows to use pg_cron or similar to run tasks that are placed in the queue.
+- Modify triggers to allow the use of the query queue for building indexes, adding constraints that are used solely for constraint exclusion, and updating partition and collection spatial and temporal extents. The use of the queue is controlled by the new configuration parameter "use_queue" which can be set as the pgstac.use_queue GUC or by setting in the pgstac_settings table.
+- Reorganize how partitions are created and updated to maintain more metadata about partition extents and better tie the constraints to the actual temporal extent of a partition.
+- Add "partitions" view that shows stats about number of records, the partition range, constraint ranges, actual date range and spatial extent of each partition.
+- Add ability to automatically update the extent object on a collection using the partition metadata via triggers. This is controlled by the new configuration parameter "update_collection_extent" which can be set as the pgstac.update_collection_extent GUC or by setting in the pgstac_settings table. This can be combined with "use_queue" to defer the processing.
+- Add many new tests.
+
+### Fixed
+- Allow empty strings in datetime intervals
+
+
 ## [v0.6.13]
 
 ### Fixed
