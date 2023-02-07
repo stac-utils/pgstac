@@ -34,18 +34,8 @@ rm -fr /tmp/pgdata/*
 
 # Leverage scripts from docker-entrypoint.sh
 source /usr/local/bin/docker-entrypoint.sh
-# docker_setup_env
-# docker_create_db_directories
-# docker_verify_minimum_env
-# ls /docker-entrypoint-initdb.d/ > /dev/null
-gosu postgres initdb --username $POSTGRES_USER --auth=trust -D $PGDATA
-# docker_init_database_dir
-# pg_setup_hba_conf "$@"
-# docker_temp_server_start "$@"
-# docker_setup_db
-# docker_process_init_files /docker-entrypoint-initdb.d/*
-# docker_temp_server_stop
 
+gosu postgres initdb --username $POSTGRES_USER --auth=trust -D $PGDATA
 
 # Start postgres with minimal logging settings
 gosu postgres pg_ctl -l "$PGLOG" -w -o "-F -c fsync=off -c full_page_writes=off -c synchronous_commit=off -c archive_mode=off" start

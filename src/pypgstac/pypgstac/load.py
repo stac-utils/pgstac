@@ -23,7 +23,7 @@ from typing import (
 
 import orjson
 import psycopg
-from methodtools import lru_cache
+from cachetools.func import lru_cache
 from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
