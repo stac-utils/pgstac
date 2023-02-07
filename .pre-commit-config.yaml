@@ -9,6 +9,7 @@ repos:
     -   id: check-added-large-files
     -   id: check-toml
     -   id: detect-aws-credentials
+        args: [--allow-missing-credential]
     -   id: detect-private-key
     -   id: check-json
     -   id: mixed-line-ending
