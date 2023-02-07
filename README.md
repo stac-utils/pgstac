@@ -40,10 +40,12 @@ pyPgSTAC Documentation: https://stac-utils.github.io/pgstac/pypgstac
 
 ```
 /
- ├── pypgstac/         - pyPgSTAC python module
- ├── scripts/          - scripts to set up the environment
- ├── sql/              - PgSTAC SQL code
- └── test/             - test suite
+ ├── src/pypgstac           - pyPgSTAC python module
+ ├── src/pypgstac/tests/    - pyPgSTAC tests
+ ├── scripts/               - scripts to set up the environment, create migrations, and run tests
+ ├── src/pgstac/sql/        - PgSTAC SQL code
+ ├── src/pgstac/migrations/ - Migrations for incremental upgrades
+ └── src/pgstac/tests/      - test suite
 ```
 
 ## Contribution & Development
