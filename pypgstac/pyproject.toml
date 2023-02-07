@@ -12,7 +12,7 @@ include = ["pypgstac/migrations/pgstac*.sql"]
 
 [tool.poetry.dependencies]
 python = ">=3.7"
-smart-open = "^4.2.0"
+smart-open = "^6.0.0"
 typer = ">=0.4.0"
 orjson = ">=3.5.2"
 python-dateutil = "^2.8.2"
