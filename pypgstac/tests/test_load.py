@@ -2,7 +2,8 @@
 import json
 from pathlib import Path
 from unittest import mock
-from pypgstac.load import Methods, Loader, read_json
+from pkg_resources import parse_version as V
+from pypgstac.load import Methods, Loader, read_json, __version__
 from psycopg.errors import UniqueViolation
 import pytest
 import pystac
@@ -26,6 +27,11 @@ S1_GRD_ITEM = (
     / "sentinel-1-grd"
     / "S1A_IW_GRDH_1SDV_20220428T034417_20220428T034442_042968_05213C.json"
 )
+
+
+def version_increment(source_version: str) -> str:
+    version = V(source_version)
+    return ".".join(map(str, [version.major, version.minor, version.micro + 1]))
 
 
 def test_load_collections_succeeds(loader: Loader) -> None:
@@ -357,6 +363,10 @@ def test_load_collections_incompatible_version(loader: Loader) -> None:
 
 def test_load_items_incompatible_version(loader: Loader) -> None:
     """Test pypgstac items loader raises an exception for incompatible version."""
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode=Methods.insert,
+    )
     with mock.patch(
         "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock
     ) as mock_version:
@@ -366,3 +376,19 @@ def test_load_items_incompatible_version(loader: Loader) -> None:
                 str(TEST_ITEMS),
                 insert_mode=Methods.insert,
             )
+
+
+def test_load_compatible_major_minor_version(loader: Loader) -> None:
+    """Test pypgstac loader doesn't raise an exception."""
+    with mock.patch(
+        "pypgstac.load.__version__", version_increment(__version__)
+    ) as mock_version:
+        loader.load_collections(
+            str(TEST_COLLECTIONS_JSON),
+            insert_mode=Methods.insert,
+        )
+        loader.load_items(
+            str(TEST_ITEMS),
+            insert_mode=Methods.insert,
+        )
+        assert mock_version != loader.db.version

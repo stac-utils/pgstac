@@ -6,7 +6,7 @@ with open("README.md") as f:
     desc = f.read()
 
 install_requires = [
-    "smart-open[html]>=4.2,<7.0",
+    "smart-open>=4.2,<7.0",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
@@ -22,6 +22,7 @@ extra_reqs = {
         "black>=21.7b0",
         "mypy>=0.910",
         "types-orjson==0.1.1",
+        "types-pkg-resources",
         "pystac[validation]==1.*"
     ],
     "psycopg": [
