@@ -25,6 +25,7 @@ import orjson
 import psycopg
 from cachetools.func import lru_cache
 from orjson import JSONDecodeError
+from pkg_resources import parse_version as V
 from plpygis.geometry import Geometry
 from psycopg import sql
 from psycopg.types.range import Range
@@ -155,10 +156,21 @@ class Loader:
         self._partition_cache: Dict[str, Partition] = {}
 
     def check_version(self) -> None:
-        if self.db.version != __version__:
+        db_version = self.db.version
+        if db_version is None:
+            raise Exception("Failed to detect the target database version.")
+
+        v1 = V(db_version)
+        v2 = V(__version__)
+        if (v1.major, v1.minor) != (
+            v2.major,
+            v2.minor,
+        ):
             raise Exception(
-                f"pypgstac version {__version__} is not compatible with the target"
-                f" database version {self.db.version}.",
+                f"pypgstac version {__version__}"
+                " is not compatible with the target"
+                f" database version {self.db.version}."
+                f" database version {db_version}.",
             )
 
     @lru_cache(maxsize=128)

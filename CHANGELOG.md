@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add ability to automatically update the extent object on a collection using the partition metadata via triggers. This is controlled by the new configuration parameter "update_collection_extent" which can be set as the pgstac.update_collection_extent GUC or by setting in the pgstac_settings table. This can be combined with "use_queue" to defer the processing.
 - Add many new tests.
 - Migrations now make sure that all objects in the pgstac schema are owned by the pgstac_admin role. Functions marked as "SECURITY DEFINER" have been moved to the lower level functions responsible for creating/altering partitions and adding records to the search/search_wheres tables. This should open the door for approaches to using Row Level Security.
+- Allow pypgstac loader to load data on pgstac databases that have the same major version even if minor version differs. [162] (https://github.com/stac-utils/pgstac/issues/162) Cherry picked from https://github.com/stac-utils/pgstac/pull/164.
 
 ### Fixed
 - Allow empty strings in datetime intervals
