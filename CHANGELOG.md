@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Fixed
 - Allow empty strings in datetime intervals
+- Set search_path and application_name upon connection rather than as kwargs for compatibility with RDS [156] (https://github.com/stac-utils/pgstac/issues/156)
 
 
 ## [v0.6.13]

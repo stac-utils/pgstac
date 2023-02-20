@@ -85,10 +85,6 @@ class PgstacDB:
                 max_waiting=settings.db_max_queries,
                 max_idle=settings.db_max_idle,
                 num_workers=settings.db_num_workers,
-                kwargs={
-                    "options": "-c search_path=pgstac,public"
-                    " -c application_name=pypgstac",
-                },
             )
         return self.pool
 
@@ -110,6 +106,24 @@ class PgstacDB:
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
             atexit.register(self.disconnect)
+            self.connection.execute(
+                """
+                    SELECT
+                        CASE
+                        WHEN
+                        current_setting('search_path', false) ~* '\\mpgstac\\M'
+                        THEN current_setting('search_path', false)
+                        ELSE set_config(
+                            'search_path',
+                            'pgstac,' || current_setting('search_path', false),
+                            false
+                            )
+                        END
+                    ;
+                    SET application_name TO 'pgstac';
+                """,
+                prepare=False,
+            )
         return self.connection
 
     def wait(self) -> None:
