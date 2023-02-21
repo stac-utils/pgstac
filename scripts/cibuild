@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -14,7 +15,6 @@ CI build for this project.
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    scripts/install
     scripts/setup
     scripts/test
 fi

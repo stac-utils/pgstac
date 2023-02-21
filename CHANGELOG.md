@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.0]
+
+### Added
+- Reorganize code base to create clearer separation between pgstac sql code and pypgstac.
+- Move Python tooling to use hatch with all python project configuration in pyproject.toml
+- Rework testing framework to not rely on pypgstac or migrations. This allows to run tests on any code updates without creating a version first. If a new version has been staged, the tests will still run through all incremental migrations to make sure they pass as well.
+- Add pre-commit to run formatting as well as the tests appropriate for which files have changed.
+- Add a query queue to allow for deferred processing of steps that do not change the ability to get results, but enhance performance. The query queue allows to use pg_cron or similar to run tasks that are placed in the queue.
+- Modify triggers to allow the use of the query queue for building indexes, adding constraints that are used solely for constraint exclusion, and updating partition and collection spatial and temporal extents. The use of the queue is controlled by the new configuration parameter "use_queue" which can be set as the pgstac.use_queue GUC or by setting in the pgstac_settings table.
+- Reorganize how partitions are created and updated to maintain more metadata about partition extents and better tie the constraints to the actual temporal extent of a partition.
+- Add "partitions" view that shows stats about number of records, the partition range, constraint ranges, actual date range and spatial extent of each partition.
+- Add ability to automatically update the extent object on a collection using the partition metadata via triggers. This is controlled by the new configuration parameter "update_collection_extent" which can be set as the pgstac.update_collection_extent GUC or by setting in the pgstac_settings table. This can be combined with "use_queue" to defer the processing.
+- Add many new tests.
+- Migrations now make sure that all objects in the pgstac schema are owned by the pgstac_admin role. Functions marked as "SECURITY DEFINER" have been moved to the lower level functions responsible for creating/altering partitions and adding records to the search/search_wheres tables. This should open the door for approaches to using Row Level Security.
+- Allow pypgstac loader to load data on pgstac databases that have the same major version even if minor version differs. [162] (https://github.com/stac-utils/pgstac/issues/162) Cherry picked from https://github.com/stac-utils/pgstac/pull/164.
+
+### Fixed
+- Allow empty strings in datetime intervals
+- Set search_path and application_name upon connection rather than as kwargs for compatibility with RDS [156] (https://github.com/stac-utils/pgstac/issues/156)
+
+
 ## [v0.6.13]
 
 ### Fixed

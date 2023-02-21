@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -33,7 +34,6 @@ while [[ "$#" > 0 ]]; do case $1 in
     esac; done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    docker-compose \
-        -f docker-compose.yml \
-        up ${DETACH_ARG} $@
+    docker-compose build
+    docker-compose up ${DETACH_ARG} $@
 fi

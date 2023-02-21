@@ -1,55 +1,41 @@
-FROM postgres:13 as pg
-
-LABEL maintainer="David Bitner"
-
+FROM postgres:15-bullseye as pg
+ENV PGSTACDOCKER=1
 ENV POSTGIS_MAJOR 3
-ENV PGUSER postgres
-ENV PGDATABASE postgres
-ENV PGHOST localhost
-ENV \
-    PYTHONUNBUFFERED=1 \
-    PYTHONFAULTHANDLER=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=off \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_DEFAULT_TIMEOUT=100
+ENV POSTGIS_VERSION 3.3.2+dfsg-1.pgdg110+1
+ENV PYTHONPATH=/opt/src/pypgstac:/opt/python:${PYTHONPATH}
+ENV PATH=/opt/bin:${PATH}
+ENV PYTHONWRITEBYTECODE=1
+ENV PYTHONBUFFERED=1
 
-RUN \
-    apt-get update \
+RUN set -ex \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
-        gnupg \
-        apt-transport-https \
-        debian-archive-keyring \
-        software-properties-common \
+        ca-certificates \
+        python3 python-is-python3 python3-pip \
+        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR=$POSTGIS_VERSION \
+        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         postgresql-$PG_MAJOR-pgtap \
         postgresql-$PG_MAJOR-partman \
-        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
-        postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
-        build-essential \
-        python3 \
-        python3-pip \
-        python3-setuptools \
-    && pip3 install -U pip setuptools packaging \
-    && pip3 install -U psycopg2-binary \
-    && pip3 install -U psycopg[binary] \
-    && pip3 install -U migra[pg] \
     && apt-get remove -y apt-transport-https \
-    && apt-get -y autoremove \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && apt-get -y autoremove \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/src/pypgstac/pypgstac \
+    && touch /opt/src/pypgstac/pypgstac/__init__.py \
+    && touch /opt/src/pypgstac/README.md \
+    && echo '__version__ = "0.0.0"' > /opt/src/pypgstac/pypgstac/version.py
 
-EXPOSE 5432
+COPY ./src/pypgstac/pyproject.toml /opt/src/pypgstac/pyproject.toml
 
-RUN mkdir -p /docker-entrypoint-initdb.d
-RUN echo "#!/bin/bash \n unset PGHOST \n pypgstac migrate" >/docker-entrypoint-initdb.d/initpgstac.sh && chmod +x /docker-entrypoint-initdb.d/initpgstac.sh
+RUN \
+    pip3 install --upgrade pip \
+    && pip3 install /opt/src/pypgstac[dev,test,psycopg]
 
-RUN mkdir -p /opt/src/pypgstac
+COPY ./src /opt/src
+COPY ./scripts/bin /opt/bin
 
-WORKDIR /opt/src/pypgstac
-
-COPY pypgstac /opt/src/pypgstac
-
-RUN pip3 install -e /opt/src/pypgstac[psycopg]
-
-ENV PYTHONPATH=/opt/src/pypgstac:${PYTHONPATH}
+RUN \
+    echo "initpgstac" > /docker-entrypoint-initdb.d/999_initpgstac.sh \
+    && chmod +x /docker-entrypoint-initdb.d/999_initpgstac.sh \
+    && chmod +x /opt/bin/*
 
 WORKDIR /opt/src

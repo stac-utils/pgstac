@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -26,8 +27,7 @@ esac; done
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
     echo "==Building images..."
-    docker-compose \
-        -f docker-compose.yml \
-        build ${NO_CACHE}
+
+    docker-compose build ${NO_CACHE}
 
 fi
