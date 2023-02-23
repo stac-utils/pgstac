@@ -34,3 +34,33 @@ SELECT results_eq(
     $$ SELECT NULL::jsonb; $$,
     'Make sure null is returned for a non-existant collection.'
 );
+
+SELECT lives_ok(
+    $$ DELETE FROM queryables WHERE name = 'testqueryable'; $$,
+    'Make sure test queryable does not exist.'
+);
+
+
+SELECT lives_ok(
+    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', null); $$,
+    'Can add a new queryable that applies to all collections.'
+);
+
+SELECT throws_ok(
+    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', '{nonexistent}'); $$,
+    '23503',
+    'foreign_key_violation',
+    'Cannot add queryable for non-existent collection.'
+);
+
+SELECT throws_ok(
+    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', '{pgstac-test-collection}'); $$,
+    '23505',
+    'unique_violation',
+    'Queryable must be unique by name/collection.'
+);
+
+SELECT lives_ok(
+    $$ UPDATE queryables SET collection_ids = '{pgstac-test-collection}' WHERE name='testqueryable'; $$,
+    'Can update a queryable from null to a single collection.'
+);

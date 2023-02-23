@@ -1,5 +1,4 @@
 
-DROP FUNCTION IF EXISTS analyze_items;
 CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
     q text;
@@ -7,7 +6,6 @@ DECLARE
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        RAISE NOTICE '% % %', clock_timestamp(), timeout_ts, current_setting('statement_timeout', TRUE);
         SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname) INTO q
         FROM pg_stat_user_tables
         WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL) LIMIT 1;
@@ -17,13 +15,11 @@ BEGIN
         RAISE NOTICE '%', q;
         EXECUTE q;
         COMMIT;
-        RAISE NOTICE '%', queue_timeout();
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-DROP FUNCTION IF EXISTS validate_constraints;
 CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
 DECLARE
     q text;

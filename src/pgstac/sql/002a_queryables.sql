@@ -1,3 +1,7 @@
+CREATE OR REPLACE FUNCTION queryable_signature(n text, c text[]) RETURNS text AS $$
+    SELECT concat(n, c);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text NOT NULL,
@@ -8,9 +12,82 @@ CREATE TABLE queryables (
     property_index_type text
 );
 CREATE INDEX queryables_name_idx ON queryables (name);
+CREATE INDEX queryables_collection_idx ON queryables USING GIN (collection_ids);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
+CREATE OR REPLACE FUNCTION queryables_constraint_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    allcollections text[];
+BEGIN
+    RAISE NOTICE 'Making sure that name/collection is unique for queryables';
+    IF NEW.collection_ids IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM
+                collections
+                LEFT JOIN
+                unnest(NEW.collection_ids) c
+                ON (collections.id = c)
+                WHERE c IS NULL
+        ) THEN
+            RAISE foreign_key_violation;
+            RETURN NULL;
+        END IF;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        IF EXISTS (
+            SELECT 1 FROM queryables q
+            WHERE
+                q.name = NEW.name
+                AND (
+                    q.collection_ids && NEW.collection_ids
+                    OR
+                    q.collection_ids IS NULL
+                    OR
+                    NEW.collection_ids IS NULL
+                )
+        ) THEN
+            RAISE unique_violation;
+            RETURN NULL;
+        END IF;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (
+            SELECT 1 FROM queryables q
+            WHERE
+                q.id != NEW.id
+                AND
+                q.name = NEW.name
+                AND (
+                    q.collection_ids && NEW.collection_ids
+                    OR
+                    q.collection_ids IS NULL
+                    OR
+                    NEW.collection_ids IS NULL
+                )
+        ) THEN
+            RAISE unique_violation
+            USING MESSAGE = format(
+                'There is already a queryable for %s for a collection in %s',
+                NEW.name,
+                NEW.collection_ids
+            );
+            RETURN NULL;
+        END IF;
+    END IF;
 
+    RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER queryables_constraint_insert_trigger
+BEFORE INSERT ON queryables
+FOR EACH ROW EXECUTE PROCEDURE queryables_constraint_triggerfunc();
+
+CREATE TRIGGER queryables_constraint_update_trigger
+BEFORE UPDATE ON queryables
+FOR EACH ROW
+WHEN (NEW.name = OLD.name AND NEW.collection_ids IS DISTINCT FROM OLD.collection_ids)
+EXECUTE PROCEDURE queryables_constraint_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
@@ -125,7 +202,8 @@ set check_function_bodies to off;
 CREATE OR REPLACE FUNCTION maintain_partition_queries(
     part text DEFAULT 'items',
     dropindexes boolean DEFAULT FALSE,
-    rebuildindexes boolean DEFAULT FALSE
+    rebuildindexes boolean DEFAULT FALSE,
+    idxconcurrently boolean DEFAULT FALSE
 ) RETURNS SETOF text AS $$
 DECLARE
     parent text;
@@ -145,7 +223,7 @@ DECLARE
     _concurrently text := '';
 BEGIN
     RAISE NOTICE 'Maintaining partition: %', part;
-    IF get_setting_bool('use_queue') THEN
+    IF idxconcurrently THEN
         _concurrently='CONCURRENTLY';
     END IF;
 
