@@ -485,3 +485,164 @@ SELECT results_eq($$
     'Test that ...'
 );
 */
+
+CREATE OR REPLACE FUNCTION pg_temp.isnull(j jsonb) RETURNS boolean AS $$
+    SELECT nullif(j, 'null'::jsonb) IS NULL;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pg_temp.testpaging(testsortdir text, iddir text) RETURNS SETOF TEXT LANGUAGE plpgsql AS $$
+DECLARE
+    searchfilter jsonb;
+    searchresult jsonb;
+    offsetids text;
+    searchresultids text;
+    page int := 0;
+    token text;
+BEGIN
+    RAISE NOTICE 'Testing % %', testsortdir, iddir;
+    -- Create collection with items that have a field with nulls and duplicate values
+    DELETE FROM items WHERE collection = 'pgstac-test-collection2';
+
+    INSERT INTO collections (content) VALUES ('{"id":"pgstac-test-collection2"}'::jsonb) ON CONFLICT DO NOTHING;
+    PERFORM check_partition('pgstac-test-collection2', '[2011-01-01,2012-01-01)', '[2011-01-01,2012-01-01)');
+
+    INSERT INTO items (id, collection, datetime, end_datetime, geometry, content)
+        SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, content FROM items WHERE collection='pgstac-test-collection';
+
+    UPDATE items SET content = '{"properties":{"testsort":1}}'::jsonb
+        WHERE collection = 'pgstac-test-collection2' AND
+        id <= 'pgstac-test-item-0005_2';
+    UPDATE items SET content = '{"properties":{"testsort":2}}'::jsonb
+        WHERE collection = 'pgstac-test-collection2' AND
+        id > 'pgstac-test-item-0005_2' and id <= 'pgstac-test-item-0010_2';
+    UPDATE items SET content = '{"properties":{"testsort":3}}'::jsonb
+        WHERE collection = 'pgstac-test-collection2' AND
+        id > 'pgstac-test-item-0010' and id <= 'pgstac-test-item-0015_2';
+
+    RETURN NEXT results_eq(
+        $q$
+        SELECT count(*) FROM items WHERE collection = 'pgstac-test-collection2';
+        $q$, $q$
+        SELECT 100::bigint;
+        $q$,
+        'pgstac-test-collection2 has 100 items'
+    );
+
+    searchfilter := '{"collections":["pgstac-test-collection2"],"fields":{"include":["id","properties.datetime","properties.testsort"]},"sortby":[{"field":"testsort","direction":null},{"field":"id","direction":null}]}'::jsonb;
+
+    searchfilter := jsonb_set(searchfilter, '{sortby,0,direction}'::text[], to_jsonb(testsortdir));
+    searchfilter := jsonb_set(searchfilter, '{sortby,1,direction}'::text[], to_jsonb(iddir));
+
+    RAISE NOTICE 'SORTBY: %', searchfilter->>'sortby';
+
+    searchresult := search(searchfilter);
+
+    RETURN NEXT ok(pg_temp.isnull(searchresult->'prev'), 'first prev is null');
+
+    -- page up
+    WHILE page <= 100 LOOP
+        EXECUTE format($q$
+                WITH t AS (
+                SELECT id
+                FROM items
+                WHERE collection='pgstac-test-collection2'
+                ORDER BY content->'properties'->>'testsort' %s, id %s
+                OFFSET %L LIMIT 10
+                ) SELECT string_agg(id, ',') FROM t
+                $q$,
+                testsortdir,
+                iddir,
+                page
+            ) INTO offsetids;
+        EXECUTE format($q$
+            SELECT string_agg(q->>0, ',') FROM jsonb_path_query(%L, '$.features[*].id') as q;
+            $q$, searchresult) INTO searchresultids;
+        RAISE NOTICE 'O: %', offsetids;
+        RAISE NOTICE 'S: %', searchresultids;
+        RETURN NEXT results_eq(
+            format($q$
+                SELECT id
+                FROM items
+                WHERE collection='pgstac-test-collection2'
+                ORDER BY content->'properties'->>'testsort' %s, id %s
+                OFFSET %L LIMIT 10
+                $q$,
+                testsortdir,
+                iddir,
+                page
+            ),
+            format($q$
+            SELECT q->>0 FROM jsonb_path_query(%L, '$.features[*].id') as q;
+            $q$, searchresult),
+            format('Going up %s/%s page:%s results match using offset', testsortdir, iddir, page)
+        );
+
+        IF pg_temp.isnull(searchresult->'next') THEN
+            EXIT;
+        END IF;
+        searchfilter := searchfilter || jsonb_build_object('token', concat('next:',searchresult->>'next'));
+        searchresult := search(searchfilter);
+        RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
+        page := page + 10;
+    END LOOP;
+
+    RETURN NEXT ok(pg_temp.isnull(searchresult->'next'), 'last next is null');
+    RETURN NEXT ok(page=90, 'last page going up is 90');
+    -- page down
+    WHILE page >= 0 LOOP
+        IF page < 10 THEN
+            EXIT;
+        END IF;
+        page := page - 10;
+        searchfilter := searchfilter || jsonb_build_object('token', concat('prev:',searchresult->>'prev'));
+        searchresult := search(searchfilter);
+        RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
+        EXECUTE format($q$
+                WITH t AS (
+                SELECT id
+                FROM items
+                WHERE collection='pgstac-test-collection2'
+                ORDER BY content->'properties'->>'testsort' %s, id %s
+                OFFSET %L LIMIT 10
+                ) SELECT string_agg(id, ',') FROM t
+                $q$,
+                testsortdir,
+                iddir,
+                page
+            ) INTO offsetids;
+        EXECUTE format($q$
+            SELECT string_agg(q->>0, ',') FROM jsonb_path_query(%L, '$.features[*].id') as q;
+            $q$, searchresult) INTO searchresultids;
+        RAISE NOTICE 'O: %', offsetids;
+        RAISE NOTICE 'S: %', searchresultids;
+        RETURN NEXT results_eq(
+            format($q$
+                SELECT id
+                FROM items
+                WHERE collection='pgstac-test-collection2'
+                ORDER BY content->'properties'->>'testsort' %s, id %s
+                OFFSET %L LIMIT 10
+                $q$,
+                testsortdir,
+                iddir,
+                page
+            ),
+            format($q$
+            SELECT q->>0 FROM jsonb_path_query(%L, '$.features[*].id') as q;
+            $q$, searchresult),
+            format('Going down %s/%s page:%s results match using offset', testsortdir, iddir, page)
+        );
+
+        IF pg_temp.isnull(searchresult->'prev') THEN
+            EXIT;
+        END IF;
+    END LOOP;
+    RETURN NEXT ok(pg_temp.isnull(searchresult->'prev'), 'last prev is null');
+    RETURN NEXT ok(page=0, 'last page going down is 0');
+END;
+$$;
+
+SELECT * FROM pg_temp.testpaging('asc','asc');
+SELECT * FROM pg_temp.testpaging('asc','desc');
+SELECT * FROM pg_temp.testpaging('desc','desc');
+SELECT * FROM pg_temp.testpaging('desc','asc');

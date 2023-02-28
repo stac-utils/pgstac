@@ -371,6 +371,140 @@ END;
 $procedure$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.get_token_filter(_search jsonb DEFAULT '{}'::jsonb, token_rec jsonb DEFAULT NULL::jsonb)
+ RETURNS text
+ LANGUAGE plpgsql
+ SET transform_null_equals TO 'true'
+AS $function$
+DECLARE
+    token_id text;
+    filters text[] := '{}'::text[];
+    prev boolean := TRUE;
+    field text;
+    dir text;
+    sort record;
+    orfilter text := '';
+    orfilters text[] := '{}'::text[];
+    andfilters text[] := '{}'::text[];
+    output text;
+    token_where text;
+    token_item items%ROWTYPE;
+BEGIN
+    RAISE NOTICE 'Getting Token Filter. % %', _search, token_rec;
+    -- If no token provided return NULL
+    IF token_rec IS NULL THEN
+        IF NOT (_search ? 'token' AND
+                (
+                    (_search->>'token' ILIKE 'prev:%')
+                    OR
+                    (_search->>'token' ILIKE 'next:%')
+                )
+        ) THEN
+            RETURN NULL;
+        END IF;
+        prev := (_search->>'token' ILIKE 'prev:%');
+        token_id := substr(_search->>'token', 6);
+        IF token_id IS NULL OR token_id = '' THEN
+            RAISE WARNING 'next or prev set, but no token id found';
+            RETURN NULL;
+        END IF;
+        SELECT to_jsonb(items) INTO token_rec
+        FROM items WHERE id=token_id;
+    END IF;
+    RAISE NOTICE 'TOKEN ID: % %', token_rec, token_rec->'id';
+
+
+    RAISE NOTICE 'TOKEN ID: % %', token_rec, token_rec->'id';
+    token_item := jsonb_populate_record(null::items, token_rec);
+    RAISE NOTICE 'TOKEN ITEM ----- %', token_item;
+
+
+    CREATE TEMP TABLE sorts (
+        _row int GENERATED ALWAYS AS IDENTITY NOT NULL,
+        _field text PRIMARY KEY,
+        _dir text NOT NULL,
+        _val text
+    ) ON COMMIT DROP;
+
+    -- Make sure we only have distinct columns to sort with taking the first one we get
+    INSERT INTO sorts (_field, _dir)
+        SELECT
+            (queryable(value->>'field')).expression,
+            get_sort_dir(value)
+        FROM
+            jsonb_array_elements(coalesce(_search->'sortby','[{"field":"datetime","direction":"desc"}]'))
+    ON CONFLICT DO NOTHING
+    ;
+    RAISE NOTICE 'sorts 1: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
+    -- Get the first sort direction provided. As the id is a primary key, if there are any
+    -- sorts after id they won't do anything, so make sure that id is the last sort item.
+    SELECT _dir INTO dir FROM sorts ORDER BY _row ASC LIMIT 1;
+    IF EXISTS (SELECT 1 FROM sorts WHERE _field = 'id') THEN
+        DELETE FROM sorts WHERE _row > (SELECT _row FROM sorts WHERE _field = 'id' ORDER BY _row ASC);
+    ELSE
+        INSERT INTO sorts (_field, _dir) VALUES ('id', dir);
+    END IF;
+
+    -- Add value from looked up item to the sorts table
+    UPDATE sorts SET _val=get_token_val_str(_field, token_item);
+
+    -- Check if all sorts are the same direction and use row comparison
+    -- to filter
+    RAISE NOTICE 'sorts 2: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
+        FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
+            orfilter := NULL;
+            RAISE NOTICE 'SORT: %', sort;
+            IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                orfilter := format($f$(
+                    (%s < %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._val
+                );
+            ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                RAISE NOTICE '< but null';
+                orfilter := format('%s IS NOT NULL', sort._field);
+            ELSIF sort._val IS NULL THEN
+                RAISE NOTICE '> but null';
+                --orfilter := format('%s IS NULL', sort._field);
+            ELSE
+                orfilter := format($f$(
+                    (%s > %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._field
+                );
+            END IF;
+            RAISE NOTICE 'ORFILTER: %', orfilter;
+
+            IF orfilter IS NOT NULL THEN
+                IF sort._row = 1 THEN
+                    orfilters := orfilters || orfilter;
+                ELSE
+                    orfilters := orfilters || format('(%s AND %s)', array_to_string(andfilters, ' AND '), orfilter);
+                END IF;
+            END IF;
+            IF sort._val IS NOT NULL THEN
+                andfilters := andfilters || format('%s = %s', sort._field, sort._val);
+            ELSE
+                andfilters := andfilters || format('%s IS NULL', sort._field);
+            END IF;
+        END LOOP;
+        output := array_to_string(orfilters, ' OR ');
+
+    DROP TABLE IF EXISTS sorts;
+    token_where := concat('(',coalesce(output,'true'),')');
+    IF trim(token_where) = '' THEN
+        token_where := NULL;
+    END IF;
+    RAISE NOTICE 'TOKEN_WHERE: %',token_where;
+    RETURN token_where;
+    END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.queue_timeout()
  RETURNS interval
  LANGUAGE sql
@@ -379,6 +513,171 @@ AS $function$
             get_setting('queue_timeout'),
             '1h'
         ))::interval;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.search(_search jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO 'pgstac', 'public'
+ SET cursor_tuple_fraction TO '1'
+AS $function$
+DECLARE
+    searches searches%ROWTYPE;
+    _where text;
+    token_where text;
+    full_where text;
+    orderby text;
+    query text;
+    token_type text := substr(_search->>'token',1,4);
+    _limit int := coalesce((_search->>'limit')::int, 10);
+    curs refcursor;
+    cntr int := 0;
+    iter_record items%ROWTYPE;
+    first_record jsonb;
+    first_item items%ROWTYPE;
+    last_item items%ROWTYPE;
+    last_record jsonb;
+    out_records jsonb := '[]'::jsonb;
+    prev_query text;
+    next text;
+    prev_id text;
+    has_next boolean := false;
+    has_prev boolean := false;
+    prev text;
+    total_count bigint;
+    context jsonb;
+    collection jsonb;
+    includes text[];
+    excludes text[];
+    exit_flag boolean := FALSE;
+    batches int := 0;
+    timer timestamptz := clock_timestamp();
+    pstart timestamptz;
+    pend timestamptz;
+    pcurs refcursor;
+    search_where search_wheres%ROWTYPE;
+    id text;
+BEGIN
+CREATE TEMP TABLE results (i int GENERATED ALWAYS AS IDENTITY, content jsonb) ON COMMIT DROP;
+    searches := search_query(_search);
+    _where := searches._where;
+    orderby := searches.orderby;
+    search_where := where_stats(_where);
+    total_count := coalesce(search_where.total_count, search_where.estimated_count);
+
+    IF token_type='prev' THEN
+        token_where := get_token_filter(_search, null::jsonb);
+        orderby := sort_sqlorderby(_search, TRUE);
+    END IF;
+    IF token_type='next' THEN
+        token_where := get_token_filter(_search, null::jsonb);
+    END IF;
+
+    full_where := concat_ws(' AND ', _where, token_where);
+    RAISE NOTICE 'FULL QUERY % %', full_where, clock_timestamp()-timer;
+    timer := clock_timestamp();
+
+    FOR query IN SELECT partition_queries(full_where, orderby, search_where.partitions) LOOP
+        timer := clock_timestamp();
+        query := format('%s LIMIT %s', query, _limit + 1);
+        RAISE NOTICE 'Partition Query: %', query;
+        batches := batches + 1;
+        -- curs = create_cursor(query);
+        RAISE NOTICE 'cursor_tuple_fraction: %', current_setting('cursor_tuple_fraction');
+        OPEN curs FOR EXECUTE query;
+        LOOP
+            FETCH curs into iter_record;
+            EXIT WHEN NOT FOUND;
+            cntr := cntr + 1;
+
+            IF _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
+                last_record := content_nonhydrated(iter_record, _search->'fields');
+            ELSE
+                last_record := content_hydrate(iter_record, _search->'fields');
+            END IF;
+            last_item := iter_record;
+            IF cntr = 1 THEN
+                first_item := last_item;
+                first_record := last_record;
+            END IF;
+            IF cntr <= _limit THEN
+                INSERT INTO results (content) VALUES (last_record);
+            ELSIF cntr > _limit THEN
+                has_next := true;
+                exit_flag := true;
+                EXIT;
+            END IF;
+        END LOOP;
+        CLOSE curs;
+        RAISE NOTICE 'Query took %.', clock_timestamp()-timer;
+        timer := clock_timestamp();
+        EXIT WHEN exit_flag;
+    END LOOP;
+    RAISE NOTICE 'Scanned through % partitions.', batches;
+
+WITH ordered AS (SELECT * FROM results WHERE content IS NOT NULL ORDER BY i)
+SELECT jsonb_agg(content) INTO out_records FROM ordered;
+
+DROP TABLE results;
+
+
+-- Flip things around if this was the result of a prev token query
+IF token_type='prev' THEN
+    out_records := flip_jsonb_array(out_records);
+    first_item := last_item;
+    first_record := last_record;
+END IF;
+
+-- If this query has a token, see if there is data before the first record
+IF _search ? 'token' THEN
+    prev_query := format(
+        'SELECT 1 FROM items WHERE %s LIMIT 1',
+        concat_ws(
+            ' AND ',
+            _where,
+            trim(get_token_filter(_search, to_jsonb(first_item)))
+        )
+    );
+    RAISE NOTICE 'Query to get previous record: % --- %', prev_query, first_record;
+    EXECUTE prev_query INTO has_prev;
+    IF FOUND and has_prev IS NOT NULL THEN
+        RAISE NOTICE 'Query results from prev query: %', has_prev;
+        has_prev := TRUE;
+    END IF;
+END IF;
+has_prev := COALESCE(has_prev, FALSE);
+
+IF has_prev THEN
+    prev := out_records->0->>'id';
+END IF;
+IF has_next OR token_type='prev' THEN
+    next := out_records->-1->>'id';
+END IF;
+
+IF context(_search->'conf') != 'off' THEN
+    context := jsonb_strip_nulls(jsonb_build_object(
+        'limit', _limit,
+        'matched', total_count,
+        'returned', coalesce(jsonb_array_length(out_records), 0)
+    ));
+ELSE
+    context := jsonb_strip_nulls(jsonb_build_object(
+        'limit', _limit,
+        'returned', coalesce(jsonb_array_length(out_records), 0)
+    ));
+END IF;
+
+collection := jsonb_build_object(
+    'type', 'FeatureCollection',
+    'features', coalesce(out_records, '[]'::jsonb),
+    'next', next,
+    'prev', prev,
+    'context', context
+);
+
+RETURN collection;
+END;
 $function$
 ;
 
