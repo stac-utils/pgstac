@@ -420,14 +420,16 @@ class Loader:
                                         WHERE
                                             i.id = s.id
                                             AND i.collection = s.collection
-                                            AND i IS DISTINCT FROM s
-                                    RETURNING i.id, i.collection
                                 )
-                                INSERT INTO {}
-                                SELECT s.* FROM
-                                    items_ingest_temp s
-                                    JOIN deletes d
-                                    USING (id, collection);
+                                INSERT INTO {} AS t SELECT * FROM items_ingest_temp
+                                ON CONFLICT (id) DO UPDATE
+                                SET
+                                    datetime = EXCLUDED.datetime,
+                                    end_datetime = EXCLUDED.end_datetime,
+                                    geometry = EXCLUDED.geometry,
+                                    collection = EXCLUDED.collection,
+                                    content = EXCLUDED.content
+                                WHERE t IS DISTINCT FROM EXCLUDED
                                 ;
                                 """,
                             ).format(sql.Identifier(partition.name)),

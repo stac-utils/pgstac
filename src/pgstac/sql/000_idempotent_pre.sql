@@ -1,3 +1,4 @@
+RESET ROLE;
 DO $$
 DECLARE
 BEGIN
@@ -115,5 +116,17 @@ SET ROLE pgstac_admin;
 
 SET SEARCH_PATH TO pgstac, public;
 
-DROP FUNCTION IF EXISTS analyze_items;
-DROP FUNCTION IF EXISTS validate_constraints;
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS analyze_items;
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS validate_constraints;
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;

@@ -295,6 +295,7 @@ DECLARE
     field text;
     dir text;
     sort record;
+    orfilter text := '';
     orfilters text[] := '{}'::text[];
     andfilters text[] := '{}'::text[];
     output text;
@@ -315,6 +316,10 @@ BEGIN
         END IF;
         prev := (_search->>'token' ILIKE 'prev:%');
         token_id := substr(_search->>'token', 6);
+        IF token_id IS NULL OR token_id = '' THEN
+            RAISE WARNING 'next or prev set, but no token id found';
+            RETURN NULL;
+        END IF;
         SELECT to_jsonb(items) INTO token_rec
         FROM items WHERE id=token_id;
     END IF;
@@ -358,41 +363,45 @@ BEGIN
     -- Check if all sorts are the same direction and use row comparison
     -- to filter
     RAISE NOTICE 'sorts 2: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
-
         FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
+            orfilter := NULL;
             RAISE NOTICE 'SORT: %', sort;
-            IF sort._row = 1 THEN
-                IF sort._val IS NULL THEN
-                    orfilters := orfilters || format('(%s IS NOT NULL)', sort._field);
-                ELSE
-                    orfilters := orfilters || format('(%s %s %s)',
-                        sort._field,
-                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                        sort._val
-                    );
-                END IF;
+            IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                orfilter := format($f$(
+                    (%s < %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._val
+                );
+            ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                RAISE NOTICE '< but null';
+                orfilter := format('%s IS NOT NULL', sort._field);
+            ELSIF sort._val IS NULL THEN
+                RAISE NOTICE '> but null';
+                --orfilter := format('%s IS NULL', sort._field);
             ELSE
-                IF sort._val IS NULL THEN
-                    orfilters := orfilters || format('(%s AND %s IS NOT NULL)',
-                    array_to_string(andfilters, ' AND '), sort._field);
+                orfilter := format($f$(
+                    (%s > %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._field
+                );
+            END IF;
+            RAISE NOTICE 'ORFILTER: %', orfilter;
+
+            IF orfilter IS NOT NULL THEN
+                IF sort._row = 1 THEN
+                    orfilters := orfilters || orfilter;
                 ELSE
-                    orfilters := orfilters || format('(%s AND %s %s %s)',
-                        array_to_string(andfilters, ' AND '),
-                        sort._field,
-                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                        sort._val
-                    );
+                    orfilters := orfilters || format('(%s AND %s)', array_to_string(andfilters, ' AND '), orfilter);
                 END IF;
             END IF;
-            IF sort._val IS NULL THEN
-                andfilters := andfilters || format('%s IS NULL',
-                    sort._field
-                );
+            IF sort._val IS NOT NULL THEN
+                andfilters := andfilters || format('%s = %s', sort._field, sort._val);
             ELSE
-                andfilters := andfilters || format('%s = %s',
-                    sort._field,
-                    sort._val
-                );
+                andfilters := andfilters || format('%s IS NULL', sort._field);
             END IF;
         END LOOP;
         output := array_to_string(orfilters, ' OR ');
@@ -402,10 +411,11 @@ BEGIN
     IF trim(token_where) = '' THEN
         token_where := NULL;
     END IF;
-    RAISE NOTICE 'TOKEN_WHERE: |%|',token_where;
+    RAISE NOTICE 'TOKEN_WHERE: %',token_where;
     RETURN token_where;
     END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
+;
 
 CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
     SELECT $1 - '{token,limit,context,includes,excludes}'::text[];
@@ -636,28 +646,6 @@ DECLARE
     id text;
 BEGIN
 CREATE TEMP TABLE results (i int GENERATED ALWAYS AS IDENTITY, content jsonb) ON COMMIT DROP;
--- if ids is set, short circuit and just use direct ids query for each id
--- skip any paging or caching
--- hard codes ordering in the same order as the array of ids
-IF _search ? 'ids' THEN
-    INSERT INTO results (content)
-    SELECT
-        CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
-            content_nonhydrated(items, _search->'fields')
-        ELSE
-            content_hydrate(items, _search->'fields')
-        END
-    FROM items WHERE
-        items.id = ANY(to_text_array(_search->'ids'))
-        AND
-            CASE WHEN _search ? 'collections' THEN
-                items.collection = ANY(to_text_array(_search->'collections'))
-            ELSE TRUE
-            END
-    ORDER BY items.datetime desc, items.id desc
-    ;
-    SELECT INTO total_count count(*) FROM results;
-ELSE
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
@@ -713,7 +701,6 @@ ELSE
         EXIT WHEN exit_flag;
     END LOOP;
     RAISE NOTICE 'Scanned through % partitions.', batches;
-END IF;
 
 WITH ordered AS (SELECT * FROM results WHERE content IS NOT NULL ORDER BY i)
 SELECT jsonb_agg(content) INTO out_records FROM ordered;

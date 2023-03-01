@@ -142,10 +142,10 @@ class PgstacDB:
     def disconnect(self) -> None:
         """Disconnect from database."""
         try:
-            if self.commit_on_exit:
-                if self.connection is not None:
+            if self.connection is not None:
+                if self.commit_on_exit:
                     self.connection.commit()
-                if self.connection is not None:
+                else:
                     self.connection.rollback()
         except Exception:
             pass

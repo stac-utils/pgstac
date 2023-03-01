@@ -137,6 +137,7 @@ class Migrate:
         conn = self.db.connect()
 
         with conn.cursor() as cur:
+            conn.autocommit = False
             for file in files:
                 logger.debug(f"Running migration file {file}.")
                 migration_sql = get_sql(file)

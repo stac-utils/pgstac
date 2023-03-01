@@ -74,14 +74,10 @@ CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
-    SELECT set_config(
-        'statement_timeout',
-        t2s(coalesce(
+    SELECT t2s(coalesce(
             get_setting('queue_timeout'),
             '1h'
-        )),
-        false
-    )::interval;
+        ))::interval;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$

@@ -1,12 +1,41 @@
-INSERT INTO queryables (name, definition) VALUES
-('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
-('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}'),
-('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}')
-ON CONFLICT DO NOTHING;
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
 
-INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
-ON CONFLICT DO NOTHING;
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE');
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DELETE FROM queryables a USING queryables b
+  WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
 
 
 INSERT INTO pgstac_settings (name, value) VALUES
@@ -18,7 +47,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
-  ('update_collection_extent', 'true')
+  ('update_collection_extent', 'false')
 ON CONFLICT DO NOTHING
 ;
 
