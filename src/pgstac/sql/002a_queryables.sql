@@ -285,12 +285,6 @@ BEGIN
                 OR collection_ids = '{}'::text[]
                 OR collection.id = ANY (collection_ids)
             )
-        UNION ALL
-        SELECT 'datetime desc, end_datetime', 'BTREE', ''
-        UNION ALL
-        SELECT 'geometry', 'GIST', ''
-        UNION ALL
-        SELECT 'id', 'BTREE', ''
     LOOP
         baseidx := format(
             $q$ ON %I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
@@ -314,8 +308,39 @@ BEGIN
                 RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
             END IF;
         END LOOP;
+        IF NOT FOUND THEN
+            RAISE NOTICE 'CREATING INDEX for %', queryable_name;
+            RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+        END IF;
     END LOOP;
+    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_datetime_end_datetime_idx')) THEN
+        RETURN NEXT format(
+            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING BTREE (datetime DESC, end_datetime ASC);$f$,
+            concat(part, '_datetime_end_datetime_idx'),
+            part
+            );
+    END IF;
 
+    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_geometry_idx')) THEN
+        RETURN NEXT format(
+            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING GIST (geometry);$f$,
+            concat(part, '_geometry_idx'),
+            part
+            );
+    END IF;
+
+    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_pk')) THEN
+        RETURN NEXT format(
+            $f$CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I USING BTREE(id);$f$,
+            concat(part, '_pk'),
+            part
+            );
+    END IF;
+    DELETE FROM existing_indexes WHERE indexname::text IN (
+        concat(part, '_datetime_end_datetime_idx'),
+        concat(part, '_geometry_idx'),
+        concat(part, '_pk')
+    );
     -- Remove indexes that were not expected
     FOR idx IN SELECT indexname::text FROM existing_indexes
     LOOP
