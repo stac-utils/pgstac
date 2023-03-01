@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.1]
+
+### Fixed
+- Fix permission issue when running incremental migrations.
+- Make sure that pypgstac migrate runs in a single transaction
+- Don't try to use concurrently when building indexes by default (this was tripping things up when using with pg_cron)
+- Don't short circuit search for requests with ids (Fixes #159)
+- Fix for issue with pagination when sorting by columns with nulls (Fixes #161 Fixes #152)
+- Fixes issue where duplicate datetime,end_datetime index was being built.
+- Fix bug in pypgstac loader when using delsert option
+
+### Added
+- Add trigger to detect duplicate configurations for name/collection combination in queryables
+- Add trigger to ensure collections added to queryables exist
+- Add tests for queryables triggers
+- Add more tests for different pagination scenarios
+
 ## [v0.7.0]
 
 ### Added
