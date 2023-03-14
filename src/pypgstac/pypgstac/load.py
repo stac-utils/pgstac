@@ -25,7 +25,6 @@ import orjson
 import psycopg
 from cachetools.func import lru_cache
 from orjson import JSONDecodeError
-from pkg_resources import parse_version as V
 from plpygis.geometry import Geometry
 from psycopg import sql
 from psycopg.types.range import Range
@@ -36,6 +35,7 @@ from tenacity import (
     stop_after_attempt,
     wait_random_exponential,
 )
+from version_parser import Version as V
 
 from .db import PgstacDB
 from .hydration import dehydrate
@@ -162,9 +162,9 @@ class Loader:
 
         v1 = V(db_version)
         v2 = V(__version__)
-        if (v1.major, v1.minor) != (
-            v2.major,
-            v2.minor,
+        if (v1.get_major_version(), v1.get_minor_version()) != (
+            v2.get_major_version(),
+            v2.get_minor_version(),
         ):
             raise Exception(
                 f"pypgstac version {__version__}"
@@ -305,7 +305,6 @@ class Loader:
                 logger.debug(f"Partition {partition.name} does not require an update.")
 
             with conn.transaction():
-
 
                 t = time.perf_counter()
                 if insert_mode in (
