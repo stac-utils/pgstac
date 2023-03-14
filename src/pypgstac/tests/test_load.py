@@ -5,8 +5,8 @@ from unittest import mock
 
 import pystac
 import pytest
-from pkg_resources import parse_version as V
 from psycopg.errors import UniqueViolation
+from version_parser import Version as V
 
 from pypgstac.load import Loader, Methods, __version__, read_json
 
@@ -30,9 +30,20 @@ S1_GRD_ITEM = (
     / "S1A_IW_GRDH_1SDV_20220428T034417_20220428T034442_042968_05213C.json"
 )
 
+
 def version_increment(source_version: str) -> str:
     version = V(source_version)
-    return ".".join(map(str, [version.major, version.minor, version.micro + 1]))
+    return ".".join(
+        map(
+            str,
+            [
+                version.get_major_version(),
+                version.get_minor_version(),
+                version.get_patch_version() + 1,
+            ],
+        ),
+    )
+
 
 def test_load_collections_succeeds(loader: Loader) -> None:
     """Test pypgstac collections loader."""
