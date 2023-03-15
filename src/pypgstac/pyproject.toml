@@ -28,6 +28,7 @@ dependencies = [
     "pydantic[dotenv]==1.10.*",
     "tenacity==8.1.*",
     "cachetools==5.3.*",
+    "version-parser>= 1.0.1",
 ]
 
 [project.optional-dependencies]

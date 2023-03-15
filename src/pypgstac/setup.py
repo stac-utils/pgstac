@@ -31,5 +31,6 @@ setup(
         "plpygis==0.2.*",
         "pydantic[dotenv]==1.10.*",
         "tenacity==8.1.*",
+        "version-parser>= 1.0.1",
     ],
 )
