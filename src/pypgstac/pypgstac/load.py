@@ -28,7 +28,6 @@ from orjson import JSONDecodeError
 from pkg_resources import parse_version as V
 from plpygis.geometry import Geometry
 from psycopg import sql
-from psycopg.types.range import Range
 from smart_open import open
 from tenacity import (
     retry,
@@ -474,32 +473,37 @@ class Loader:
             # Read the partition information from the database if it exists
             db_rows = list(
                 self.db.query(
-                    "SELECT constraint_dtrange, constraint_edtrange "
-                    "FROM partitions WHERE partition=%s;",
+                    """
+                    SELECT
+                        lower(constraint_dtrange) as datetime_range_min,
+                        upper(constraint_dtrange) as datetime_range_max,
+                        lower(constraint_edtrange) as end_datetime_range_min,
+                        upper(constraint_edtrange) as end_datetime_range_max
+                    FROM partitions WHERE partition=%s;
+                    """,
                     [partition_name],
                 ),
             )
             if db_rows:
-                datetime_range: Optional[Range[datetime]] = db_rows[0][0]
-                end_datetime_range: Optional[Range[datetime]] = db_rows[0][1]
+                datetime_range_min: Optional[datetime] = db_rows[0][0] or datetime.min
+                datetime_range_max: Optional[datetime] = db_rows[0][1] or datetime.max
+                end_datetime_range_min: Optional[datetime] = (
+                    db_rows[0][2] or datetime.min
+                )
+                end_datetime_range_max: Optional[datetime] = (
+                    db_rows[0][3] or datetime.max
+                )
 
-                if (
-                    datetime_range
-                    and end_datetime_range
-                    and datetime_range.lower
-                    and datetime_range.upper
-                    and end_datetime_range.lower
-                    and end_datetime_range.upper
-                ):
-                    partition = Partition(
-                        name=partition_name,
-                        collection=item["collection"],
-                        datetime_range_min=datetime_range.lower.isoformat(),
-                        datetime_range_max=datetime_range.upper.isoformat(),
-                        end_datetime_range_min=end_datetime_range.lower.isoformat(),
-                        end_datetime_range_max=end_datetime_range.upper.isoformat(),
-                        requires_update=False,
-                    )
+                partition = Partition(
+                    name=partition_name,
+                    collection=item["collection"],
+                    datetime_range_min=datetime_range_min.isoformat(),
+                    datetime_range_max=datetime_range_max.isoformat(),
+                    end_datetime_range_min=end_datetime_range_min.isoformat(),
+                    end_datetime_range_max=end_datetime_range_max.isoformat(),
+                    requires_update=False,
+                )
+
         else:
             partition = self._partition_cache[partition_name]
 

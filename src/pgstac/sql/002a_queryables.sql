@@ -221,6 +221,7 @@ DECLARE
     idx text;
     collection_partition bigint;
     _concurrently text := '';
+    idxname text;
 BEGIN
     RAISE NOTICE 'Maintaining partition: %', part;
     IF idxconcurrently THEN
@@ -329,13 +330,35 @@ BEGIN
             );
     END IF;
 
-    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_pk')) THEN
+    FOR idxname IN
+        SELECT indexname::text FROM pg_indexes
+        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree(id)'
+    LOOP
+        IF idxname != concat(part, '_pk') AND NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) THEN
+            RETURN NEXT format(
+                $f$ALTER INDEX IF EXISTS %I RENAME TO %I;$f$,
+                idxname,
+                concat(part, '_pk')
+            );
+        ELSIF EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) AND dropindexes THEN
+            RETURN NEXT format(
+                    $f$DROP INDEX IF EXISTS %I;$f$,
+                    idxname
+                );
+        END IF;
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT indexname::text FROM pg_indexes
+        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree (id)'
+        ) THEN
         RETURN NEXT format(
             $f$CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I USING BTREE(id);$f$,
             concat(part, '_pk'),
             part
             );
     END IF;
+
     DELETE FROM existing_indexes WHERE indexname::text IN (
         concat(part, '_datetime_end_datetime_idx'),
         concat(part, '_geometry_idx'),
