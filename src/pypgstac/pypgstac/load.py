@@ -474,10 +474,14 @@ class Loader:
                 self.db.query(
                     """
                     SELECT
-                        lower(constraint_dtrange) as datetime_range_min,
-                        upper(constraint_dtrange) as datetime_range_max,
-                        lower(constraint_edtrange) as end_datetime_range_min,
-                        upper(constraint_edtrange) as end_datetime_range_max
+                        nullif(lower(constraint_dtrange),'-infinity')
+                            as datetime_range_min,
+                        nullif(upper(constraint_dtrange),'infinity')
+                            as datetime_range_max,
+                        nullif(lower(constraint_edtrange),'-infinity')
+                            as end_datetime_range_min,
+                        nullif(upper(constraint_edtrange),'infinity')
+                            as end_datetime_range_max
                     FROM partitions WHERE partition=%s;
                     """,
                     [partition_name],
