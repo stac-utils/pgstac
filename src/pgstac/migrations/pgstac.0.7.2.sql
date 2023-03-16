@@ -1945,19 +1945,19 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
-CREATE OR REPLACE TRIGGER items_after_insert_trigger
+CREATE TRIGGER items_after_insert_trigger
 AFTER INSERT ON items
 REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
-CREATE OR REPLACE TRIGGER items_after_update_trigger
+CREATE TRIGGER items_after_update_trigger
 AFTER DELETE ON items
 REFERENCING OLD TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
-CREATE OR REPLACE TRIGGER items_after_delete_trigger
+CREATE TRIGGER items_after_delete_trigger
 AFTER UPDATE ON items
 REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
