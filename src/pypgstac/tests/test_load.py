@@ -403,3 +403,41 @@ def test_load_compatible_major_minor_version(loader: Loader) -> None:
             insert_mode=Methods.insert,
         )
         assert mock_version != loader.db.version
+
+
+def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
+    """Test pypgstac items loader."""
+    loader.load_collections(
+        str(TEST_COLLECTIONS),
+        insert_mode=Methods.upsert,
+    )
+    loader.load_items(
+        str(TEST_ITEMS),
+        insert_mode=Methods.insert,
+    )
+
+    cdtmin = loader.db.query_one(
+        """
+        SELECT lower(constraint_dtrange)::text
+        FROM partitions WHERE partition = '_items_1';
+        """,
+    )
+    assert cdtmin == "2011-07-31 00:00:00+00"
+    with loader.db.connect() as conn:
+        conn.execute(
+            """
+            ALTER TABLE _items_1 DROP CONSTRAINT _items_1_dt;
+            """,
+        )
+    cdtmin = loader.db.query_one(
+        """
+        SELECT lower(constraint_dtrange)::text
+        FROM partitions WHERE partition = '_items_1';
+        """,
+    )
+    assert cdtmin == "-infinity"
+
+    loader.load_items(
+        str(TEST_ITEMS),
+        insert_mode=Methods.upsert,
+    )

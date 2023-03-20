@@ -3,6 +3,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## [v0.7.2]
+
+### Fixed
+- Use version_parser for parsing versions in pypgstac
+- Fix issue with dropping functions/procedures in 0.6.13->0.7.0 migrations
+- Fix issue with CREATE OR REPLACE TRIGGER on PG 13
+- Fix issue identifying duplicate indexes in maintain_partition_queries function
+- Ensure that pgstac_read role has read permissions to all partitions
+- Fix issue (and add tests) caused by bug in psycopg datetime types not being able to translate 'infinity', '-infinity'
+
 
 ## [v0.7.1]
 

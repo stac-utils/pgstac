@@ -1,3 +1,4 @@
+RESET ROLE;
 DO $$
 DECLARE
 BEGIN
@@ -115,8 +116,20 @@ SET ROLE pgstac_admin;
 
 SET SEARCH_PATH TO pgstac, public;
 
-DROP FUNCTION IF EXISTS analyze_items;
-DROP FUNCTION IF EXISTS validate_constraints;
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS analyze_items;
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS validate_constraints;
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
 CREATE OR REPLACE FUNCTION to_int(jsonb) RETURNS int AS $$
     SELECT floor(($1->>0)::float)::int;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
@@ -463,14 +476,10 @@ CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
-    SELECT set_config(
-        'statement_timeout',
-        t2s(coalesce(
+    SELECT t2s(coalesce(
             get_setting('queue_timeout'),
             '1h'
-        )),
-        false
-    )::interval;
+        ))::interval;
 $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION notice(VARIADIC text[]) RETURNS boolean AS $$
@@ -764,6 +773,10 @@ CREATE TABLE IF NOT EXISTS stac_extensions(
     url text PRIMARY KEY,
     content jsonb
 );
+CREATE OR REPLACE FUNCTION queryable_signature(n text, c text[]) RETURNS text AS $$
+    SELECT concat(n, c);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text NOT NULL,
@@ -774,9 +787,82 @@ CREATE TABLE queryables (
     property_index_type text
 );
 CREATE INDEX queryables_name_idx ON queryables (name);
+CREATE INDEX queryables_collection_idx ON queryables USING GIN (collection_ids);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
+CREATE OR REPLACE FUNCTION queryables_constraint_triggerfunc() RETURNS TRIGGER AS $$
+DECLARE
+    allcollections text[];
+BEGIN
+    RAISE NOTICE 'Making sure that name/collection is unique for queryables';
+    IF NEW.collection_ids IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM
+                collections
+                LEFT JOIN
+                unnest(NEW.collection_ids) c
+                ON (collections.id = c)
+                WHERE c IS NULL
+        ) THEN
+            RAISE foreign_key_violation;
+            RETURN NULL;
+        END IF;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        IF EXISTS (
+            SELECT 1 FROM queryables q
+            WHERE
+                q.name = NEW.name
+                AND (
+                    q.collection_ids && NEW.collection_ids
+                    OR
+                    q.collection_ids IS NULL
+                    OR
+                    NEW.collection_ids IS NULL
+                )
+        ) THEN
+            RAISE unique_violation;
+            RETURN NULL;
+        END IF;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (
+            SELECT 1 FROM queryables q
+            WHERE
+                q.id != NEW.id
+                AND
+                q.name = NEW.name
+                AND (
+                    q.collection_ids && NEW.collection_ids
+                    OR
+                    q.collection_ids IS NULL
+                    OR
+                    NEW.collection_ids IS NULL
+                )
+        ) THEN
+            RAISE unique_violation
+            USING MESSAGE = format(
+                'There is already a queryable for %s for a collection in %s',
+                NEW.name,
+                NEW.collection_ids
+            );
+            RETURN NULL;
+        END IF;
+    END IF;
 
+    RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER queryables_constraint_insert_trigger
+BEFORE INSERT ON queryables
+FOR EACH ROW EXECUTE PROCEDURE queryables_constraint_triggerfunc();
+
+CREATE TRIGGER queryables_constraint_update_trigger
+BEFORE UPDATE ON queryables
+FOR EACH ROW
+WHEN (NEW.name = OLD.name AND NEW.collection_ids IS DISTINCT FROM OLD.collection_ids)
+EXECUTE PROCEDURE queryables_constraint_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
@@ -891,7 +977,8 @@ set check_function_bodies to off;
 CREATE OR REPLACE FUNCTION maintain_partition_queries(
     part text DEFAULT 'items',
     dropindexes boolean DEFAULT FALSE,
-    rebuildindexes boolean DEFAULT FALSE
+    rebuildindexes boolean DEFAULT FALSE,
+    idxconcurrently boolean DEFAULT FALSE
 ) RETURNS SETOF text AS $$
 DECLARE
     parent text;
@@ -909,9 +996,10 @@ DECLARE
     idx text;
     collection_partition bigint;
     _concurrently text := '';
+    idxname text;
 BEGIN
     RAISE NOTICE 'Maintaining partition: %', part;
-    IF get_setting_bool('use_queue') THEN
+    IF idxconcurrently THEN
         _concurrently='CONCURRENTLY';
     END IF;
 
@@ -973,12 +1061,6 @@ BEGIN
                 OR collection_ids = '{}'::text[]
                 OR collection.id = ANY (collection_ids)
             )
-        UNION ALL
-        SELECT 'datetime desc, end_datetime', 'BTREE', ''
-        UNION ALL
-        SELECT 'geometry', 'GIST', ''
-        UNION ALL
-        SELECT 'id', 'BTREE', ''
     LOOP
         baseidx := format(
             $q$ ON %I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
@@ -1002,8 +1084,61 @@ BEGIN
                 RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
             END IF;
         END LOOP;
+        IF NOT FOUND THEN
+            RAISE NOTICE 'CREATING INDEX for %', queryable_name;
+            RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+        END IF;
+    END LOOP;
+    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_datetime_end_datetime_idx')) THEN
+        RETURN NEXT format(
+            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING BTREE (datetime DESC, end_datetime ASC);$f$,
+            concat(part, '_datetime_end_datetime_idx'),
+            part
+            );
+    END IF;
+
+    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_geometry_idx')) THEN
+        RETURN NEXT format(
+            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING GIST (geometry);$f$,
+            concat(part, '_geometry_idx'),
+            part
+            );
+    END IF;
+
+    FOR idxname IN
+        SELECT indexname::text FROM pg_indexes
+        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree(id)'
+    LOOP
+        IF idxname != concat(part, '_pk') AND NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) THEN
+            RETURN NEXT format(
+                $f$ALTER INDEX IF EXISTS %I RENAME TO %I;$f$,
+                idxname,
+                concat(part, '_pk')
+            );
+        ELSIF EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) AND dropindexes THEN
+            RETURN NEXT format(
+                    $f$DROP INDEX IF EXISTS %I;$f$,
+                    idxname
+                );
+        END IF;
     END LOOP;
 
+    IF NOT EXISTS (
+        SELECT indexname::text FROM pg_indexes
+        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree (id)'
+        ) THEN
+        RETURN NEXT format(
+            $f$CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I USING BTREE(id);$f$,
+            concat(part, '_pk'),
+            part
+            );
+    END IF;
+
+    DELETE FROM existing_indexes WHERE indexname::text IN (
+        concat(part, '_datetime_end_datetime_idx'),
+        concat(part, '_geometry_idx'),
+        concat(part, '_pk')
+    );
     -- Remove indexes that were not expected
     FOR idx IN SELECT indexname::text FROM existing_indexes
     LOOP
@@ -2874,6 +3009,7 @@ DECLARE
     field text;
     dir text;
     sort record;
+    orfilter text := '';
     orfilters text[] := '{}'::text[];
     andfilters text[] := '{}'::text[];
     output text;
@@ -2894,6 +3030,10 @@ BEGIN
         END IF;
         prev := (_search->>'token' ILIKE 'prev:%');
         token_id := substr(_search->>'token', 6);
+        IF token_id IS NULL OR token_id = '' THEN
+            RAISE WARNING 'next or prev set, but no token id found';
+            RETURN NULL;
+        END IF;
         SELECT to_jsonb(items) INTO token_rec
         FROM items WHERE id=token_id;
     END IF;
@@ -2937,41 +3077,45 @@ BEGIN
     -- Check if all sorts are the same direction and use row comparison
     -- to filter
     RAISE NOTICE 'sorts 2: %', (SELECT jsonb_agg(to_json(sorts)) FROM sorts);
-
         FOR sort IN SELECT * FROM sorts ORDER BY _row asc LOOP
+            orfilter := NULL;
             RAISE NOTICE 'SORT: %', sort;
-            IF sort._row = 1 THEN
-                IF sort._val IS NULL THEN
-                    orfilters := orfilters || format('(%s IS NOT NULL)', sort._field);
-                ELSE
-                    orfilters := orfilters || format('(%s %s %s)',
-                        sort._field,
-                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                        sort._val
-                    );
-                END IF;
+            IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                orfilter := format($f$(
+                    (%s < %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._val
+                );
+            ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+                RAISE NOTICE '< but null';
+                orfilter := format('%s IS NOT NULL', sort._field);
+            ELSIF sort._val IS NULL THEN
+                RAISE NOTICE '> but null';
+                --orfilter := format('%s IS NULL', sort._field);
             ELSE
-                IF sort._val IS NULL THEN
-                    orfilters := orfilters || format('(%s AND %s IS NOT NULL)',
-                    array_to_string(andfilters, ' AND '), sort._field);
+                orfilter := format($f$(
+                    (%s > %s) OR (%s IS NULL)
+                )$f$,
+                sort._field,
+                sort._val,
+                sort._field
+                );
+            END IF;
+            RAISE NOTICE 'ORFILTER: %', orfilter;
+
+            IF orfilter IS NOT NULL THEN
+                IF sort._row = 1 THEN
+                    orfilters := orfilters || orfilter;
                 ELSE
-                    orfilters := orfilters || format('(%s AND %s %s %s)',
-                        array_to_string(andfilters, ' AND '),
-                        sort._field,
-                        CASE WHEN (prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC') THEN '<' ELSE '>' END,
-                        sort._val
-                    );
+                    orfilters := orfilters || format('(%s AND %s)', array_to_string(andfilters, ' AND '), orfilter);
                 END IF;
             END IF;
-            IF sort._val IS NULL THEN
-                andfilters := andfilters || format('%s IS NULL',
-                    sort._field
-                );
+            IF sort._val IS NOT NULL THEN
+                andfilters := andfilters || format('%s = %s', sort._field, sort._val);
             ELSE
-                andfilters := andfilters || format('%s = %s',
-                    sort._field,
-                    sort._val
-                );
+                andfilters := andfilters || format('%s IS NULL', sort._field);
             END IF;
         END LOOP;
         output := array_to_string(orfilters, ' OR ');
@@ -2981,10 +3125,11 @@ BEGIN
     IF trim(token_where) = '' THEN
         token_where := NULL;
     END IF;
-    RAISE NOTICE 'TOKEN_WHERE: |%|',token_where;
+    RAISE NOTICE 'TOKEN_WHERE: %',token_where;
     RETURN token_where;
     END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
+;
 
 CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
     SELECT $1 - '{token,limit,context,includes,excludes}'::text[];
@@ -3215,28 +3360,6 @@ DECLARE
     id text;
 BEGIN
 CREATE TEMP TABLE results (i int GENERATED ALWAYS AS IDENTITY, content jsonb) ON COMMIT DROP;
--- if ids is set, short circuit and just use direct ids query for each id
--- skip any paging or caching
--- hard codes ordering in the same order as the array of ids
-IF _search ? 'ids' THEN
-    INSERT INTO results (content)
-    SELECT
-        CASE WHEN _search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true THEN
-            content_nonhydrated(items, _search->'fields')
-        ELSE
-            content_hydrate(items, _search->'fields')
-        END
-    FROM items WHERE
-        items.id = ANY(to_text_array(_search->'ids'))
-        AND
-            CASE WHEN _search ? 'collections' THEN
-                items.collection = ANY(to_text_array(_search->'collections'))
-            ELSE TRUE
-            END
-    ORDER BY items.datetime desc, items.id desc
-    ;
-    SELECT INTO total_count count(*) FROM results;
-ELSE
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
@@ -3292,7 +3415,6 @@ ELSE
         EXIT WHEN exit_flag;
     END LOOP;
     RAISE NOTICE 'Scanned through % partitions.', batches;
-END IF;
 
 WITH ordered AS (SELECT * FROM results WHERE content IS NOT NULL ORDER BY i)
 SELECT jsonb_agg(content) INTO out_records FROM ordered;
@@ -3572,7 +3694,6 @@ CREATE OR REPLACE FUNCTION xyzsearch(
     );
 $$ LANGUAGE SQL;
 
-DROP FUNCTION IF EXISTS analyze_items;
 CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
     q text;
@@ -3580,7 +3701,6 @@ DECLARE
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        RAISE NOTICE '% % %', clock_timestamp(), timeout_ts, current_setting('statement_timeout', TRUE);
         SELECT format('ANALYZE (VERBOSE, SKIP_LOCKED) %I;', relname) INTO q
         FROM pg_stat_user_tables
         WHERE relname like '_item%' AND (n_mod_since_analyze>0 OR last_analyze IS NULL) LIMIT 1;
@@ -3590,13 +3710,11 @@ BEGIN
         RAISE NOTICE '%', q;
         EXECUTE q;
         COMMIT;
-        RAISE NOTICE '%', queue_timeout();
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
 
 
-DROP FUNCTION IF EXISTS validate_constraints;
 CREATE OR REPLACE PROCEDURE validate_constraints() AS $$
 DECLARE
     q text;
@@ -3664,15 +3782,44 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
-INSERT INTO queryables (name, definition) VALUES
-('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'),
-('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}'),
-('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}')
-ON CONFLICT DO NOTHING;
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
 
-INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE')
-ON CONFLICT DO NOTHING;
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}', null, null);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DO $$
+  BEGIN
+    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
+    ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE');
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+DELETE FROM queryables a USING queryables b
+  WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
 
 
 INSERT INTO pgstac_settings (name, value) VALUES
@@ -3684,7 +3831,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
-  ('update_collection_extent', 'true')
+  ('update_collection_extent', 'false')
 ON CONFLICT DO NOTHING
 ;
 
@@ -3698,10 +3845,12 @@ GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
+GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
+
 
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
 SELECT update_partition_stats_q(partition) FROM partitions;
-SELECT set_version('0.7.0');
+SELECT set_version('0.7.2');
