@@ -207,6 +207,7 @@ BEGIN
     IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
         q :=format(
             $q$
+                ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
                 ALTER TABLE %I
                     ADD CONSTRAINT %I
                         CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
@@ -218,11 +219,14 @@ BEGIN
             t,
             format('%s_dt', t),
             t,
+            format('%s_dt', t),
+            t,
             format('%s_dt', t)
         );
     ELSE
         q :=format(
             $q$
+                ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
                 ALTER TABLE %I
                     ADD CONSTRAINT %I
                         CHECK (
@@ -236,6 +240,8 @@ BEGIN
                     VALIDATE CONSTRAINT %I
                 ;
             $q$,
+            t,
+            format('%s_dt', t),
             t,
             format('%s_dt', t),
             lower(_dtrange),
