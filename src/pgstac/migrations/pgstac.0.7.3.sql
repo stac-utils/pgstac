@@ -2404,38 +2404,54 @@ BEGIN
     IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
         q :=format(
             $q$
-                ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-                ALTER TABLE %I
-                    ADD CONSTRAINT %I
-                        CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
-                ;
-                ALTER TABLE %I
-                    VALIDATE CONSTRAINT %I
-                ;
+                DO $block$
+                BEGIN
+                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+                    ALTER TABLE %I
+                        ADD CONSTRAINT %I
+                            CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
+                    ;
+                    ALTER TABLE %I
+                        VALIDATE CONSTRAINT %I
+                    ;
+
+                EXCEPTION WHEN others THEN
+                    RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
+                END;
+                $block$;
             $q$,
             t,
             format('%s_dt', t),
             t,
             format('%s_dt', t),
             t,
-            format('%s_dt', t)
+            format('%s_dt', t),
+            t
         );
     ELSE
         q :=format(
             $q$
-                ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-                ALTER TABLE %I
-                    ADD CONSTRAINT %I
-                        CHECK (
-                            (datetime >= %L)
-                            AND (datetime <= %L)
-                            AND (end_datetime >= %L)
-                            AND (end_datetime <= %L)
-                        ) NOT VALID
-                ;
-                ALTER TABLE %I
-                    VALIDATE CONSTRAINT %I
-                ;
+                DO $block$
+                BEGIN
+
+                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
+                    ALTER TABLE %I
+                        ADD CONSTRAINT %I
+                            CHECK (
+                                (datetime >= %L)
+                                AND (datetime <= %L)
+                                AND (end_datetime >= %L)
+                                AND (end_datetime <= %L)
+                            ) NOT VALID
+                    ;
+                    ALTER TABLE %I
+                        VALIDATE CONSTRAINT %I
+                    ;
+
+                EXCEPTION WHEN others THEN
+                    RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
+                END;
+                $block$;
             $q$,
             t,
             format('%s_dt', t),
@@ -2446,7 +2462,8 @@ BEGIN
             lower(_edtrange),
             upper(_edtrange),
             t,
-            format('%s_dt', t)
+            format('%s_dt', t),
+            t
         );
     END IF;
     PERFORM run_or_queue(q);
