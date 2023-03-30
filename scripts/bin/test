@@ -101,7 +101,7 @@ TEMPLATEDB=${1:-pgstac_test_db_template}
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 EOSQL
-    pytest --tb=no tests -o cache_dir=/tmp/.pytest_cache
+    pytest tests -o cache_dir=/tmp/.pytest_cache
     psql -X -q -c "DROP DATABASE pgstac_test_pypgstac WITH (force)";
 }
 

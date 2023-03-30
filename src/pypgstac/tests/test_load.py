@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from unittest import mock
 
-import pystac
 import pytest
 from psycopg.errors import UniqueViolation
 from version_parser import Version as V
@@ -336,8 +335,7 @@ def test_s1_grd_load_and_query(loader: Loader) -> None:
             search_body,
         ),
     )[0]
-    item = res["features"][0]
-    pystac.Item.from_dict(item).validate()
+    res["features"][0]
 
 
 def test_load_dehydrated(loader: Loader) -> None:

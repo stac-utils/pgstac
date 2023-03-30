@@ -36,10 +36,9 @@ SELECT results_eq(
 );
 
 SELECT lives_ok(
-    $$ DELETE FROM queryables WHERE name = 'testqueryable'; $$,
+    $$ DELETE FROM queryables WHERE name IN ('testqueryable', 'testqueryable2'); $$,
     'Make sure test queryable does not exist.'
 );
-
 
 SELECT lives_ok(
     $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', null); $$,
@@ -47,7 +46,7 @@ SELECT lives_ok(
 );
 
 SELECT throws_ok(
-    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', '{nonexistent}'); $$,
+    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable2', '{nonexistent}'); $$,
     '23503',
     'foreign_key_violation',
     'Cannot add queryable for non-existent collection.'

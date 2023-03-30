@@ -155,24 +155,64 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
 
+CREATE OR REPLACE FUNCTION unnest_collection(collection_ids text[] DEFAULT NULL) RETURNS SETOF text AS $$
+    DECLARE
+    BEGIN
+        IF collection_ids IS NULL THEN
+            RETURN QUERY SELECT id FROM collections;
+        END IF;
+        RETURN QUERY SELECT unnest(collection_ids);
+    END;
+$$ LANGUAGE PLPGSQL STABLE;
 
-DROP VIEW IF EXISTS pgstac_index;
+CREATE OR REPLACE FUNCTION normalize_indexdef(def text) RETURNS text AS $$
+DECLARE
+BEGIN
+    def := btrim(def, ' \n\t');
+	def := regexp_replace(def, '^CREATE (UNIQUE )?INDEX ([^ ]* )?ON (ONLY )?([^ ]* )?', '', 'i');
+    RETURN def;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
+    DECLARE
+        out text;
+    BEGIN
+        IF q.name = 'id' THEN
+            out := 'CREATE UNIQUE INDEX ON %I USING btree (id)';
+        ELSIF q.name = 'datetime' THEN
+            out := 'CREATE INDEX ON %I USING btree (datetime DESC, end_datetime)';
+        ELSIF q.name = 'geometry' THEN
+            out := 'CREATE INDEX ON %I USING gist (geometry)';
+        ELSE
+            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                lower(COALESCE(q.property_wrapper, 'to_text')),
+                q.name
+            );
+        END IF;
+        RETURN btrim(out, ' \n\t');
+    END;
+$$ LANGUAGE PLPGSQL IMMUTABLE;
+
+
+DROP VIEW IF EXISTS pgstac_indexes;
 CREATE VIEW pgstac_indexes AS
 SELECT
     i.schemaname,
     i.tablename,
     i.indexname,
-    indexdef,
+    regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
         (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
-        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
+        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+        CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
     pg_size_pretty(pg_table_size(i.indexname::text)) as index_size_pretty
 FROM
     pg_indexes i
-WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
+WHERE i.schemaname='pgstac' and i.tablename ~ '_items_' AND indexdef !~* ' only ';
 
 DROP VIEW IF EXISTS pgstac_index_stats;
 CREATE VIEW pgstac_indexes_stats AS
@@ -206,177 +246,76 @@ CREATE OR REPLACE FUNCTION maintain_partition_queries(
     idxconcurrently boolean DEFAULT FALSE
 ) RETURNS SETOF text AS $$
 DECLARE
-    parent text;
-    level int;
-    isleaf bool;
-    collection collections%ROWTYPE;
-    subpart text;
-    baseidx text;
-    queryable_name text;
-    queryable_property_index_type text;
-    queryable_property_wrapper text;
-    queryable_parsed RECORD;
-    deletedidx pg_indexes%ROWTYPE;
-    q text;
-    idx text;
-    collection_partition bigint;
-    _concurrently text := '';
-    idxname text;
+   rec record;
 BEGIN
-    RAISE NOTICE 'Maintaining partition: %', part;
-    IF idxconcurrently THEN
-        _concurrently='CONCURRENTLY';
-    END IF;
-
-    -- Get root partition
-    SELECT parentrelid::text, pt.isleaf, pt.level
-        INTO parent, isleaf, level
-    FROM pg_partition_tree('items') pt
-    WHERE relid::text = part;
-    IF NOT FOUND THEN
-        RAISE NOTICE 'Partition % Does Not Exist In Partition Tree', part;
-        RETURN;
-    END IF;
-
-    -- If this is a parent partition, recurse to leaves
-    IF NOT isleaf THEN
-        FOR subpart IN
-            SELECT relid::text
-            FROM pg_partition_tree(part)
-            WHERE relid::text != part
-        LOOP
-            RAISE NOTICE 'Recursing to %', subpart;
-            RETURN QUERY SELECT * FROM maintain_partition_queries(subpart, dropindexes, rebuildindexes);
-        END LOOP;
-        RETURN; -- Don't continue since not an end leaf
-    END IF;
-
-
-    -- Get collection
-    collection_partition := ((regexp_match(part, E'^_items_([0-9]+)'))[1])::bigint;
-    RAISE NOTICE 'COLLECTION PARTITION: %', collection_partition;
-    SELECT * INTO STRICT collection
-    FROM collections
-    WHERE key = collection_partition;
-    RAISE NOTICE 'COLLECTION ID: %s', collection.id;
-
-
-    -- Create temp table with existing indexes
-    CREATE TEMP TABLE existing_indexes ON COMMIT DROP AS
-    SELECT *
-    FROM pg_indexes
-    WHERE schemaname='pgstac' AND tablename=part;
-
-
-    -- Check if index exists for each queryable.
-    FOR
-        queryable_name,
-        queryable_property_index_type,
-        queryable_property_wrapper
-    IN
-        SELECT
-            name,
-            COALESCE(property_index_type, 'BTREE'),
-            COALESCE(property_wrapper, 'to_text')
-        FROM queryables
-        WHERE
-            name NOT in ('id', 'datetime', 'geometry')
-            AND (
-                collection_ids IS NULL
-                OR collection_ids = '{}'::text[]
-                OR collection.id = ANY (collection_ids)
-            )
-    LOOP
-        baseidx := format(
-            $q$ ON %I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
-            part,
-            queryable_property_index_type,
-            queryable_property_wrapper,
-            queryable_name
-        );
-        RAISE NOTICE 'BASEIDX: %', baseidx;
-        RAISE NOTICE 'IDXSEARCH: %', format($q$[(']%s[')]$q$, queryable_name);
-        -- If index already exists, delete it from existing indexes type table
-        FOR deletedidx IN
-            DELETE FROM existing_indexes
-            WHERE indexdef ~* format($q$[(']%s[')]$q$, queryable_name)
-            RETURNING *
-        LOOP
-            RAISE NOTICE 'EXISTING INDEX: %', deletedidx;
-            IF NOT FOUND THEN -- index did not exist, create it
-                RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
-            ELSIF rebuildindexes THEN
-                RETURN NEXT format('REINDEX %I %s;', deletedidx.indexname, _concurrently);
+    FOR rec IN (
+        WITH p AS (
+           SELECT
+                relid::text as partition,
+                replace(replace(
+                    CASE
+                        WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
+                        ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                    END,
+                    'FOR VALUES IN (''',''), ''')',
+                    ''
+                ) AS collection
+            FROM pg_partition_tree('items')
+            JOIN pg_class c ON (relid::regclass = c.oid)
+            JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+        ), i AS (
+            SELECT
+                partition,
+                indexname,
+                regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+                COALESCE(
+                    (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+                    (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                    CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+                ) AS field
+            FROM
+                pg_indexes
+                JOIN p ON (tablename=partition)
+        ), q AS (
+            SELECT
+                name AS field,
+                collection,
+                partition,
+                format(indexdef(queryables), partition) as qidx
+            FROM queryables, unnest_collection(queryables.collection_ids) collection
+                JOIN p USING (collection)
+            WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+        )
+        SELECT * FROM i FULL JOIN q USING (field, partition)
+        WHERE lower(iidx) IS DISTINCT FROM lower(qidx)
+    ) LOOP
+        IF rec.iidx IS NULL THEN
+            IF idxconcurrently THEN
+                RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
+            ELSE
+                RETURN NEXT rec.qidx;
             END IF;
-        END LOOP;
-        IF NOT FOUND THEN
-            RAISE NOTICE 'CREATING INDEX for %', queryable_name;
-            RETURN NEXT format('CREATE INDEX %s %s;', _concurrently, baseidx);
+        ELSIF rec.qidx IS NULL AND dropindexes THEN
+            RETURN NEXT format('DROP INDEX IF EXISTS %I;', rec.indexname);
+        ELSIF lower(rec.qidx) != lower(rec.iidx) THEN
+            IF dropindexes THEN
+                RETURN NEXT format('DROP INDEX IF EXISTS %I; %s;', rec.indexname, rec.qidx);
+            ELSE
+                IF idxconcurrently THEN
+                    RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
+                ELSE
+                    RETURN NEXT rec.qidx;
+                END IF;
+            END IF;
+        ELSIF rebuildindexes and rec.indexname IS NOT NULL THEN
+            IF idxconcurrently THEN
+                RETURN NEXT format('REINDEX INDEX CONCURRENTLY %I;', rec.indexname);
+            ELSE
+                RETURN NEXT format('REINDEX INDEX %I;', rec.indexname);
+            END IF;
         END IF;
     END LOOP;
-    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_datetime_end_datetime_idx')) THEN
-        RETURN NEXT format(
-            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING BTREE (datetime DESC, end_datetime ASC);$f$,
-            concat(part, '_datetime_end_datetime_idx'),
-            part
-            );
-    END IF;
-
-    IF NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part, '_geometry_idx')) THEN
-        RETURN NEXT format(
-            $f$CREATE INDEX IF NOT EXISTS %I ON %I USING GIST (geometry);$f$,
-            concat(part, '_geometry_idx'),
-            part
-            );
-    END IF;
-
-    FOR idxname IN
-        SELECT indexname::text FROM pg_indexes
-        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree(id)'
-    LOOP
-        IF idxname != concat(part, '_pk') AND NOT EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) THEN
-            RETURN NEXT format(
-                $f$ALTER INDEX IF EXISTS %I RENAME TO %I;$f$,
-                idxname,
-                concat(part, '_pk')
-            );
-        ELSIF EXISTS (SELECT * FROM pg_indexes WHERE indexname::text = concat(part,'_pk')) AND dropindexes THEN
-            RETURN NEXT format(
-                    $f$DROP INDEX IF EXISTS %I;$f$,
-                    idxname
-                );
-        END IF;
-    END LOOP;
-
-    IF NOT EXISTS (
-        SELECT indexname::text FROM pg_indexes
-        WHERE tablename::text = part AND indexdef ILIKE 'CREATE UNIQUE INDEX % USING btree (id)'
-        ) THEN
-        RETURN NEXT format(
-            $f$CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I USING BTREE(id);$f$,
-            concat(part, '_pk'),
-            part
-            );
-    END IF;
-
-    DELETE FROM existing_indexes WHERE indexname::text IN (
-        concat(part, '_datetime_end_datetime_idx'),
-        concat(part, '_geometry_idx'),
-        concat(part, '_pk')
-    );
-    -- Remove indexes that were not expected
-    FOR idx IN SELECT indexname::text FROM existing_indexes
-    LOOP
-        RAISE WARNING 'Index: % is not defined by queryables.', idx;
-        IF dropindexes THEN
-            RETURN NEXT format('DROP INDEX IF EXISTS %I;', idx);
-        END IF;
-    END LOOP;
-
-    DROP TABLE existing_indexes;
-    RAISE NOTICE 'Returning from maintain_partition_queries.';
     RETURN;
-
 END;
 $$ LANGUAGE PLPGSQL;
 
