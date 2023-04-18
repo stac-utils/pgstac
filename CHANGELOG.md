@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.4]
+
+### Added
+- Add --v and --vv options to scripts/test to change logging to notice / log when running tests.
+- Add framework for option to cache expensive item formatting/hydrating calls. Note: this only provides functionality to add and read from the cached calls, but does not have any wiring to remove any entries from the cache.
+- Update the costs for json formatting functions to 5000 to help the query planner choose to prefer using indexes on json fields.
+
+### Fixed
+- Fix bug in foreign key and unique collection detection in queryables trigger function, update tests to catch.
+- Add collection id to tokens to ensure uniqueness and improve speed when looking up token values. Update tests to use the new keys. Old item id only tokens are still valid, but new results will all contain the new keys.
+- Improve performance when looking for whether next/prev links should be added.
+- Update Search function to remove the use of cursors and temp tables.
+- Update get_token_filter to remove the use of temp tables.
+
+
 ## [v0.7.3]
 
 ### Fixed
