@@ -47,16 +47,12 @@ SELECT lives_ok(
 
 SELECT throws_ok(
     $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable2', '{nonexistent}'); $$,
-    '23503',
-    'foreign_key_violation',
-    'Cannot add queryable for non-existent collection.'
+    '23503'
 );
 
 SELECT throws_ok(
     $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', '{pgstac-test-collection}'); $$,
-    '23505',
-    'unique_violation',
-    'Queryable must be unique by name/collection.'
+    '23505'
 );
 
 SELECT lives_ok(

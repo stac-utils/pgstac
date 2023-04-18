@@ -28,6 +28,9 @@ BEGIN
     LOOP
         PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
     END LOOP;
+    IF TG_OP IN ('DELETE','UPDATE') THEN
+        DELETE FROM format_item_cache c USING newdata n WHERE c.collection = n.collection AND c.id = n.id;
+    END IF;
     RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
