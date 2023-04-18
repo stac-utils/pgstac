@@ -16,6 +16,7 @@ RUN set -ex \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         postgresql-$PG_MAJOR-pgtap \
         postgresql-$PG_MAJOR-partman \
+        postgresql-$PG_MAJOR-plpgsql-check \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/* \

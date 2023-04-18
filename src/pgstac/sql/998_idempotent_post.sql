@@ -47,9 +47,16 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
-  ('update_collection_extent', 'false')
+  ('update_collection_extent', 'false'),
+  ('format_cache', 'false')
 ON CONFLICT DO NOTHING
 ;
+
+ALTER FUNCTION to_text COST 5000;
+ALTER FUNCTION to_float COST 5000;
+ALTER FUNCTION to_int COST 5000;
+ALTER FUNCTION to_tstz COST 5000;
+ALTER FUNCTION to_text_array COST 5000;
 
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;

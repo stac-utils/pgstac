@@ -581,7 +581,9 @@ BEGIN
             EXIT;
         END IF;
         searchfilter := searchfilter || jsonb_build_object('token', concat('next:',searchresult->>'next'));
+        RAISE NOTICE 'SEARCHFILTER: %', searchfilter;
         searchresult := search(searchfilter);
+        RAISE NOTICE 'SEARCHRESULT: %', searchresult;
         RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
         page := page + 10;
     END LOOP;
@@ -595,7 +597,9 @@ BEGIN
         END IF;
         page := page - 10;
         searchfilter := searchfilter || jsonb_build_object('token', concat('prev:',searchresult->>'prev'));
+        RAISE NOTICE 'SEARCHFILTER: %', searchfilter;
         searchresult := search(searchfilter);
+        RAISE NOTICE 'SEARCHRESULT: %', searchresult;
         RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
         EXECUTE format($q$
                 WITH t AS (

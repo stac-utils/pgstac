@@ -47,6 +47,7 @@ cd /opt/src/pgstac
 TEMPLATEDB=${1:-pgstac_test_db_template}
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 CREATE DATABASE pgstac_test_pgtap TEMPLATE $TEMPLATEDB;
+ALTER DATABASE pgstac_test_pgtap SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
 TESTOUTPUT=$(psql -X -q -v ON_ERROR_STOP=1 -f /opt/src/pgstac/tests/pgtap.sql pgstac_test_pgtap)
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
@@ -67,7 +68,8 @@ TEMPLATEDB=${1:-pgstac_test_db_template}
 cd /opt/src/pgstac
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 CREATE DATABASE pgstac_test_basicsql TEMPLATE $TEMPLATEDB;
-ALTER DATABASE pgstac_test_basicsql SET search_path to pgstac, public;ALTER DATABASE pgstac_test_basicsql SET client_min_messages to warning;
+ALTER DATABASE pgstac_test_basicsql SET search_path to pgstac, public;
+ALTER DATABASE pgstac_test_basicsql SET client_min_messages to $CLIENTMESSAGES;
 ALTER DATABASE pgstac_test_basicsql SET pgstac.context to 'on';
 ALTER DATABASE pgstac_test_basicsql SET pgstac."default_filter_lang" TO 'cql-json';
 \connect pgstac_test_basicsql
@@ -100,6 +102,7 @@ TEMPLATEDB=${1:-pgstac_test_db_template}
     cd /opt/src/pypgstac
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
+ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
     pytest tests -o cache_dir=/tmp/.pytest_cache
     psql -X -q -c "DROP DATABASE pgstac_test_pypgstac WITH (force)";
@@ -108,7 +111,8 @@ EOSQL
 function test_migrations(){
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 CREATE DATABASE pgstac_test_migration;
-ALTER DATABASE pgstac_test_migration SET search_path to pgstac, public;ALTER DATABASE pgstac_test_migration SET client_min_messages to warning;
+ALTER DATABASE pgstac_test_migration SET search_path to pgstac, public;
+ALTER DATABASE pgstac_test_migration SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.1.9"
@@ -131,17 +135,10 @@ PGTAP=0
 BASICSQL=0
 PYPGSTAC=0
 MIGRATIONS=0
+MESSAGENOTICE=0
+MESSAGELOG=0
 
-if [ $# -eq 0 ]
-then
-    FORMATTING=1
-    SETUPDB=1
-    PGTAP=1
-    BASICSQL=1
-    PYPGSTAC=1
-    MIGRATIONS=1
-else
-    while [[ $# -gt 0 ]]
+while [[ $# -gt 0 ]]
     do
         key="$1"
         case $key in
@@ -149,6 +146,16 @@ else
             --help)
             usage
             exit 0
+            shift
+            ;;
+
+            --v)
+            MESSAGENOTICE=1
+            shift
+            ;;
+
+            --vv)
+            MESSAGELOG=1
             shift
             ;;
 
@@ -186,7 +193,6 @@ else
             PGTAP=1
             BASICSQL=1
             PYPGSTAC=1
-
             shift
             ;;
 
@@ -196,6 +202,21 @@ else
             ;;
         esac
     done
+
+
+CLIENTMESSAGES='warning'
+[ $MESSAGENOTICE -eq 1 ] && CLIENTMESSAGES='notice'
+[ $MESSAGELOG -eq 1 ] && CLIENTMESSAGES='log'
+echo $CLIENTMESSAGES
+
+if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) ]]
+then
+    FORMATTING=1
+    SETUPDB=1
+    PGTAP=1
+    BASICSQL=1
+    PYPGSTAC=1
+    MIGRATIONS=1
 fi
 
 [ $FORMATTING -eq 1 ] && test_formatting

@@ -15,11 +15,11 @@ CREATE INDEX queryables_name_idx ON queryables (name);
 CREATE INDEX queryables_collection_idx ON queryables USING GIN (collection_ids);
 CREATE INDEX queryables_property_wrapper_idx ON queryables (property_wrapper);
 
-CREATE OR REPLACE FUNCTION queryables_constraint_triggerfunc() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION pgstac.queryables_constraint_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     allcollections text[];
 BEGIN
-    RAISE NOTICE 'Making sure that name/collection is unique for queryables';
+    RAISE NOTICE 'Making sure that name/collection is unique for queryables %', NEW;
     IF NEW.collection_ids IS NOT NULL THEN
         IF EXISTS (
             SELECT 1 FROM
@@ -29,7 +29,9 @@ BEGIN
                 ON (collections.id = c)
                 WHERE c IS NULL
         ) THEN
-            RAISE foreign_key_violation;
+            RAISE foreign_key_violation USING MESSAGE = format(
+                'One or more collections in %s do not exist.', NEW.collection_ids
+            );
             RETURN NULL;
         END IF;
     END IF;
@@ -46,7 +48,20 @@ BEGIN
                     NEW.collection_ids IS NULL
                 )
         ) THEN
-            RAISE unique_violation;
+            RAISE unique_violation USING MESSAGE = format(
+                'There is already a queryable for %s for a collection in %s: %s',
+                NEW.name,
+                NEW.collection_ids,
+				(SELECT json_agg(row_to_json(q)) FROM queryables q WHERE
+                q.name = NEW.name
+                AND (
+                    q.collection_ids && NEW.collection_ids
+                    OR
+                    q.collection_ids IS NULL
+                    OR
+                    NEW.collection_ids IS NULL
+                ))
+            );
             RETURN NULL;
         END IF;
     END IF;
