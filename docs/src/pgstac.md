@@ -100,7 +100,7 @@ In general, you should aim to keep each partition less than a few hundred thousa
 
 By default, PGStac includes indexes on the id, datetime, collection, geometry, and the eo:cloud_cover property. Further indexing can be added for additional properties globally or only on particular collections by modifications to the queryables table.
 
-The queryables table controls the indexes that PGStac will build to as well as the metadata that is returned to return as a [STAC Queryables endpoint](https://github.com/stac-api-extensions/filter#queryables).
+The `queryables` table controls the indexes that PGStac will build as well as the metadata that is returned from a [STAC Queryables endpoint](https://github.com/stac-api-extensions/filter#queryables).
 
 | Column                | Description                                                              | Type       | Example                                                                                                            |
 |-----------------------|--------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------|
