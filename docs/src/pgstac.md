@@ -99,8 +99,11 @@ In general, you should aim to keep each partition less than a few hundred thousa
 #### PGStac Indexes / Queryables
 By default, PGStac includes indexes on the id, datetime, collection, geometry, and the eo:cloud_cover property. Further indexing can be added for additional properties globally or only on particular collections by modifications to the queryables table.
 
-Currently indexing is the only place the queryables table is used, but in future versions, it will be extended to provide a queryables backend api.
+The queryables table controls the indexes that PGStac will build to as well as the metadata that is returned to return as a Stac Queryables endpoint.
 
+Each record in the queryables table references a property and can apply to any number of collections. If the collection_ids field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
+
+ ##### Indexing
 To add a new global index across all partitions:
 ```sql
 INSERT INTO pgstac.queryables (name, property_wrapper, property_index_type)
@@ -108,7 +111,19 @@ VALUES (<property name>, <property wrapper>, <index type>);
 ```
 Property wrapper should be one of to_int, to_float, to_tstz, or to_text. The index type should almost always be 'BTREE', but can be any PostgreSQL index type valid for the data type.
 
-**More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
+**More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes. Leave property_index_type set to NULL if you do not need an index set for a property.
+
+##### Queryable Metadata
+Metadata returned for use in queryables endpoints is determined using the definition field on the queryables table. This is a jsonb field that will be returned as-is in a queryables response.
+
+There is a utility function that can be used to help fill in the queryables table by looking at a sample of data for each collection. This utility can also look to the json schema for STAC extensions that are in the stac_extensions table.
+
+The stac_extensions table contains a url field and a content field for each extension that should be introspected to compare for fields. This can either be filled in manually or by using the `pypgstac loadextensions` command included with pypgstac. This command will look at the stac_extensions attribute in all collections to populate the stac_extensions table, fetching the json content of each extension. If any urls were added manually to the stac_extensions table, it will also populate any records where the content is NULL.
+
+Once the stac_extensions table has been filled in, you can run the missing_queryables function either just for a single collection `SELECT * FROM missing_queryables('mycollection', 5);` or for all collections `SELECT * FROM missing_queryables(5);`. The numeric argument is the approximate percent of items that should be scanned to look for fields to include. This function will look for fields in the properties of items that do not already exist in the queryables table for each collection. It will then look to see if there is a field in any definition in the stac_extensions table to populate the definition for the queryable. If no definition was found, it will use the type of the values for that field in the sample of items to fill in a generic definition with just the field type.
+
+In order to populate the queryables table, you can then run `INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM missing_queryables(5);`. If you run into conflicts due to the unique constraints on collection/name, you may need to create a temp table, make any changes to remove the conflicts, and then INSERT. `CREATE TEMP TABLE draft_queryables AS SELECT * FROM missing_queryables(5);` Make any edits to that table or the existing queryables. `INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM draft_queryables;`
+
 
 ### Maintenance Procedures
 These are procedures that should be run periodically to make sure that statistics and constraints are kept up-to-date and validated. These can be made to run regularly using the pg_cron extension if available.
