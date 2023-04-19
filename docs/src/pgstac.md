@@ -12,7 +12,7 @@ PGStac installs everything into the pgstac schema in the database. This schema m
 #### PGStac Users
 The pgstac_admin role is the owner of all the objects within pgstac and should be used when running things such as migrations.
 
-The pgstac_ingest role has read/write priviliges on all tables and should be used for data ingest or if using the transactions extension with stac-fastapi-pgstac.
+The pgstac_ingest role has read/write privileges on all tables and should be used for data ingest or if using the transactions extension with stac-fastapi-pgstac.
 
 The pgstac_read role has read only access to the items and collections, but will still be able to write to the logging tables.
 
@@ -51,7 +51,7 @@ The context is "off" by default, and the default filter language is set to "cql2
 
 Variables can be set either by passing them in via the connection options using your connection library, setting them in the pgstac_settings table or by setting them on the Role that is used to log in to the database.
 
-Turning "context" on can be **very** expensive on larger databases. Much of what PGStac does is to optimize the search of items sorted by time where only fewer than 10,000 records are returned at a time. It does this by searching for the data in chunks and is able to "short circuit" and return as soon as it has the number of records requested. Calculating the context (the total count for a query) requires a scan of all records that match the query parameters and can take a very long time. Settting "context" to auto will use database statistics to estimate the number of rows much more quickly, but for some queries, the estimate may be quite a bit off.
+Turning "context" on can be **very** expensive on larger databases. Much of what PGStac does is to optimize the search of items sorted by time where only fewer than 10,000 records are returned at a time. It does this by searching for the data in chunks and is able to "short circuit" and return as soon as it has the number of records requested. Calculating the context (the total count for a query) requires a scan of all records that match the query parameters and can take a very long time. Setting "context" to auto will use database statistics to estimate the number of rows much more quickly, but for some queries, the estimate may be quite a bit off.
 
 Example for updating the pgstac_settings table with a new value:
 ```sql
@@ -72,7 +72,7 @@ ALTER ROLE <username> SET pgstac.context_estimated_cost TO '<estimated query cos
 ALTER ROLE <username> SET pgstac.context_stats_ttl TO '<an interval string ie "1 day" after which pgstac search will force recalculation of it's estimates>>';
 ```
 
-The check_pgstac_settings function can be used to check what pgstac settings are being used and to check recomendations for system settings. It takes a single parameter which should be the amount of memory available on the database system.
+The check_pgstac_settings function can be used to check what pgstac settings are being used and to check recommendations for system settings. It takes a single parameter which should be the amount of memory available on the database system.
 ```sql
 SELECT check_pgstac_settings('16GB');
 ```
@@ -97,35 +97,81 @@ UPDATE collections set partition_trunc='month' WHERE id='<collection id>';
 In general, you should aim to keep each partition less than a few hundred thousand rows. Further partitioning (ie setting everything to 'month' when not needed to keep the partitions below a few hundred thousand rows) can be detrimental.
 
 #### PGStac Indexes / Queryables
+
 By default, PGStac includes indexes on the id, datetime, collection, geometry, and the eo:cloud_cover property. Further indexing can be added for additional properties globally or only on particular collections by modifications to the queryables table.
 
-The queryables table controls the indexes that PGStac will build to as well as the metadata that is returned to return as a Stac Queryables endpoint.
+The queryables table controls the indexes that PGStac will build to as well as the metadata that is returned to return as a [STAC Queryables endpoint](https://github.com/stac-api-extensions/filter#queryables).
 
-Each record in the queryables table references a property and can apply to any number of collections. If the collection_ids field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
+| Column                | Description                                                              | Type       | Example                                                                                                            |
+|-----------------------|--------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------|
+| `id`                  | The id of the queryable                                                  | bigint[pk] | -                                                                                                                  |
+| `name`                | The name of the property                                                 | text       | `eo:cloud_cover`j                                                                                                  |
+| `collection_ids`      | The collection ids that this queryable applies to                        | text[]     | `{sentinel-2-l2a,landsat-c2-l2,aster-l1t}` or `NULL`                                                               |
+| `definition`          | The queryable definition of the property                                 | jsonb      | `{"title": "Cloud Cover", "type": "number", "minimum": 0, "maximum": 100}`                                         |
+| `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | One of `to_int`, `to_float`, `to_tstz`, `to_text` or `NULL`                                                        |
+| `property_index_type` | The index type to use for the property                                   | text       | `BTREE`, `NULL` or other valid [PostgreSQL index type](https://www.postgresql.org/docs/current/indexes-types.html) |
+j
+Each record in the queryables table references a single property but can apply to any number of collections. If the `collection_ids` field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single queryable record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
 
- ##### Indexing
-To add a new global index across all partitions:
+##### Queryable Metadata
+
+When used with [stac-fastapi](https://stac-utils.github.io/stac-fastapi/), the metadata returned in the queryables endpoint is determined using the definition field on the `queryables` table. This is a jsonb field that will be returned as-is in the queryables response. The full queryable response for a collection will be determined by all the `queryables` records that have a match in `collection_ids` or have a NULL `collection_ids`.
+
+If two or more collections in your catalog share a property name, but have different definitions (e.g., `platform` with different enum values), be sure to repeat the property for each collection id, each with a unique `definition`.
+
+There is a utility SQL function that can be used to help populate the `queryables` table by looking at a sample of data for each collection. This utility can also look to the json schema for STAC extensions defined in the `stac_extensions` table.
+
+The `stac_extensions` table contains a `url` field and a `content` field for each extension that should be introspected to compare for fields. This can either be filled in manually or by using the `pypgstac loadextensions` command included with pypgstac. This command will look at the `stac_extensions` attribute in all collections to populate the `stac_extensions` table, fetching the json content of each extension. If any urls were added manually to the stac_extensions table, it will also populate any records where the content is NULL.
+
+Once the `stac_extensions` table has been filled in, you can run the `missing_queryables` function either for a single collection:
+
+```sql
+SELECT * FROM missing_queryables('mycollection', 5);
+```
+
+or for all collections:
+
+```sql
+SELECT * FROM missing_queryables(5);
+```
+
+The numeric argument is the approximate percent of items that should be sampled to look for fields to include. This function will look for fields in the properties of items that do not already exist in the queryables table for each collection. It will then look to see if there is a field in any definition in the stac_extensions table to populate the definition for the queryable. If no definition was found, it will use the data type of the values for that field in the sample of items to fill in a generic definition with just the field type.
+
+In order to populate the queryables table, you can then run:
+
+```sql
+INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM missing_queryables(5);
+```
+
+If you run into conflicts due to the unique constraints on collection/name, you may need to create a temp table, make any changes to remove the conflicts, and then INSERT.
+
+```sql
+CREATE TEMP TABLE draft_queryables AS SELECT * FROM missing_queryables(5);
+```
+
+Make any edits to that table or the existing queryables, then:
+
+```sql
+INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM draft_queryables;
+```
+
+##### Indexing
+
+The `queryables` table is also used to specify which item `properties` attributes to add indexes on. To add a new global index across all partitions:
+
 ```sql
 INSERT INTO pgstac.queryables (name, property_wrapper, property_index_type)
 VALUES (<property name>, <property wrapper>, <index type>);
 ```
-Property wrapper should be one of to_int, to_float, to_tstz, or to_text. The index type should almost always be 'BTREE', but can be any PostgreSQL index type valid for the data type.
 
-**More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes. Leave property_index_type set to NULL if you do not need an index set for a property.
+Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, or `to_text`. The index type should almost always be `BTREE`, but can be any PostgreSQL index type valid for the data type.
 
-##### Queryable Metadata
-Metadata returned for use in queryables endpoints is determined using the definition field on the queryables table. This is a jsonb field that will be returned as-is in a queryables response.
+**More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
 
-There is a utility function that can be used to help fill in the queryables table by looking at a sample of data for each collection. This utility can also look to the json schema for STAC extensions that are in the stac_extensions table.
-
-The stac_extensions table contains a url field and a content field for each extension that should be introspected to compare for fields. This can either be filled in manually or by using the `pypgstac loadextensions` command included with pypgstac. This command will look at the stac_extensions attribute in all collections to populate the stac_extensions table, fetching the json content of each extension. If any urls were added manually to the stac_extensions table, it will also populate any records where the content is NULL.
-
-Once the stac_extensions table has been filled in, you can run the missing_queryables function either just for a single collection `SELECT * FROM missing_queryables('mycollection', 5);` or for all collections `SELECT * FROM missing_queryables(5);`. The numeric argument is the approximate percent of items that should be scanned to look for fields to include. This function will look for fields in the properties of items that do not already exist in the queryables table for each collection. It will then look to see if there is a field in any definition in the stac_extensions table to populate the definition for the queryable. If no definition was found, it will use the type of the values for that field in the sample of items to fill in a generic definition with just the field type.
-
-In order to populate the queryables table, you can then run `INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM missing_queryables(5);`. If you run into conflicts due to the unique constraints on collection/name, you may need to create a temp table, make any changes to remove the conflicts, and then INSERT. `CREATE TEMP TABLE draft_queryables AS SELECT * FROM missing_queryables(5);` Make any edits to that table or the existing queryables. `INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM draft_queryables;`
-
+Leave `property_index_type` set to NULL if you do not need an index set for a property.
 
 ### Maintenance Procedures
+
 These are procedures that should be run periodically to make sure that statistics and constraints are kept up-to-date and validated. These can be made to run regularly using the pg_cron extension if available.
 ```sql
 SELECT cron.schedule('0 * * * *', 'CALL validate_constraints();');
