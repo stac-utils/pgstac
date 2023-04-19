@@ -110,7 +110,7 @@ The queryables table controls the indexes that PGStac will build to as well as t
 | `definition`          | The queryable definition of the property                                 | jsonb      | `{"title": "Cloud Cover", "type": "number", "minimum": 0, "maximum": 100}`                                         |
 | `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | One of `to_int`, `to_float`, `to_tstz`, `to_text` or `NULL`                                                        |
 | `property_index_type` | The index type to use for the property                                   | text       | `BTREE`, `NULL` or other valid [PostgreSQL index type](https://www.postgresql.org/docs/current/indexes-types.html) |
-j
+
 Each record in the queryables table references a single property but can apply to any number of collections. If the `collection_ids` field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single queryable record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
 
 ##### Queryable Metadata
@@ -157,7 +157,9 @@ INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELE
 
 ##### Indexing
 
-The `queryables` table is also used to specify which item `properties` attributes to add indexes on. To add a new global index across all partitions:
+The `queryables` table is also used to specify which item `properties` attributes to add indexes on.
+
+To add a new global index across all collection partitions:
 
 ```sql
 INSERT INTO pgstac.queryables (name, property_wrapper, property_index_type)
@@ -168,7 +170,7 @@ Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, or `to_text`.
 
 **More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
 
-Leave `property_index_type` set to NULL if you do not need an index set for a property.
+Leave `property_index_type` set to NULL if you do not want an index set for a property.
 
 ### Maintenance Procedures
 
