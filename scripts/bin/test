@@ -91,7 +91,7 @@ psql -X -t -a -v ON_ERROR_STOP=1 pgstac_test_basicsql \
     -c "ROLLBACK;" \
     | sed -e '/^ROLLBACK/d' -e '/^BEGIN/d' >"$TMPFILE"
 
-diff -y --suppress-common-lines -Z -b -w -B --strip-trailing-cr "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
+diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
 
 done
 psql -X -q -c "DROP DATABASE pgstac_test_basicsql WITH (force)";

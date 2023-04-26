@@ -1,11 +1,3 @@
-CREATE OR REPLACE VIEW partition_steps AS
-SELECT
-    partition as name,
-    date_trunc('month',lower(partition_dtrange)) as sdate,
-    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
-    FROM partitions WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
-    ORDER BY dtrange ASC
-;
 
 CREATE OR REPLACE FUNCTION chunker(
     IN _where text,
@@ -616,6 +608,8 @@ DECLARE
     edate timestamptz;
     n int;
     records_left int := _limit;
+    timer timestamptz := clock_timestamp();
+    full_timer timestamptz := clock_timestamp();
 BEGIN
 IF _where IS NULL OR trim(_where) = '' THEN
     _where = ' TRUE ';
@@ -633,7 +627,7 @@ $q$;
 
 IF _orderby ILIKE 'datetime d%' THEN
     FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 DESC LOOP
-        RAISE NOTICE 'Running Query for % to %', sdate, edate;
+        RAISE NOTICE 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
         query := format(
             base_query,
             sdate,
@@ -643,18 +637,21 @@ IF _orderby ILIKE 'datetime d%' THEN
             records_left
         );
         RAISE LOG 'QUERY: %', query;
+        timer := clock_timestamp();
         RETURN QUERY EXECUTE query;
 
         GET DIAGNOSTICS n = ROW_COUNT;
         records_left := records_left - n;
-        RAISE NOTICE 'Returned %/% Rows From % to %. % to go.', n, _limit, sdate, edate, records_left;
+        RAISE NOTICE 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
+        timer := clock_timestamp();
         IF records_left <= 0 THEN
+            RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
             RETURN;
         END IF;
     END LOOP;
 ELSIF _orderby ILIKE 'datetime a%' THEN
     FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 ASC LOOP
-        RAISE NOTICE 'Running Query for % to %', sdate, edate;
+        RAISE NOTICE 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
         query := format(
             base_query,
             sdate,
@@ -664,12 +661,15 @@ ELSIF _orderby ILIKE 'datetime a%' THEN
             records_left
         );
         RAISE LOG 'QUERY: %', query;
+        timer := clock_timestamp();
         RETURN QUERY EXECUTE query;
 
         GET DIAGNOSTICS n = ROW_COUNT;
         records_left := records_left - n;
-        RAISE NOTICE 'Returned %/% Rows From % to %. % to go.', n, _limit, sdate, edate, records_left;
+        RAISE NOTICE 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
+        timer := clock_timestamp();
         IF records_left <= 0 THEN
+            RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
             RETURN;
         END IF;
     END LOOP;
@@ -682,8 +682,11 @@ ELSE
     $q$, _where, _orderby, _limit
     );
     RAISE LOG 'QUERY: %', query;
+    timer := clock_timestamp();
     RETURN QUERY EXECUTE query;
+    RAISE NOTICE 'FULL QUERY TOOK %ms', age_ms(timer);
 END IF;
+RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
 RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
@@ -798,6 +801,8 @@ BEGIN
         RAISE NOTICE 'Getting non-hydrated data.';
     END IF;
     RAISE NOTICE 'CACHE SET TO %', get_setting_bool('format_cache');
+    RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
+    timer := clock_timestamp();
     SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
     FROM search_rows(
         full_where,
