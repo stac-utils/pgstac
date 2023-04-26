@@ -947,9 +947,6 @@ BEGIN
         RAISE NOTICE 'Not updating collection extent for %', collection;
     END IF;
 
-    RAISE NOTICE 'Refreshing Partition Materialized Views';
-
-
 END;
 $function$
 ;
