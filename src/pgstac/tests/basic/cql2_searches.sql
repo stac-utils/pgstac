@@ -77,3 +77,6 @@ SELECT jsonb_path_query(search('{"token":"next:pgstac-test-item-0016","sortby":[
 SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0030","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
 
 SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0054","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+
+SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1}');
+SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1, "token": "next:pgstac-test-item-0001"}');

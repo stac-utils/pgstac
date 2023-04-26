@@ -64,8 +64,44 @@ FROM
 WHERE isleaf
 ;
 
-CREATE VIEW partitions AS
-SELECT * FROM partition_sys_meta LEFT JOIN partition_stats USING (partition);
+CREATE VIEW partitions_view AS
+SELECT
+    relid::text as partition,
+    replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
+        ELSE pg_get_expr(parent.relpartbound, parent.oid)
+    END, 'FOR VALUES IN (''',''), ''')','') AS collection,
+    level,
+    c.reltuples,
+    c.relhastriggers,
+    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
+    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
+    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange,
+    dtrange,
+    edtrange,
+    spatial,
+    last_updated
+FROM
+    pg_partition_tree('items')
+    JOIN pg_class c ON (relid::regclass = c.oid)
+    JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
+    LEFT JOIN partition_stats ON (relid::text=partition)
+WHERE isleaf
+;
+
+CREATE MATERIALIZED VIEW partitions AS
+SELECT * FROM partitions_view;
+CREATE UNIQUE INDEX ON partitions (partition);
+
+CREATE MATERIALIZED VIEW partition_steps AS
+SELECT
+    partition as name,
+    date_trunc('month',lower(partition_dtrange)) as sdate,
+    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
+    FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
+    ORDER BY dtrange ASC
+;
+
 
 CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
@@ -105,10 +141,14 @@ BEGIN
                 spatial=EXCLUDED.spatial,
                 last_updated=EXCLUDED.last_updated
     ;
+
     SELECT
-        constraint_dtrange, constraint_edtrange, partitions.collection
+        constraint_dtrange, constraint_edtrange, pv.collection
         INTO cdtrange, cedtrange, collection
-    FROM partitions WHERE partition = _partition;
+    FROM partitions_view pv WHERE partition = _partition;
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
+
 
     RAISE NOTICE 'Checking if we need to modify constraints.';
     IF
@@ -129,7 +169,7 @@ BEGIN
             SET content = jsonb_set_lax(
                 content,
                 '{extent}'::text[],
-                collection_extent(%L),
+                collection_extent(%L, FALSE),
                 true,
                 'use_json_null'
             ) WHERE id=%L
@@ -138,6 +178,7 @@ BEGIN
     ELSE
         RAISE NOTICE 'Not updating collection extent for %', collection;
     END IF;
+
 END;
 $$ LANGUAGE PLPGSQL STRICT;
 
@@ -178,7 +219,7 @@ CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
 DECLARE
     q text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
         RETURN NULL;
     END IF;
     FOR q IN SELECT FORMAT(
@@ -200,7 +241,7 @@ CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, 
 DECLARE
     q text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions WHERE partition=t) THEN
+    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
@@ -217,6 +258,8 @@ BEGIN
                     ALTER TABLE %I
                         VALIDATE CONSTRAINT %I
                     ;
+
+
 
                 EXCEPTION WHEN others THEN
                     RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
@@ -250,6 +293,8 @@ BEGIN
                     ALTER TABLE %I
                         VALIDATE CONSTRAINT %I
                     ;
+
+
 
                 EXCEPTION WHEN others THEN
                     RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
@@ -400,6 +445,8 @@ BEGIN
     PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -425,7 +472,7 @@ BEGIN
         END IF;
     END IF;
 
-    IF EXISTS (SELECT 1 FROM partitions WHERE collection=_collection LIMIT 1) THEN
+    IF EXISTS (SELECT 1 FROM partitions_view WHERE collection=_collection LIMIT 1) THEN
         EXECUTE format(
             $q$
                 CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;

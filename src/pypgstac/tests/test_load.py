@@ -430,7 +430,7 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
     cdtmin = loader.db.query_one(
         """
         SELECT lower(constraint_dtrange)::text
-        FROM partitions WHERE partition = '_items_1';
+        FROM partitions_view WHERE partition = '_items_1';
         """,
     )
     assert cdtmin == "-infinity"

@@ -110,5 +110,8 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and 
 0
 
 --check that collection extents have been updated
-SELECT DISTINCT content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%';
-{"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}
+SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%' ORDER BY id;
+pgstactest-partitioned       | {"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}
+pgstactest-partitioned-month | {"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}
+pgstactest-partitioned-q     | {"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}
+pgstactest-partitioned-year  | {"extent": {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}}

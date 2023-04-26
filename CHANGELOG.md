@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.5]
+
+### Fixed
+- Default sort not getting set when sortby not included in query with token (Fixes [#177](https://github.com/stac-utils/pgstac/issues/177))
+- Fixes regression in performance between with changes for partition structure at v0.7.0. Changes the normal view for partitions and partition_steps into indexed materialized views. Adds refreshing of the views to existing triggers to make sure they stay up to date.
+
 ## [v0.7.4]
 
 ### Added

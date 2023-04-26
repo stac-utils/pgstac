@@ -58,7 +58,7 @@ DECLARE
 BEGIN
     IF runupdate THEN
         PERFORM update_partition_stats_q(partition)
-        FROM partitions WHERE collection=_collection;
+        FROM partitions_view WHERE collection=_collection;
     END IF;
     SELECT
         min(lower(dtrange)),
@@ -68,7 +68,7 @@ BEGIN
         mind,
         maxd,
         geom_extent
-    FROM partitions
+    FROM partitions_view
     WHERE collection=_collection;
 
     IF geom_extent IS NOT NULL AND mind IS NOT NULL AND maxd IS NOT NULL THEN

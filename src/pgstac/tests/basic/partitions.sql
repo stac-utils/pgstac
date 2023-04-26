@@ -73,4 +73,4 @@ SELECT run_queued_queries_intransaction();
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and spatial IS NULL;
 
 --check that collection extents have been updated
-SELECT DISTINCT content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%';
+SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%' ORDER BY id;
