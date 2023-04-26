@@ -3076,6 +3076,9 @@ DECLARE
     output text;
     token_where text;
 BEGIN
+    IF _sortby IS NULL OR _sortby = '[]'::jsonb THEN
+        _sortby := '[{"field":"datetime","direction":"desc"}]'::jsonb;
+    END IF;
     _sortby := _sortby || jsonb_build_object('field','id','direction',_sortby->0->>'direction');
     RAISE NOTICE 'Getting Token Filter. % %', _sortby, token_item;
     IF inclusive THEN

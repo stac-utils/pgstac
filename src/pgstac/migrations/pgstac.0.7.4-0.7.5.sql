@@ -452,6 +452,103 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.get_token_filter(_sortby jsonb DEFAULT '[{"field": "datetime", "direction": "desc"}]'::jsonb, token_item pgstac.items DEFAULT NULL::pgstac.items, prev boolean DEFAULT false, inclusive boolean DEFAULT false)
+ RETURNS text
+ LANGUAGE plpgsql
+ SET transform_null_equals TO 'true'
+AS $function$
+DECLARE
+    ltop text := '<';
+    gtop text := '>';
+    dir text;
+    sort record;
+    orfilter text := '';
+    orfilters text[] := '{}'::text[];
+    andfilters text[] := '{}'::text[];
+    output text;
+    token_where text;
+BEGIN
+    IF _sortby IS NULL OR _sortby = '[]'::jsonb THEN
+        _sortby := '[{"field":"datetime","direction":"desc"}]'::jsonb;
+    END IF;
+    _sortby := _sortby || jsonb_build_object('field','id','direction',_sortby->0->>'direction');
+    RAISE NOTICE 'Getting Token Filter. % %', _sortby, token_item;
+    IF inclusive THEN
+        orfilters := orfilters || format('( id=%L AND collection=%L )' , token_item.id, token_item.collection);
+    END IF;
+
+    FOR sort IN
+        WITH s1 AS (
+            SELECT
+                _row,
+                (queryable(value->>'field')).expression as _field,
+                (value->>'field' = 'id') as _isid,
+                get_sort_dir(value) as _dir
+            FROM jsonb_array_elements(_sortby)
+            WITH ORDINALITY AS t(value, _row)
+        )
+        SELECT
+            _row,
+            _field,
+            _dir,
+            get_token_val_str(_field, token_item) as _val
+        FROM s1
+        WHERE _row <= (SELECT min(_row) FROM s1 WHERE _isid)
+    LOOP
+        orfilter := NULL;
+        RAISE NOTICE 'SORT: %', sort;
+        IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+            orfilter := format($f$(
+                (%s %s %s) OR (%s IS NULL)
+            )$f$,
+            sort._field,
+            ltop,
+            sort._val,
+            sort._val
+            );
+        ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
+            RAISE NOTICE '< but null';
+            orfilter := format('%s IS NOT NULL', sort._field);
+        ELSIF sort._val IS NULL THEN
+            RAISE NOTICE '> but null';
+        ELSE
+            orfilter := format($f$(
+                (%s %s %s) OR (%s IS NULL)
+            )$f$,
+            sort._field,
+            gtop,
+            sort._val,
+            sort._field
+            );
+        END IF;
+        RAISE NOTICE 'ORFILTER: %', orfilter;
+
+        IF orfilter IS NOT NULL THEN
+            IF sort._row = 1 THEN
+                orfilters := orfilters || orfilter;
+            ELSE
+                orfilters := orfilters || format('(%s AND %s)', array_to_string(andfilters, ' AND '), orfilter);
+            END IF;
+        END IF;
+        IF sort._val IS NOT NULL THEN
+            andfilters := andfilters || format('%s = %s', sort._field, sort._val);
+        ELSE
+            andfilters := andfilters || format('%s IS NULL', sort._field);
+        END IF;
+    END LOOP;
+
+    output := array_to_string(orfilters, ' OR ');
+
+    token_where := concat('(',coalesce(output,'true'),')');
+    IF trim(token_where) = '' THEN
+        token_where := NULL;
+    END IF;
+    RAISE NOTICE 'TOKEN_WHERE: %',token_where;
+    RETURN token_where;
+    END;
+$function$
+;
+
 create materialized view "pgstac"."partition_steps" as  SELECT partitions_view.partition AS name,
     date_trunc('month'::text, lower(partitions_view.partition_dtrange)) AS sdate,
     (date_trunc('month'::text, upper(partitions_view.partition_dtrange)) + '1 mon'::interval) AS edate
