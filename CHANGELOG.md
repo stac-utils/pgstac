@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.6]
+
+### Fixed
+- Fix issue with checking for existing collections in queryable trigger function that prevented adding scoped queryable entries.
+
 ## [v0.7.5]
 
 ### Fixed

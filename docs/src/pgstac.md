@@ -137,10 +137,12 @@ SELECT * FROM missing_queryables(5);
 
 The numeric argument is the approximate percent of items that should be sampled to look for fields to include. This function will look for fields in the properties of items that do not already exist in the queryables table for each collection. It will then look to see if there is a field in any definition in the stac_extensions table to populate the definition for the queryable. If no definition was found, it will use the data type of the values for that field in the sample of items to fill in a generic definition with just the field type.
 
-In order to populate the queryables table, you can then run:
+In order to populate the queryables table, you can then run the following query. Note we're casting the collection id to a text array:
 
 ```sql
-INSERT INTO queryables (collection_ids, name, definition, property_wrapper) SELECT * FROM missing_queryables(5);
+INSERT INTO queryables (collection_ids, name, definition, property_wrapper)
+    SELECT array[collection]::text[] as collection_ids, name, definition, property_wrapper
+        FROM missing_queryables('mycollection', 5)
 ```
 
 If you run into conflicts due to the unique constraints on collection/name, you may need to create a temp table, make any changes to remove the conflicts, and then INSERT.

@@ -20,7 +20,7 @@ SELECT results_eq(
     'Make sure that CQL filter works the same with/without properties prefix.'
 );
 
-DELETE FROM collections WHERE id = 'pgstac-test-collection';
+DELETE FROM collections WHERE id in ('pgstac-test-collection', 'pgstac-test-collection2');
 \copy collections (content) FROM 'tests/testdata/collections.ndjson';
 
 SELECT results_eq(
@@ -36,13 +36,24 @@ SELECT results_eq(
 );
 
 SELECT lives_ok(
-    $$ DELETE FROM queryables WHERE name IN ('testqueryable', 'testqueryable2'); $$,
+    $$ DELETE FROM queryables WHERE name IN ('testqueryable', 'testqueryable2', 'testqueryable3'); $$,
     'Make sure test queryable does not exist.'
 );
 
 SELECT lives_ok(
     $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable', null); $$,
     'Can add a new queryable that applies to all collections.'
+);
+
+select is(
+    (SELECT count(*) from collections where id = 'pgstac-test-collection'),
+    '1',
+    'Make sure test collection exists.'
+);
+
+SELECT lives_ok(
+    $$ INSERT INTO queryables (name, collection_ids) VALUES ('testqueryable3', '{pgstac-test-collection}'); $$,
+    'Can add a new queryable to a specific existing collection.'
 );
 
 SELECT throws_ok(

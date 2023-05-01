@@ -22,12 +22,12 @@ BEGIN
     RAISE NOTICE 'Making sure that name/collection is unique for queryables %', NEW;
     IF NEW.collection_ids IS NOT NULL THEN
         IF EXISTS (
-            SELECT 1 FROM
-                collections
+            SELECT 1
+                FROM unnest(NEW.collection_ids) c
                 LEFT JOIN
-                unnest(NEW.collection_ids) c
+                collections
                 ON (collections.id = c)
-                WHERE c IS NULL
+                WHERE collections.id IS NULL
         ) THEN
             RAISE foreign_key_violation USING MESSAGE = format(
                 'One or more collections in %s do not exist.', NEW.collection_ids
