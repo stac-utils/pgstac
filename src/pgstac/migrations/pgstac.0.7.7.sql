@@ -132,20 +132,20 @@ DO $$
 $$;
 CREATE OR REPLACE FUNCTION to_int(jsonb) RETURNS int AS $$
     SELECT floor(($1->>0)::float)::int;
-$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000;
+$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000 PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION to_float(jsonb) RETURNS float AS $$
     SELECT ($1->>0)::float;
-$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000;
+$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000 PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION to_tstz(jsonb) RETURNS timestamptz AS $$
     SELECT ($1->>0)::timestamptz;
-$$ LANGUAGE SQL IMMUTABLE STRICT SET TIME ZONE 'UTC' COST 5000;
+$$ LANGUAGE SQL IMMUTABLE STRICT SET TIME ZONE 'UTC' COST 5000 PARALLEL SAFE;
 
 
 CREATE OR REPLACE FUNCTION to_text(jsonb) RETURNS text AS $$
     SELECT CASE WHEN jsonb_typeof($1) IN ('array','object') THEN $1::text ELSE $1->>0 END;
-$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000;
+$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000 PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION to_text_array(jsonb) RETURNS text[] AS $$
     SELECT
@@ -154,7 +154,7 @@ CREATE OR REPLACE FUNCTION to_text_array(jsonb) RETURNS text[] AS $$
             ELSE ARRAY[$1->>0]
         END
     ;
-$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000;
+$$ LANGUAGE SQL IMMUTABLE STRICT COST 5000 PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION bbox_geom(_bbox jsonb) RETURNS geometry AS $$
 SELECT CASE jsonb_array_length(_bbox)
@@ -3310,35 +3310,53 @@ DECLARE
     pexplain jsonb;
     t timestamptz;
     i interval;
+    _hash text := search_hash(_search, _metadata);
+    doupdate boolean := FALSE;
+    insertfound boolean := FALSE;
 BEGIN
     SELECT * INTO search FROM searches
-    WHERE hash=search_hash(_search, _metadata) FOR UPDATE;
+    WHERE hash=_hash;
+
+    search.hash := _hash;
 
     -- Calculate the where clause if not already calculated
     IF search._where IS NULL THEN
         search._where := stac_search_to_where(_search);
+    ELSE
+        doupdate := TRUE;
     END IF;
 
     -- Calculate the order by clause if not already calculated
     IF search.orderby IS NULL THEN
         search.orderby := sort_sqlorderby(_search);
+    ELSE
+        doupdate := TRUE;
     END IF;
 
     PERFORM where_stats(search._where, updatestats, _search->'conf');
 
-    search.lastused := now();
-    search.usecount := coalesce(search.usecount, 0) + 1;
-    INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
-    VALUES (_search, search._where, search.orderby, search.lastused, search.usecount, _metadata)
-    ON CONFLICT (hash) DO
-    UPDATE SET
-        _where = EXCLUDED._where,
-        orderby = EXCLUDED.orderby,
-        lastused = EXCLUDED.lastused,
-        usecount = EXCLUDED.usecount,
-        metadata = EXCLUDED.metadata
-    RETURNING * INTO search
-    ;
+    IF NOT doupdate THEN
+        INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
+        VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
+        ON CONFLICT (hash) DO NOTHING;
+        IF FOUND THEN
+            RETURN search;
+        END IF;
+    END IF;
+
+    UPDATE searches
+        SET
+            lastused=clock_timestamp(),
+            usecount=usecount+1
+    WHERE hash=(
+        SELECT hash FROM searches
+        WHERE hash=_hash
+        FOR UPDATE SKIP LOCKED
+    );
+    IF NOT FOUND THEN
+        RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
+    END IF;
+
     RETURN search;
 
 END;
@@ -3497,6 +3515,7 @@ DECLARE
     token_item items%ROWTYPE;
     token_where text;
     full_where text;
+    init_ts timestamptz := clock_timestamp();
     timer timestamptz := clock_timestamp();
     hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
@@ -3506,11 +3525,22 @@ DECLARE
     out_records jsonb;
     out_len int;
     _limit int := coalesce((_search->>'limit')::int, 10);
+    init_limit int := _limit;
     _querylimit int;
     _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
     has_prev boolean := FALSE;
     has_next boolean := FALSE;
+    items_cnt int := coalesce(jsonb_array_length(_search->'ids'),0);
 BEGIN
+    RAISE NOTICE 'Items Count: %', items_cnt;
+    IF items_cnt > 0 THEN
+        IF items_cnt <= _limit THEN
+            _limit := items_cnt - 1;
+        ELSE
+            _limit := items_cnt;
+        END IF;
+        RAISE NOTICE 'Items is set. Changing limit to %', items_cnt;
+    END IF;
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
@@ -3524,7 +3554,7 @@ BEGIN
         token_prev := token.prev;
         token_item := token.item;
         token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE);
-        RAISE LOG 'TOKEN_WHERE: %', token_where;
+        RAISE LOG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
         IF token_prev THEN -- if we are using a prev token, we know has_next is true
             RAISE LOG 'There is a previous token, so automatically setting has_next to true';
             has_next := TRUE;
@@ -3582,7 +3612,7 @@ BEGIN
 
     out_len := jsonb_array_length(out_records);
 
-    IF out_len = _limit + 1 THEN
+    IF out_len = init_limit + 1 THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;
@@ -3607,13 +3637,13 @@ BEGIN
 
     IF context(_search->'conf') != 'off' THEN
         context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', _limit,
+            'limit', init_limit,
             'matched', total_count,
             'returned', coalesce(jsonb_array_length(out_records), 0)
         ));
     ELSE
         context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', _limit,
+            'limit', init_limit,
             'returned', coalesce(jsonb_array_length(out_records), 0)
         ));
     END IF;
@@ -3625,6 +3655,10 @@ BEGIN
         'prev', prev,
         'context', context
     );
+
+    IF get_setting_bool('timing', _search->'conf') THEN
+        collection = collection || jsonb_build_object('timing', age_ms(init_ts));
+    END IF;
 
     RAISE NOTICE 'Time to build final json %', age_ms(timer);
     timer := clock_timestamp();
@@ -4015,4 +4049,4 @@ GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('0.7.6');
+SELECT set_version('0.7.7');

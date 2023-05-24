@@ -1033,5 +1033,5 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
-SELECT update_partition_stats_q(partition) FROM partitions;
+SELECT update_partition_stats_q(partition) FROM partitions_view;
 SELECT set_version('0.7.5');
