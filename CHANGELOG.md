@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [v0.7.7]
 
 ### Fixed
-- Fix migrations for 0.7.4->0.7.5 and 0.7.5->0.7.6 to use the partition_view rather than the materialized view to avoid issue with refreshing the materialized view when run in the same statement that is accessing the view. Fixes #177.
+- Fix migrations for 0.7.4->0.7.5 and 0.7.5->0.7.6 to use the partition_view rather than the materialized view to avoid issue with refreshing the materialized view when run in the same statement that is accessing the view. Fixes #180.
 
 ### Added
 - Add a short cirucit for id searches that sets the limit to be no more than the number of ids in the filter.
