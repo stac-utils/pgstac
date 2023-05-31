@@ -592,7 +592,7 @@ BEGIN
     IF NOT doupdate THEN
         INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
         VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
-        ON CONFLICT (hash) DO NOTHING;
+        ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
         IF FOUND THEN
             RETURN search;
         END IF;
