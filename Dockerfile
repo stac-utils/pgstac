@@ -1,14 +1,17 @@
 FROM postgres:15-bullseye as pg
 ENV PGSTACDOCKER=1
 ENV POSTGIS_MAJOR 3
-ENV POSTGIS_VERSION 3.3.2+dfsg-1.pgdg110+1
+ENV POSTGIS_VERSION 3.3.3+dfsg-1~exp1.pgdg110+1
 ENV PYTHONPATH=/opt/src/pypgstac:/opt/python:${PYTHONPATH}
 ENV PATH=/opt/bin:${PATH}
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
 
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-cache showpkg postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR
+
 RUN set -ex \
-    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         python3 python-is-python3 python3-pip \
