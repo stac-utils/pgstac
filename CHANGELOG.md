@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.8]
+
+### Fixed
+- Fix issue with search_query not returning all fields on first use of a query. Fixes #182
+
 ## [v0.7.7]
 
 ### Fixed

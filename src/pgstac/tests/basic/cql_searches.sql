@@ -36,6 +36,10 @@ SELECT search('{"collections":["something"]}');
 
 SELECT search('{"collections":["something"],"fields":{"include":["id"]}}');
 
-SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
+SELECT usecount IS NOT NULL and usecount > 0 AND lastused IS NOT NULL AND lastused < clock_timestamp() FROM search_query(jsonb_build_object('collections',ARRAY[random()::text]));
 
-SELECT search from search_query('{"collections":["pgstac-test-collection"]}');
+SELECT hash, search, _where, orderby, metadata from search_query('{"collections":["pgstac-test-collection"]}');
+
+SELECT hash, search, _where, orderby, metadata from search_query('{"collections":["pgstac-test-collection"]}');
+
+SELECT usecount IS NOT NULL and usecount > 0 AND lastused IS NOT NULL AND lastused < clock_timestamp() FROM search_query('{"collections":["pgstac-test-collection"]}');

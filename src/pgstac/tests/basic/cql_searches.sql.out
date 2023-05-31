@@ -53,8 +53,14 @@ SELECT search('{"collections":["something"]}');
 SELECT search('{"collections":["something"],"fields":{"include":["id"]}}');
  {"next": null, "prev": null, "type": "FeatureCollection", "context": {"limit": 10, "matched": 0, "returned": 0}, "features": []}
 
-SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
- 2bbae9a0ef0bbb5ffaca06603ce621d7
+SELECT usecount IS NOT NULL and usecount > 0 AND lastused IS NOT NULL AND lastused < clock_timestamp() FROM search_query(jsonb_build_object('collections',ARRAY[random()::text]));
+t
 
-SELECT search from search_query('{"collections":["pgstac-test-collection"]}');
- {"collections": ["pgstac-test-collection"]}
+SELECT hash, search, _where, orderby, metadata from search_query('{"collections":["pgstac-test-collection"]}');
+2bbae9a0ef0bbb5ffaca06603ce621d7 | {"collections": ["pgstac-test-collection"]} | collection = ANY ('{pgstac-test-collection}')  | datetime DESC, id DESC | {}
+
+SELECT hash, search, _where, orderby, metadata from search_query('{"collections":["pgstac-test-collection"]}');
+2bbae9a0ef0bbb5ffaca06603ce621d7 | {"collections": ["pgstac-test-collection"]} | collection = ANY ('{pgstac-test-collection}')  | datetime DESC, id DESC | {}
+
+SELECT usecount IS NOT NULL and usecount > 0 AND lastused IS NOT NULL AND lastused < clock_timestamp() FROM search_query('{"collections":["pgstac-test-collection"]}');
+t
