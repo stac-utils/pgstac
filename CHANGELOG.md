@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.9]
+
+### Fixed
+- Update docker image to use postgis 3.3.3
+
 ## [v0.7.8]
 
 ### Fixed
