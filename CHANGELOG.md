@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+### Fixed
+- Return an empty jsonb array from all_collections() when the collections table is empty, instead of NULL. Fixes #186.
+
 ## [v0.7.9]
 
 ### Fixed

@@ -63,5 +63,5 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
-    SELECT jsonb_agg(content) FROM collections;
+    SELECT coalesce(jsonb_agg(content), '[]'::jsonb) FROM collections;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
