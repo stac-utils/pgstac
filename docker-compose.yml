@@ -20,5 +20,6 @@ services:
       - pgstac-pgdata:/var/lib/postgresql/data
       - ./src:/opt/src
       - ./scripts/bin:/opt/bin
+    command: postgres -c shared_preload_libraries=plrust -c plrust.work_dir=/tmp
 volumes:
   pgstac-pgdata:
