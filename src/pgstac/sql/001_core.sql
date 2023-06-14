@@ -44,9 +44,9 @@ $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION get_setting_bool(IN _setting text, IN conf jsonb DEFAULT NULL) RETURNS boolean AS $$
 SELECT COALESCE(
-  conf->>_setting,
-  current_setting(concat('pgstac.',_setting), TRUE),
-  (SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),
+  nullif(conf->>_setting, ''),
+  nullif(current_setting(concat('pgstac.',_setting), TRUE),''),
+  nullif((SELECT value FROM pgstac.pgstac_settings WHERE name=_setting),''),
   'FALSE'
 )::boolean;
 $$ LANGUAGE SQL;
