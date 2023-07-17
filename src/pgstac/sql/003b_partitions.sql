@@ -449,7 +449,7 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
     RETURN _partition_name;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET search_path TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT FALSE) RETURNS text AS $$
