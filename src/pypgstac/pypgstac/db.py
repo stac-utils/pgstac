@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     db_num_workers: int = 1
     db_retries: int = 3
 
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
