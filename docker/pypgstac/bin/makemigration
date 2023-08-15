@@ -1,0 +1,138 @@
+#!/bin/bash
+SHORT=f:,t:,o,d,h
+LONG=from:,to:,overwrite,debug,help
+OPTS=$(getopt --alternative --name $0 --options $SHORT --longoptions $LONG -- "$@")
+
+eval set -- "$OPTS"
+
+while :
+do
+  case "$1" in
+    -f | --from )
+      FROM="$2"
+      shift 2
+      ;;
+    -t | --to )
+      TO="$2"
+      shift 2
+      ;;
+    -o | --overwrite )
+      OVERWRITE=1
+      shift 1
+      ;;
+    -d | --debug )
+      DEBUG=1
+      shift 1
+      ;;
+    -h | --help)
+      "Help"
+      exit 2
+      ;;
+    --)
+      shift;
+      break
+      ;;
+    *)
+      echo "Unexpected option: $1"
+      ;;
+  esac
+done
+
+# make sure that from and to exist
+
+
+
+BASEDIR=/opt/src
+PYPGSTACDIR=$BASEDIR/pypgstac
+MIGRATIONSDIR=$BASEDIR/pgstac/migrations
+SQLDIR=$BASEDIR/pgstac/sql
+
+# Check if from SQL file exists
+FROMSQL=$MIGRATIONSDIR/pgstac.$FROM.sql
+if [ -f $FROMSQL ]; then
+  echo "Migrating From: $FROMSQL"
+else
+ echo "From SQL $FROMSQL does not exist"
+ exit 1
+fi
+
+# Check if to SQL file exists
+TOSQL=$MIGRATIONSDIR/pgstac.$TO.sql
+if [ -f $TOSQL ]; then
+  echo "Migrating To: $TOSQL"
+else
+ echo "To SQL $TOSQL does not exist"
+ exit 1
+fi
+
+MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM--$TO.sql
+if [[ -f "$MIGRATIONSQL" ]]; then
+  if [[ "$OVERWRITE" != 1 ]]; then
+    echo "$MIGRATIONSQL Already exists."
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes ) break;;
+        No ) exit 1;;
+      esac
+    done
+  else
+    echo "Removing existing $MIGRATIONSQL"
+    rm $MIGRATIONSQL
+  fi
+else
+ echo "Creating $MIGRATIONSQL"
+fi
+
+pg_isready -t 10
+# Create Databases to inspect to create migration
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    CREATE DATABASE migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+    CREATE DATABASE migra_to;
+EOSQL
+
+TODBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_to"
+FROMDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_from"
+
+# Make sure to clean up migra databases
+function drop_migra_dbs(){
+psql -q >/dev/null 2>&1 <<-'EOSQL'
+    DROP DATABASE IF EXISTS migra_from;
+    DROP DATABASE IF EXISTS migra_to;
+EOSQL
+}
+
+trap drop_migra_dbs 0 2 3 15
+
+echo "Creating Migration from $FROM to $TO"
+
+# Install From into Database
+psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $FROMSQL $FROMDBURL >/dev/null || exit 1;
+
+# Install To into Database
+psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $TOSQL $TODBURL >/dev/null || exit 1;
+
+
+# Calculate the migration
+MIGRATION=$(mktemp)
+trap "rm $MIGRATION" 0 2 3 15
+
+migra --schema pgstac --unsafe $FROMDBURL $TODBURL >$MIGRATION
+if [[ $DEBUG == 1 ]]; then
+  echo "*************"
+  cat $MIGRATION
+  echo "*************"
+fi
+
+# Append wrapper around created migration with idempotent and transaction statements
+
+echo "SET client_min_messages TO WARNING;" >$MIGRATIONSQL
+echo "SET SEARCH_PATH to pgstac, public;" >>$MIGRATIONSQL
+cat $SQLDIR/000_idempotent_pre.sql >>$MIGRATIONSQL
+echo "-- BEGIN migra calculated SQL" >>$MIGRATIONSQL
+cat $MIGRATION >>$MIGRATIONSQL
+echo "-- END migra calculated SQL" >>$MIGRATIONSQL
+cat $SQLDIR/998_idempotent_post.sql $SQLDIR/999_version.sql >>$MIGRATIONSQL
+
+echo "Migration created at $MIGRATIONSQL."

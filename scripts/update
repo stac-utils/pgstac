@@ -28,6 +28,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
     echo "==Building images..."
 
-    docker-compose build ${NO_CACHE}
+    docker compose build ${NO_CACHE}
 
 fi

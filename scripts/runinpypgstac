@@ -1,0 +1,43 @@
+#!/bin/bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+pwd
+docker ps
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0") <--build> <--no-cache> <script>
+        script options: format, test, makemigration, stageversion
+        "
+exit 1
+}
+
+[ "$#" -eq 0 ] && usage
+
+ARGS=($@)
+CONTAINER_ARGS=()
+for ARG in "${ARGS[@]}"
+do
+    if [[ $ARG == "--no-cache" ]]; then
+        BUILD=1
+        NOCACHE="--no-cache"
+    elif [[ $ARG == "--build" ]]; then
+        BUILD=1
+    else
+        CONTAINER_ARGS+=($ARG)
+    fi
+done
+docker compose -f docker-compose.yml ps
+exit
+if [[ $BUILD == 1 ]]; then
+    echo "Building docker images..."
+    docker compose build $NOCACHE
+fi
+# PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
+docker compose up -d pgstac
+# docker compose run --rm -u $(id -u):$(id -g) pypgstac "${CONTAINER_ARGS[@]}"
+# [[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac

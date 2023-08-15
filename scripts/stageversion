@@ -1,33 +1,4 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
-set -e
-
-if [[ "${CI}" ]]; then
-    set -x
-fi
-
-function usage() {
-    echo -n \
-        "Usage: $(basename "$0") VERSION
-
-Stage migration for VERSION
-
-"
-}
-
-VERSION=$1
-FORCE=$2
-
-if [[ -z "${VERSION}" ]]; then
-    echo "ERROR: Must supply a version."
-    usage
-    exit 1
-fi
-
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "Updating Version..."
-    docker-compose build
-    docker-compose run --rm pgstac stageversion $VERSION $FORCE
-    sudo chown -R $USER:$USER src/pgstac/migrations
-fi
+$SCRIPT_DIR/runinpypgstac stageversion "$@"

@@ -5,9 +5,7 @@ set -e
 if [[ "${CI}" ]]; then
     set -x
 fi
-if [ ! $PGSTACDOCKER == 1 ]; then
-    echo "This script should only be run within pgstac docker"; exit 1;
-fi
+
 cd /opt/src/
 
 function usage() {

@@ -14,15 +14,27 @@ repos:
     -   id: check-json
     -   id: mixed-line-ending
     -   id: check-merge-conflict
+    -   id: check-executables-have-shebangs
+    -   id: check-symlinks
+
 
 -   repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: 'v0.0.231'
+    rev: 'v0.0.284'
     hooks:
     -   id: ruff
         files: pypgstac\/.*\.py$
+        args: [--fix, --exit-non-zero-on-fix]
 
 -   repo: local
     hooks:
+    -   id: stageversion
+        name: stageversion
+        entry: scripts/stageversion
+        language: script
+        pass_filenames: false
+        args: [--build, --no-cache]
+        verbose: true
+        fail_fast: true
     -   id: sql
         name: sql
         entry: scripts/test

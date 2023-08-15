@@ -8,8 +8,6 @@ if [ ! $PGSTACDOCKER == 1 ]; then
     echo "This script should only be run within pgstac docker"; exit 1;
 fi
 
-source $(dirname $0)/tmpdb
-
 function usage() {
     echo -n \
         "Usage: $(basename "$0")
@@ -19,15 +17,26 @@ This scripts is meant to be run inside the dev container.
 "
 }
 
+function setuptestdb(){
+    cd /opt/src/pgstac
+    psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_db_template;
+CREATE DATABASE pgstac_test_db_template;
+ALTER DATABASE pgstac_test_db_template SET CLIENT_MIN_MESSAGES TO WARNING;
+ALTER DATABASE pgstac_test_db_template SET SEARCH_PATH to pgstac, public;
+\connect pgstac_test_db_template;
+\i pgstac.sql
+EOSQL
+}
 
 function test_formatting(){
     cd /opt/src/pypgstac
 
     echo "Running ruff"
-    ruff --cache-dir=/tmp/.ruff pypgstac tests
+    ruff pypgstac tests
 
     echo "Running mypy"
-    mypy --cache-dir=/tmp/.mypy pypgstac
+    mypy pypgstac
 
     echo "Checking if there are any staged migrations."
     find pypgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
