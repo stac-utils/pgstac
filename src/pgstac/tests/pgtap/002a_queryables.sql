@@ -21,6 +21,13 @@ SELECT results_eq(
 );
 
 DELETE FROM collections WHERE id in ('pgstac-test-collection', 'pgstac-test-collection2');
+
+SELECT results_eq(
+    $$ SELECT all_collections(); $$,
+    $$ SELECT '[]'::jsonb; $$,
+    'Make sure all_collections returns an empty array when the collection table is empty.'
+);
+
 \copy collections (content) FROM 'tests/testdata/collections.ndjson';
 
 SELECT results_eq(

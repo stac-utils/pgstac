@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.7.10]
+### Fixed
+- Return an empty jsonb array from all_collections() when the collections table is empty, instead of NULL. Fixes #186.
+- Add delete trigger to collections to clean up partition_stats records and remove any partitions. Fixes #185
+- Fixes boolean casting in get_setting_bool function
+
 ## [v0.7.9]
 
 ### Fixed

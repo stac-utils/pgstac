@@ -63,5 +63,26 @@ $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
-    SELECT jsonb_agg(content) FROM collections;
+    SELECT coalesce(jsonb_agg(content), '[]'::jsonb) FROM collections;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
+
+CREATE OR REPLACE FUNCTION collection_delete_trigger_func() RETURNS TRIGGER AS $$
+DECLARE
+    collection_base_partition text := concat('_items_', OLD.key);
+BEGIN
+    EXECUTE format($q$
+        DELETE FROM partition_stats WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
+        DROP TABLE IF EXISTS %I CASCADE;
+        $q$,
+        OLD.id,
+        collection_base_partition
+    );
+    RETURN OLD;
+END;
+$$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER collection_delete_trigger BEFORE DELETE ON collections
+FOR EACH ROW EXECUTE FUNCTION collection_delete_trigger_func();
