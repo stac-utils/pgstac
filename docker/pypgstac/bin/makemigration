@@ -65,7 +65,7 @@ else
  exit 1
 fi
 
-MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM--$TO.sql
+MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM-$TO.sql
 if [[ -f "$MIGRATIONSQL" ]]; then
   if [[ "$OVERWRITE" != 1 ]]; then
     echo "$MIGRATIONSQL Already exists."
@@ -136,3 +136,4 @@ echo "-- END migra calculated SQL" >>$MIGRATIONSQL
 cat $SQLDIR/998_idempotent_post.sql $SQLDIR/999_version.sql >>$MIGRATIONSQL
 
 echo "Migration created at $MIGRATIONSQL."
+exit 0

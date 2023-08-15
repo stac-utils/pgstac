@@ -27,12 +27,19 @@ repos:
 
 -   repo: local
     hooks:
+    -   id: dockerbuild
+        name: dockerbuild
+        entry: scripts/update
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        files: Dockerfile$|\.rs$
     -   id: stageversion
         name: stageversion
         entry: scripts/stageversion
         language: script
         pass_filenames: false
-        args: [--build, --no-cache]
         verbose: true
         fail_fast: true
     -   id: sql

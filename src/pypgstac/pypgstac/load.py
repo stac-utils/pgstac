@@ -120,8 +120,8 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
             # Try reading line by line as ndjson
             try:
                 for line in f:
-                    line = line.strip().replace("\\\\", "\\").replace("\\\\", "\\")
-                    yield orjson.loads(line)
+                    lineout = line.strip().replace("\\\\", "\\").replace("\\\\", "\\")
+                    yield orjson.loads(lineout)
             except JSONDecodeError:
                 # If reading first line as json fails, try reading entire file
                 logger.info("First line could not be parsed as json, trying full file.")
@@ -159,18 +159,19 @@ class Loader:
         if db_version is None:
             raise Exception("Failed to detect the target database version.")
 
-        v1 = V(db_version)
-        v2 = V(__version__)
-        if (v1.get_major_version(), v1.get_minor_version()) != (
-            v2.get_major_version(),
-            v2.get_minor_version(),
-        ):
-            raise Exception(
-                f"pypgstac version {__version__}"
-                " is not compatible with the target"
-                f" database version {self.db.version}."
-                f" database version {db_version}.",
-            )
+        if db_version != "unreleased":
+            v1 = V(db_version)
+            v2 = V(__version__)
+            if (v1.get_major_version(), v1.get_minor_version()) != (
+                v2.get_major_version(),
+                v2.get_minor_version(),
+            ):
+                raise Exception(
+                    f"pypgstac version {__version__}"
+                    " is not compatible with the target"
+                    f" database version {self.db.version}."
+                    f" database version {db_version}.",
+                )
 
     @lru_cache(maxsize=128)
     def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
@@ -602,8 +603,8 @@ class Loader:
         else:
             items = self.read_hydrated(file)
 
-        for chunk in chunked_iterable(items, chunksize):
-            chunk = list(chunk)
+        for chunkin in chunked_iterable(items, chunksize):
+            chunk = list(chunkin)
             chunk.sort(key=lambda x: x["partition"])
             for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
                 self.load_partition(self._partition_cache[k], g, insert_mode)

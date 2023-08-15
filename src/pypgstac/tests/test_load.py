@@ -1,5 +1,6 @@
 """Tests for pypgstac."""
 import json
+import re
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +32,7 @@ S1_GRD_ITEM = (
 
 
 def version_increment(source_version: str) -> str:
+    source_version = re.sub("-dev$","",source_version)
     version = V(source_version)
     return ".".join(
         map(
@@ -363,7 +365,7 @@ def test_load_collections_incompatible_version(loader: Loader) -> None:
         "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             loader.load_collections(
                 str(TEST_COLLECTIONS_JSON),
                 insert_mode=Methods.insert,
@@ -380,7 +382,7 @@ def test_load_items_incompatible_version(loader: Loader) -> None:
         "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             loader.load_items(
                 str(TEST_ITEMS),
                 insert_mode=Methods.insert,

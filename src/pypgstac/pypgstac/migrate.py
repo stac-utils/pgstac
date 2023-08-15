@@ -2,6 +2,7 @@
 import glob
 import logging
 import os
+import re
 from collections import defaultdict
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -95,6 +96,7 @@ class MigrationPath:
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -116,6 +118,9 @@ class Migrate:
         if toversion is None:
             toversion = __version__
         files = []
+        if re.search(r"-dev$",toversion):
+            logger.info("using unreleased version")
+            toversion = "unreleased"
 
         pg_version = self.db.pg_version
         logger.info(f"Migrating PGStac on PostgreSQL Version {pg_version}")

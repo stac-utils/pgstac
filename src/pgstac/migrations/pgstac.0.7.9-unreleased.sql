@@ -1,3 +1,5 @@
+SET client_min_messages TO WARNING;
+SET SEARCH_PATH to pgstac, public;
 RESET ROLE;
 DO $$
 DECLARE
@@ -130,76 +132,7 @@ DO $$
     RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
-SET client_min_messages TO WARNING;
-SET SEARCH_PATH to pgstac, public;
 -- BEGIN migra calculated SQL
-set check_function_bodies = off;
-
-CREATE OR REPLACE FUNCTION pgstac.search_query(_search jsonb DEFAULT '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT '{}'::jsonb)
- RETURNS pgstac.searches
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-DECLARE
-    search searches%ROWTYPE;
-    pexplain jsonb;
-    t timestamptz;
-    i interval;
-    _hash text := search_hash(_search, _metadata);
-    doupdate boolean := FALSE;
-    insertfound boolean := FALSE;
-BEGIN
-    SELECT * INTO search FROM searches
-    WHERE hash=_hash;
-
-    search.hash := _hash;
-
-    -- Calculate the where clause if not already calculated
-    IF search._where IS NULL THEN
-        search._where := stac_search_to_where(_search);
-    ELSE
-        doupdate := TRUE;
-    END IF;
-
-    -- Calculate the order by clause if not already calculated
-    IF search.orderby IS NULL THEN
-        search.orderby := sort_sqlorderby(_search);
-    ELSE
-        doupdate := TRUE;
-    END IF;
-
-    PERFORM where_stats(search._where, updatestats, _search->'conf');
-
-    IF NOT doupdate THEN
-        INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
-        VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
-        ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
-        IF FOUND THEN
-            RETURN search;
-        END IF;
-    END IF;
-
-    UPDATE searches
-        SET
-            lastused=clock_timestamp(),
-            usecount=usecount+1
-    WHERE hash=(
-        SELECT hash FROM searches
-        WHERE hash=_hash
-        FOR UPDATE SKIP LOCKED
-    );
-    IF NOT FOUND THEN
-        RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
-    END IF;
-
-    RETURN search;
-
-END;
-$function$
-;
-
-
-
 -- END migra calculated SQL
 DO $$
   BEGIN
@@ -279,4 +212,4 @@ GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('0.7.8');
+SELECT set_version('unreleased');

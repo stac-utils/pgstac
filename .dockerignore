@@ -6,6 +6,7 @@
 venv/*
 */.direnv/*
 */.ruff_cache/*
+*/.pytest_cache/*
 */.vscode/*
 */.mypy_cache/*
 */.pgadmin/*
@@ -14,5 +15,5 @@ venv/*
 */.github/*
 */env/*
 Dockerfile
-docker-compose.yml
+docker compose.yml
 */.devcontainer/*

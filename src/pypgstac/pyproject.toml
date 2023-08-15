@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-version = "unreleased"
+version = "0.7.9-dev"
 
 dependencies = [
     "smart-open>=4.2,<7.0",

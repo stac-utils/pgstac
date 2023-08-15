@@ -25,8 +25,8 @@ FROM rust:1-slim-bullseye as pypgstac
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
 ENV PIP_ROOT_USER_ACTION=ignore
-ENV PYTHONPATH="/opt/py:/opt/pypgstac:$PYTHONPATH"
-ENV PATH="/opt/bin:/opt/py/bin:$PATH"
+ENV PYTHONPATH="/opt/src/pypgstac:$PYTHONPATH"
+ENV PATH="/opt/docker/pypgstac/bin:$PATH"
 RUN \
     apt-get update \
     && apt-get upgrade -y \
@@ -44,9 +44,9 @@ WORKDIR /tmp
 RUN \
     toml-to-req --include-optional \
     && pip install -r /tmp/requirements.txt
-COPY docker/pypgstac/bin /opt/bin
-COPY src/pypgstac /opt/pypgstac
-WORKDIR /opt/pypgstac
+COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
+COPY src/pypgstac /opt/src/pypgstac
+WORKDIR /opt/src/pypgstac
 RUN pip install -e .
 
 # FROM ghcr.io/pyo3/maturin:latest as maturin

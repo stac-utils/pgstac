@@ -4,9 +4,6 @@ set -e
 if [[ "${CI}" ]]; then
     set -x
 fi
-if [ ! $PGSTACDOCKER == 1 ]; then
-    echo "This script should only be run within pgstac docker"; exit 1;
-fi
 
 function usage() {
     echo -n \
@@ -44,6 +41,9 @@ function test_formatting(){
 
     VERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
     echo $VERSION
+    if echo $VERSION | grep "dev"; then
+        VERSION="unreleased"
+    fi
 
     echo "Checking whether base sql migration exists for pypgstac version."
     [ -f pypgstac/migrations/pgstac."${VERSION}".sql ] || { echo "****FAIL No Migration exists pypgstac/migrations/pgstac.${VERSION}.sql"; exit 1; }
@@ -55,6 +55,7 @@ function test_pgtap(){
 cd /opt/src/pgstac
 TEMPLATEDB=${1:-pgstac_test_db_template}
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_pgtap WITH (force);
 CREATE DATABASE pgstac_test_pgtap TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pgtap SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
@@ -76,6 +77,7 @@ function test_basicsql(){
 TEMPLATEDB=${1:-pgstac_test_db_template}
 cd /opt/src/pgstac
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);
 CREATE DATABASE pgstac_test_basicsql TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_basicsql SET search_path to pgstac, public;
 ALTER DATABASE pgstac_test_basicsql SET client_min_messages to $CLIENTMESSAGES;
@@ -103,22 +105,24 @@ psql -X -t -a -v ON_ERROR_STOP=1 pgstac_test_basicsql \
 diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
 
 done
-psql -X -q -c "DROP DATABASE pgstac_test_basicsql WITH (force)";
+psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";
 }
 
 function test_pypgstac(){
 TEMPLATEDB=${1:-pgstac_test_db_template}
     cd /opt/src/pypgstac
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
-    pytest tests -o cache_dir=/tmp/.pytest_cache
-    psql -X -q -c "DROP DATABASE pgstac_test_pypgstac WITH (force)";
+    pytest tests
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 
 function test_migrations(){
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);
 CREATE DATABASE pgstac_test_migration;
 ALTER DATABASE pgstac_test_migration SET search_path to pgstac, public;
 ALTER DATABASE pgstac_test_migration SET client_min_messages to $CLIENTMESSAGES;
@@ -135,7 +139,7 @@ EOSQL
     test_pgtap pgstac_test_migration
     test_basicsql pgstac_test_migration
     test_pypgstac pgstac_test_migration
-    psql -X -q -c "DROP DATABASE pgstac_test_migration WITH (force)" postgres
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);" postgres
 }
 
 FORMATTING=0

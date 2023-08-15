@@ -1,7 +1,8 @@
 .envrc
-pypgstac/dist
+src/pypgstac/dist
 *.pyc
 *.egg-info
 *.eggs
 venv
 .direnv
+src/pypgstac/target

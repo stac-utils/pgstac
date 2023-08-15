@@ -6,8 +6,6 @@ set -e
 if [[ "${CI}" ]]; then
     set -x
 fi
-pwd
-docker ps
 function usage() {
     echo -n \
         "Usage: $(basename "$0") <--build> <--no-cache> <script>
@@ -31,13 +29,12 @@ do
         CONTAINER_ARGS+=($ARG)
     fi
 done
-docker compose -f docker-compose.yml ps
-exit
 if [[ $BUILD == 1 ]]; then
     echo "Building docker images..."
     docker compose build $NOCACHE
 fi
-# PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
-docker compose up -d pgstac
-# docker compose run --rm -u $(id -u):$(id -g) pypgstac "${CONTAINER_ARGS[@]}"
-# [[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac
+PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
+docker compose run -T --rm -u $(id -u):$(id -g) pypgstac "${CONTAINER_ARGS[@]}"
+JOBEXITCODE=$?
+[[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac
+exit $JOBEXITCODE

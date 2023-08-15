@@ -1,6 +1,6 @@
 {
 	"name": "PGStac",
-	"dockerComposeFile": "../docker-compose.yml",
+	"dockerComposeFile": "../docker compose.yml",
 	"service": "pgstac",
 	"workspaceFolder": "/opt/src"
 }
