@@ -46,6 +46,7 @@ RUN \
     && pip install -r /tmp/requirements.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
+COPY src/pgstac/migrations /opt/src/pypgstac/pypgstac/migrations
 WORKDIR /opt/src/pypgstac
 RUN pip install -e .
 
