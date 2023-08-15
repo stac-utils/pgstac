@@ -26,9 +26,9 @@ jobs:
           files: docker-compose.yml
           set: |
             pgstac.cache-from=type=gha
-            pgstac.cache-to=type=gha
+            pgstac.cache-to=type=gha,mode=max
             pypgstac.cache-from=type=gha
-            pypgstac.cache-to=type=gha
+            pypgstac.cache-to=type=gha,mode=max
 
       - name: Test via Compose
         run: scripts/test
