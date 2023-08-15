@@ -109,6 +109,7 @@ psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";
 }
 
 function test_pypgstac(){
+[[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
 TEMPLATEDB=${1:-pgstac_test_db_template}
     cd /opt/src/pypgstac
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
@@ -116,7 +117,7 @@ DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
-    pytest tests
+    pytest tests $VERBOSE
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 
