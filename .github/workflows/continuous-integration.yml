@@ -23,9 +23,9 @@ jobs:
         with:
           push: false
           load: true
-        set: |
-          web.cache-from=type=gha
-          web.cache-to=type=gha
+          set: |
+            web.cache-from=type=gha
+            web.cache-to=type=gha
       - name: Test via Compose
         run: scripts/test
 
