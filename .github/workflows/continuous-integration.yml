@@ -27,7 +27,7 @@ jobs:
           web.cache-from=type=gha
           web.cache-to=type=gha
       - name: Test via Compose
-        command: scripts/test
+        run: scripts/test
 
       # - uses: docker/setup-buildx-action@v2
       # - name: docker-compose-build
