@@ -18,15 +18,15 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-version = "0.7.10-dev"
-
+dynamic = ["version"]
 dependencies = [
     "smart-open>=4.2,<7.0",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
     "plpygis==0.2.*",
-    "pydantic[dotenv]==1.10.*",
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
     "tenacity==8.1.*",
     "cachetools==5.3.*",
     "version-parser>= 1.0.1",
