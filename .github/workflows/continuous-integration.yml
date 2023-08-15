@@ -23,9 +23,13 @@ jobs:
         with:
           push: false
           load: true
+          files: docker-compose.yml
           set: |
-            web.cache-from=type=gha
-            web.cache-to=type=gha
+            pgstac.cache-from=type=gha
+            pgstac.cache-to=type=gha
+            pypgstac.cache-from=type=gha
+            pypgstac.cache-to=type=gha
+
       - name: Test via Compose
         run: scripts/test
 
