@@ -42,5 +42,8 @@ jobs:
       - name: Start Database
         run: docker run -d --rm -e POSTGRES_PASSWORD=pg --expose 5432 ${{ steps.pgstacbuilder.outputs.imageid }}
 
+      - name: Database Ready
+        run: docker exec ${{ steps.pgstacbuilder.outputs.imageid }} pg_isready
+
       - name: Run tests
         run: docker run --rm -e PGUSER=postgres -e PGDATABASE=postgres -e PGPASSWORD ${{ steps.pypgstacbuilder.outputs.imageid }} /opt/docker/pypgstac/bin/test
