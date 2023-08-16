@@ -126,5 +126,7 @@ select = "D1"
 match = "(?!test).*.py"
 
 [tool.maturin]
+python-source = "python"
+module-name = "pypgstac.pgstacrs"
 strip = true
 sdist-generator = "cargo"

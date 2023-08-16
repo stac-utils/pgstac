@@ -1,3 +1,4 @@
+.so
 .envrc
 src/pypgstac/dist
 *.pyc

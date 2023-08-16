@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "pgstacrs"
-version = "0.1.0"
+version = "0.7.10-dev"
 dependencies = [
  "pyo3",
  "pythonize",
