@@ -2,7 +2,7 @@
 from copy import deepcopy
 from typing import Any, Dict
 
-from pgstacrs.pgstacrs import hydrate  # noqa # pylint: disable=unused-import
+from pypgstac.pgstacrs import hydrate  # noqa # pylint: disable=unused-import
 
 # Marker value to indicate that a key should not be rehydrated
 DO_NOT_MERGE_MARKER = "𒍟※"
