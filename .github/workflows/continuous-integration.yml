@@ -10,6 +10,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   DOCKER_BUILDKIT: 1
+  POSTGRES_PASSWORD: lksjfalkjewkjrw
+  PGHOST: postgres
+  PGDATABASE: postgres
+  PGUSER: postgres
 
 jobs:
   changes:
@@ -65,6 +69,16 @@ jobs:
     name: test
     needs: buildpypgstac
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
