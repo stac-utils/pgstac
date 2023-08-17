@@ -65,6 +65,7 @@ jobs:
     name: test
     needs: buildpypgstac
     runs-on: ubuntu-latest
+    image: python:3-slim-bullseye
 
     services:
       postgres:
