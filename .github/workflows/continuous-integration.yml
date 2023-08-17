@@ -51,13 +51,14 @@ jobs:
         with:
           python-version: '3.10'
       - name: Build wheels
+        working-directory: src/pypgstac
         uses: PyO3/maturin-action@v1
         with:
           args: --release --out dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
-          name: wheels
+          name: src/pypgstac/wheels
           path: dist
 
   test:
@@ -73,6 +74,7 @@ jobs:
         run:  |
           pip install --no-index --find-link=dist/ pypgstac[dev,test,psycopg]
       - name: Run tests
+        working-directory: src/pypgstac
         run:  |
           cd src/pypgstac
           pytest -vvv
