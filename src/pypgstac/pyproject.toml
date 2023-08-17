@@ -39,10 +39,12 @@ test = [
     "pystac[validation]==1.*",
     "types-cachetools",
 ]
+build = [
+    "maturin>=1,<2",
+]
 dev = [
     "flake8==3.9.*",
     "black>=21.7b0",
-    "maturin>=1,<2",
     "mypy>=0.910",
     "types-orjson==0.1.1",
     "types-pkg-resources",
