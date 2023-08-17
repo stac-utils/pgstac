@@ -50,8 +50,8 @@ jobs:
       env:
         PATH: $PATH:~/.cargo/bin
       volumes:
-        - src/pypgstac:/io
-        - src/pgstac/migrations:/io/python/pypgstac/migrations
+        - /home/github/pgstac/pgstac/src/pypgstac:/io
+        - /home/github/pgstac/pgstac/src/pgstac/migrations:/io/python/pypgstac/migrations
     steps:
       - uses: actions/checkout@v3
       - name: Build
