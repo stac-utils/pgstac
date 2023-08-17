@@ -51,8 +51,8 @@ jobs:
         with:
           python-version: '3.10'
       - uses: PyO3/maturin-action@v1
-        working-directory: src/pypgstac
         with:
+          working-directory: src/pypgstac
           args: --release --out dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
