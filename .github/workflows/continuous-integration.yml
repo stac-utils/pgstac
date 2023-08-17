@@ -53,12 +53,13 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: src/pypgstac
-          args: --release --out dist
+          args: --release --out /tmp/dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: dist
+          path: /tmp/dist
+          if-no-file-found: error
 
   test:
     name: test
