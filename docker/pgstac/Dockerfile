@@ -10,14 +10,14 @@ RUN  \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         postgresql-$PG_MAJOR-pgtap \
-        postgresql-$PG_MAJOR-partman \
         postgresql-$PG_MAJOR-plpgsql-check \
+        postgresql-$PG_MAJOR-partman \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
+COPY docker/pgstac/dbinit/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# in preparation for adding plrust enhancements, not used yet
-FROM pgstacbase as pgstac-plrust
+FROM pgstacbase as pgstacbase-plrust
 ENV PLRUSTVERSION=1.2.3
 ENV RUSTVERSION=1.70.0
 ENV PLRUSTDOWNLOADURL=https://github.com/tcdi/plrust/releases/download/
@@ -52,7 +52,8 @@ RUN \
     && $HOME/.cargo/bin/rustup toolchain install ${RUSTVERSION} \
     && $HOME/.cargo/bin/rustup default ${RUSTVERSION} \
     && $HOME/.cargo/bin/rustup component add rustc-dev
-
+WORKDIR /docker-entrypoint-preinitdb.d
+COPY docker/pgstac/dbinit/pgstac-rust-preinit.sh preloadplrust.sh
 WORKDIR /docker-entrypoint-initdb.d
 COPY docker/pgstac/dbinit/pgstac-rust.sh 991_plrust.sh
 
@@ -60,6 +61,11 @@ USER root
 RUN apt-get install -y /${PLRUSTFILE}
 
 FROM pgstacbase as pgstac
+WORKDIR /docker-entrypoint-initdb.d
+COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
+COPY src/pgstac/pgstac.sql 999_pgstac.sql
+
+FROM pgstacbase-plrust as pgstac-plrust
 WORKDIR /docker-entrypoint-initdb.d
 COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
 COPY src/pgstac/pgstac.sql 999_pgstac.sql

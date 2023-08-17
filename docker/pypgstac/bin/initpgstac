@@ -1,5 +1,6 @@
 #!/bin/bash
-cd /opt/src/pgstac
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src/pgstac
 
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 ALTER DATABASE $POSTGRES_DB SET CLIENT_MIN_MESSAGES TO WARNING;

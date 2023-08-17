@@ -1,12 +1,11 @@
 #!/bin/bash
-
 set -e
 
 if [[ "${CI}" ]]; then
     set -x
 fi
-
-cd /opt/src/
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src
 
 function usage() {
     echo -n \

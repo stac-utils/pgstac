@@ -1,4 +1,8 @@
 #!/bin/bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SRCDIR=$SCRIPT_DIR/../../../src
+cd $SRCDIR
+
 SHORT=f:,t:,o,d,h
 LONG=from:,to:,overwrite,debug,help
 OPTS=$(getopt --alternative --name $0 --options $SHORT --longoptions $LONG -- "$@")
@@ -42,7 +46,7 @@ done
 
 
 
-BASEDIR=/opt/src
+BASEDIR=$SRCDIR
 PYPGSTACDIR=$BASEDIR/pypgstac
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
 SQLDIR=$BASEDIR/pgstac/sql
