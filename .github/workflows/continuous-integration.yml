@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build
-        run: build --release --out /tmp/dist
+        run: maturin build --release --out /tmp/dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
