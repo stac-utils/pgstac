@@ -45,7 +45,13 @@ jobs:
   buildpypgstac:
     name: Build pypgstac wheel with Maturin
     runs-on: ubuntu-latest
-    container: ghcr.io/pyo3/maturin
+    container:
+      image: ghcr.io/pyo3/maturin
+      env:
+        PATH: $PATH:~/.cargo/bin
+      volumes:
+        src/pypgstac:/io
+        src/pgstac/migrations:/io/python/pypgstac/migrations
     steps:
       - uses: actions/checkout@v3
       - name: Build
