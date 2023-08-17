@@ -10,10 +10,6 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   DOCKER_BUILDKIT: 1
-  POSTGRES_PASSWORD: lksjfalkjewkjrw
-  PGHOST: postgres
-  PGDATABASE: postgres
-  PGUSER: postgres
 
 jobs:
   changes:
@@ -73,6 +69,8 @@ jobs:
     services:
       postgres:
         image: postgres
+        env:
+          POSTGRES_PASSWORD: postgres
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -93,6 +91,11 @@ jobs:
           find /tmp/wheels/*.whl -exec pip install '{}[dev,test,psycopg]' \;
       - name: Run tests
         working-directory: src/pypgstac
+        env:
+          PGPASSWORD: lksjfalkjewkjrw
+          PGHOST: postgres
+          PGDATABASE: postgres
+          PGUSER: postgres
         run:  |
           pytest -vvv
 
