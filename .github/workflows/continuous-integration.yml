@@ -12,26 +12,71 @@ env:
   DOCKER_BUILDKIT: 1
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    # Required permissions
+    permissions:
+      pull-requests: read
+    # Set job outputs to values from filter step
+    outputs:
+      postgres: ${{ steps.filter.outputs.postgres }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+    # For pull requests it's not necessary to checkout the code
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        filters: |
+          postgres:
+            - 'docker/pgstac/Dockerfile'
+          pgstac:
+            - 'docker/pgstac/**'
+            - 'src/pgstac/sql/*.sql'
+
+
+  # buildpg:
+  #   name: Build and push base postgres
+  #   needs: changes
+  #   runs-on: ubuntu-latest
+  #   if: ${{ needs.changes.outputs.postgres == 'true' }}
+  #   steps:
+  #     - uses: actions/checkout@v3
+
+  buildpypgstac:
+    name: Build pypgstac wheel with Maturin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: dist
+
   test:
     name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: docker/setup-buildx-action@v2
-      - name: Bake
-        uses: docker/bake-action@v3
+      - uses: actions/setup-python@v4
+      - uses: actions/download-artifact@v3
         with:
-          push: false
-          load: true
-          files: docker-compose.yml
-          set: |
-            pgstac.cache-from=type=gha
-            pgstac.cache-to=type=gha,mode=max
-            pypgstac.cache-from=type=gha
-            pypgstac.cache-to=type=gha,mode=max
+          name: wheels
+      - name: Install pypgstac from wheel
+        run:  |
+          pip install --no-index --find-link=dist/ pypgstac[dev,test,psycopg]
+      - name: Run tests
+        run:  |
+          cd src/pypgstac
+          pytest -vvv
 
-      - name: Test via Compose
-        run: scripts/test
 
       # - uses: docker/setup-buildx-action@v2
       # - name: docker-compose-build

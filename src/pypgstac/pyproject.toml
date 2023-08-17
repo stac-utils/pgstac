@@ -42,6 +42,7 @@ test = [
 dev = [
     "flake8==3.9.*",
     "black>=21.7b0",
+    "maturin>=1,<2",
     "mypy>=0.910",
     "types-orjson==0.1.1",
     "types-pkg-resources",
@@ -130,3 +131,6 @@ python-source = "python"
 module-name = "pypgstac.pgstacrs"
 strip = true
 sdist-generator = "cargo"
+include = [
+    "pypgstac/migrations/*.sql"
+]
