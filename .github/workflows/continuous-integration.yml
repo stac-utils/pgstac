@@ -47,8 +47,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pyo3/maturin
-      env:
-        PATH: $PATH:~/.cargo/bin
+      # env:
+      #   PATH: $PATH:~/.cargo/bin
       volumes:
         - /home/github/pgstac/pgstac/src/pypgstac:/io
         - /home/github/pgstac/pgstac/src/pgstac/migrations:/io/python/pypgstac/migrations
