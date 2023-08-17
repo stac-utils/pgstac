@@ -80,7 +80,6 @@ jobs:
       - name: Run tests
         working-directory: src/pypgstac
         run:  |
-          cd src/pypgstac
           pytest -vvv
 
 
