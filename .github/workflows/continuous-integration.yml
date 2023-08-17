@@ -59,10 +59,11 @@ jobs:
         with:
           name: wheels
           path: /tmp/dist
-          if-no-file-found: error
+          if-no-files-found: error
 
   test:
     name: test
+    needs: buildpypgstac
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
