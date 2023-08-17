@@ -49,6 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build
+        working-directory: src/pypgstac
         run: maturin build --release --out /tmp/dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
