@@ -76,7 +76,7 @@ jobs:
           path: /tmp/wheels
       - name: Install pypgstac from wheel
         run:  |
-          find /tmp/wheels/*.whl -exec pip install '{}[dev,test,psycopg]' /;
+          find /tmp/wheels/*.whl -exec pip install '{}[dev,test,psycopg]' \;
       - name: Run tests
         working-directory: src/pypgstac
         run:  |
