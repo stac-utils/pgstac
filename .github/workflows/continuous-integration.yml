@@ -73,9 +73,10 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           name: wheels
+          path: /tmp/wheels
       - name: Install pypgstac from wheel
         run:  |
-          pip install --no-index --find-link=wheels/ pypgstac[dev,test,psycopg]
+          pip install --no-index -f /tmp/wheels/ pypgstac[dev,test,psycopg]
       - name: Run tests
         working-directory: src/pypgstac
         run:  |
