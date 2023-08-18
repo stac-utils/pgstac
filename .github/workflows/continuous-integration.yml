@@ -168,8 +168,11 @@ jobs:
     steps:
       - name: Show mounts
         run: |
-          ls /opt;
+          pwd;
           ls;
+          du;
+          ls /opt;
+          ls /opt/docker;
       - name: Install pypgstac
         working-directory: /opt/src/pypgstac
         run:  |
