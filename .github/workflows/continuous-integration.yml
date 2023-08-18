@@ -70,7 +70,7 @@ jobs:
     name: Build and push base postgres
     if: ${{ needs.changes.outputs.buildpg == 'true' }}
     runs-on: ubuntu-latest
-    need: [changes]
+    needs: [changes]
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-buildx-action@v2
