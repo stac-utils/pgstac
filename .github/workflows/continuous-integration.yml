@@ -146,7 +146,8 @@ jobs:
     container:
       image:  ${{ needs.changes.outputs.pyrustdocker }}
       volumes:
-        - /home/github/pgstac/pgstac/src/pypgstac:/workspace
+        - .:/opt
+        - ./docker/pypgstac/bin:/opt/bin
       env:
         PGPASSWORD: postgres
         PGHOST: postgres
@@ -167,14 +168,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install pypgstac
-        working-directory: /workspace
+        working-directory: /opt/src/pypgstac
         run:  |
           pip install .[dev,test,psycopg];
 
       - name: Run tests
-        working-directory: /workspace
         run:  |
-          pytest -vvv
+          /opt/bin/test
 
 
       # - uses: docker/setup-buildx-action@v2
