@@ -33,7 +33,7 @@ jobs:
         buildpg=false;
         ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
         [[ "${{ steps.mainfilter.outputs.main }}" == "true" ]] && buildpg=true || ref=latest;
-        echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
+        echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$ref" >>$GITHUB_OUTPUT;
         echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
     - id: echocheck
       run: |
