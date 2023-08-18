@@ -166,6 +166,10 @@ jobs:
           --health-retries 5
 
     steps:
+      - name: Show mounts
+        run: |
+          ls /opt;
+          ls;
       - name: Install pypgstac
         working-directory: /opt/src/pypgstac
         run:  |
