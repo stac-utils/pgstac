@@ -49,7 +49,7 @@ jobs:
 
   buildpg:
     name: Build and push base postgres
-    needs: changes
+    needs: [masterchanges, currentchanges]
     runs-on: ubuntu-latest
     if: ${{ needs.masterchanges.outputs.postgres == 'true' }}
     steps:
