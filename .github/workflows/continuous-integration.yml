@@ -28,22 +28,11 @@ jobs:
         filters: |
           main:
             - 'docker/pgstac/**'
-    - uses: dorny/paths-filter@v2
-      id: headfilter
-      with:
-        base: HEAD^
-        filters: |
-          head:
-            - 'docker/pgstac/**'
     - id: check
       run: |
         buildpg=false;
         ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
-        if [[ ${{ steps.mainfilter.outputs.main }} == 'true' ]]; then
-          ref=latest
-        elif [[ ${{ steps.headfilter.outputs.base }} == 'true' ]]; then
-          buildpg=true;
-        fi;
+        [[ "${{ steps.mainfilter.outputs.main }}" == "true" ]] && buildpg=true || ref=latest;
         echo "pgdocker=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
         echo "buildpgdocker=$buildpg" >>$GITHUB_OUTPUT;
 
@@ -93,7 +82,7 @@ jobs:
 
   buildpg:
     name: Build and push base postgres
-    if: ${{ needs.changes.outputs.buildpg == 'true' }}
+    if: ${{ needs.changes.outputs.buildpgdocker == 'true' }}
     runs-on: ubuntu-latest
     needs: [changes]
     steps:
@@ -111,7 +100,7 @@ jobs:
           context: .
           target: pgstacbase-plrust
           file: docker/pgstac/Dockerfile
-          tags: ${{ needs.changes.outputs.pgtag }}
+          tags: ${{ needs.changes.outputs.pgdocker }}
           push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
@@ -143,7 +132,7 @@ jobs:
 
     services:
       postgres:
-        image: ${{ needs.changes.outputs.pgtag }}
+        image: ${{ needs.changes.outputs.pgdocker }}
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
