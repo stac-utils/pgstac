@@ -143,12 +143,20 @@ jobs:
     name: test
     needs: [changes, buildpg, buildpyrust]
     runs-on: ubuntu-latest
-    container: ${{ needs.changes.outputs.pyrustdocker }}
+    container:
+      image:  ${{ needs.changes.outputs.pyrustdocker }}
+      volumes:
+        - /home/github/pgstac/pgstac/src/pypgstac:/workspace
+    env:
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+      PGHOST: postgres
+      PGDATABASE: postgres
+      PGUSER: postgres
+
     services:
       postgres:
         image: ${{ needs.changes.outputs.pgdocker }}
-        env:
-          POSTGRES_PASSWORD: postgres
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -157,15 +165,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Run tests
-        working-directory: /opt/src/pypgstac
-        env:
-          PGPASSWORD: postgres
-          PGHOST: postgres
-          PGDATABASE: postgres
-          PGUSER: postgres
+      - name: Install pypgstac
+        working-directory: /workspace
         run:  |
-          /opt/src/docker/pypgstac/bin/test
+          pip install .[dev,test,psycopg];
+
+      - name: Run tests
+        working-directory: /workspace
+        run:  |
+          pytest -vvv
 
 
       # - uses: docker/setup-buildx-action@v2
