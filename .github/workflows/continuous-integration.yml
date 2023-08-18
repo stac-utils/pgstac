@@ -23,13 +23,13 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: dorny/paths-filter@v2
-      id: filter
+      id: mainfilter
       with:
         filters: |
           main:
             - 'docker/pgstac/**'
     - uses: dorny/paths-filter@v2
-      id: filter
+      id: headfilter
       with:
         base: HEAD^
         filters: |
@@ -39,9 +39,9 @@ jobs:
       run: |
         buildpg=false;
         ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
-        if [[ ${{ steps.changes.outputs.main }} == 'true' ]]; then
+        if [[ ${{ steps.mainfilter.outputs.main }} == 'true' ]]; then
           ref=latest
-        elif [[ ${{ steps.changes.outputs.base }} == 'true' ]]; then
+        elif [[ ${{ steps.headfilter.outputs.base }} == 'true' ]]; then
           buildpg=true;
         fi;
         echo "pgdocker=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
