@@ -10,14 +10,12 @@ RUN  \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
         postgresql-$PG_MAJOR-pgtap \
-        postgresql-$PG_MAJOR-partman \
         postgresql-$PG_MAJOR-plpgsql-check \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 
-# in preparation for adding plrust enhancements, not used yet
-FROM pgstacbase as pgstac-plrust
+FROM pgstacbase as pgstacbase-plrust
 ENV PLRUSTVERSION=1.2.3
 ENV RUSTVERSION=1.70.0
 ENV PLRUSTDOWNLOADURL=https://github.com/tcdi/plrust/releases/download/
@@ -60,6 +58,11 @@ USER root
 RUN apt-get install -y /${PLRUSTFILE}
 
 FROM pgstacbase as pgstac
+WORKDIR /docker-entrypoint-initdb.d
+COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
+COPY src/pgstac/pgstac.sql 999_pgstac.sql
+
+FROM pgstacbase-plrust as pgstac-plrust
 WORKDIR /docker-entrypoint-initdb.d
 COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
 COPY src/pgstac/pgstac.sql 999_pgstac.sql

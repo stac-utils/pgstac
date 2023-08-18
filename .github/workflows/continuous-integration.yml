@@ -12,7 +12,7 @@ env:
   DOCKER_BUILDKIT: 1
 
 jobs:
-  changes:
+  masterchanges:
     runs-on: ubuntu-latest
     # Required permissions
     permissions:
@@ -20,7 +20,6 @@ jobs:
     # Set job outputs to values from filter step
     outputs:
       postgres: ${{ steps.filter.outputs.postgres }}
-      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
     # For pull requests it's not necessary to checkout the code
     - uses: dorny/paths-filter@v2
@@ -28,35 +27,62 @@ jobs:
       with:
         filters: |
           postgres:
-            - 'docker/pgstac/Dockerfile'
-          pgstac:
             - 'docker/pgstac/**'
-            - 'src/pgstac/sql/*.sql'
+  currentchanges:
+    runs-on: ubuntu-latest
+    # Required permissions
+    permissions:
+      pull-requests: read
+    # Set job outputs to values from filter step
+    outputs:
+      postgres: ${{ steps.filter.outputs.postgres }}
+    steps:
+    # For pull requests it's not necessary to checkout the code
+    - uses: dorny/paths-filter@v2
+      id: filter
+      base: ${{ github.ref.name }}
+      with:
+        filters: |
+          postgres:
+            - 'docker/pgstac/**'
 
 
-  # buildpg:
-  #   name: Build and push base postgres
-  #   needs: changes
-  #   runs-on: ubuntu-latest
-  #   if: ${{ needs.changes.outputs.postgres == 'true' }}
-  #   steps:
-  #     - uses: actions/checkout@v3
+  buildpg:
+    name: Build and push base postgres
+    needs: changes
+    runs-on: ubuntu-latest
+    if: ${{ needs.changes.outputs.postgres == 'true' }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Log in to the Container registry
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and Push Base Postgres
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          target: pgstacbase-plrust
+          file: docker/pgstac/Dockerfile
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha, mode=max
 
   buildpypgstac:
     name: Build pypgstac wheel with Maturin
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pyo3/maturin
-      # env:
-      #   PATH: $PATH:~/.cargo/bin
-      volumes:
-        - /home/github/pgstac/pgstac/src/pypgstac:/io
-        - /home/github/pgstac/pgstac/src/pgstac/migrations:/io/python/pypgstac/migrations
     steps:
-      # - uses: actions/checkout@v3
-      - name: Build
-        working-directory: src/pypgstac
-        run: maturin build --release --out /tmp/dist
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: src/pypgstac
+          args: --release --out /tmp/dist
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
@@ -83,6 +109,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
       - uses: actions/download-artifact@v3
         with:
           name: wheels
