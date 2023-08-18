@@ -146,8 +146,8 @@ jobs:
     container:
       image:  ${{ needs.changes.outputs.pyrustdocker }}
       volumes:
-        - .:/opt
-        - ./docker/pypgstac/bin:/opt/bin
+        - /__w/pgstac/pgstac/:/opt/
+        - /__w/pgstac/pgstac/docker/pypgstac/bin/:/opt/bin/
       env:
         PGPASSWORD: postgres
         PGHOST: postgres
@@ -173,6 +173,7 @@ jobs:
           du;
           ls /opt;
           ls /opt/docker;
+          ls /opt/docker/pypgstac;
       - name: Install pypgstac
         working-directory: /opt/src/pypgstac
         run:  |
