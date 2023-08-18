@@ -118,7 +118,7 @@ jobs:
 
     services:
       postgres:
-        image: ${{ env.REGISTRY }}/pgstac-pg:${{ needs.changes.outputs.pgtag }}
+        image: ghcr.io/pgstac-pg:${{ needs.changes.outputs.pgtag }}
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
