@@ -12,40 +12,40 @@ env:
   DOCKER_BUILDKIT: 1
 
 jobs:
-  masterchanges:
-    runs-on: ubuntu-latest
-    # Required permissions
-    permissions:
-      pull-requests: read
-    # Set job outputs to values from filter step
-    outputs:
-      postgres: ${{ steps.filter.outputs.postgres }}
-    steps:
-    # For pull requests it's not necessary to checkout the code
-    - uses: dorny/paths-filter@v2
-      id: filter
-      with:
-        filters: |
-          postgres:
-            - 'docker/pgstac/**'
-  currentchanges:
-    runs-on: ubuntu-latest
-    # Required permissions
-    permissions:
-      pull-requests: read
-    # Set job outputs to values from filter step
-    outputs:
-      postgres: ${{ steps.filter.outputs.postgres }}
-      ref: ${{ github.ref.name }}
-    steps:
-    - uses: actions/checkout@v3
-    - uses: dorny/paths-filter@v2
-      id: filter
-      with:
-        base: HEAD^
-        filters: |
-          postgres:
-            - 'docker/pgstac/**'
+  # masterchanges:
+  #   runs-on: ubuntu-latest
+  #   # Required permissions
+  #   permissions:
+  #     pull-requests: read
+  #   # Set job outputs to values from filter step
+  #   outputs:
+  #     postgres: ${{ steps.filter.outputs.postgres }}
+  #   steps:
+  #   # For pull requests it's not necessary to checkout the code
+  #   - uses: dorny/paths-filter@v2
+  #     id: filter
+  #     with:
+  #       filters: |
+  #         postgres:
+  #           - 'docker/pgstac/**'
+  # currentchanges:
+  #   runs-on: ubuntu-latest
+  #   # Required permissions
+  #   permissions:
+  #     pull-requests: read
+  #   # Set job outputs to values from filter step
+  #   outputs:
+  #     postgres: ${{ steps.filter.outputs.postgres }}
+  #     ref: ${{ github.ref.name }}
+  #   steps:
+  #   - uses: actions/checkout@v3
+  #   - uses: dorny/paths-filter@v2
+  #     id: filter
+  #     with:
+  #       base: HEAD^
+  #       filters: |
+  #         postgres:
+  #           - 'docker/pgstac/**'
 
   changes:
     runs-on: ubuntu-latest
@@ -58,7 +58,7 @@ jobs:
         run: |
           git fetch origin main
           buildpg=false
-          pgtag=${{ github.ref.name }}
+          pgtag=${{ github.ref_name }}
           if ! git diff --stat main -- docker | head -c1 | grep -E '.'; then
             pgtag=latest
           elif git diff --stat HEAD^ -- docker | head -c1 | grep -E '.'; then
