@@ -56,16 +56,16 @@ jobs:
       - uses: actions/checkout@v3
       - id: check
         run: |
-          git fetch origin main
-          buildpg=false
-          pgtag=${{ github.ref_name }}
+          git fetch origin main;
+          buildpg=false;
+          pgtag=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
           if ! git diff --stat main -- docker | head -c1 | grep -E '.'; then
-            pgtag=latest
+            pgtag=latest;
           elif git diff --stat HEAD^ -- docker | head -c1 | grep -E '.'; then
-            buildpg=true
-          fi
-          echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT
-          echo "buildpg=$buildpg >>$GITHUB_OUTPUT
+            buildpg=true;
+          fi;
+          echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
+          echo "buildpg=$buildpg >>$GITHUB_OUTPUT;
 
 
   buildpg:
