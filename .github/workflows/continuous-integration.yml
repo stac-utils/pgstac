@@ -42,7 +42,7 @@ jobs:
     - uses: dorny/paths-filter@v2
       id: filter
       with:
-        base: ${{ env.GITHUB_REF_NAME }}
+        base: HEAD
         filters: |
           postgres:
             - 'docker/pgstac/**'
