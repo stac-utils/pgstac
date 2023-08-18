@@ -65,7 +65,7 @@ jobs:
             buildpg=true;
           fi;
           echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
-          echo "buildpg=$buildpg >>$GITHUB_OUTPUT;
+          echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
 
 
   buildpg:
