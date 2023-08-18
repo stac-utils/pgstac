@@ -40,8 +40,8 @@ jobs:
     # For pull requests it's not necessary to checkout the code
     - uses: dorny/paths-filter@v2
       id: filter
-      base: ${{ github.ref.name }}
       with:
+        base: ${{ github.ref.name }}
         filters: |
           postgres:
             - 'docker/pgstac/**'
@@ -51,7 +51,7 @@ jobs:
     name: Build and push base postgres
     needs: changes
     runs-on: ubuntu-latest
-    if: ${{ needs.changes.outputs.postgres == 'true' }}
+    if: ${{ needs.masterchanges.outputs.postgres == 'true' }}
     steps:
       - uses: actions/checkout@v3
       - name: Log in to the Container registry
