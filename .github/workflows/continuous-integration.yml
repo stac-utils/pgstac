@@ -51,7 +51,6 @@ jobs:
   buildpg:
     name: Build and push base postgres
     runs-on: ubuntu-latest
-    if: ${{ needs.masterchanges.outputs.postgres == 'true' }}
     steps:
       - uses: actions/checkout@v3
       - name: Only run if there are changes from main
