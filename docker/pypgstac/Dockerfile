@@ -21,7 +21,7 @@ COPY --from=pyreqs /py /py
 COPY src/pypgstac /pypgstac
 COPY --from=rustbuilder /workspace/target/debug/libpgstacrs.so /pypgstac/pgstacrs/libpgstacrs.so
 
-FROM rust:1-slim-bullseye as pypgstac
+FROM rust:1-slim-bullseye as pyrustbase
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
 ENV PIP_ROOT_USER_ACTION=ignore
@@ -39,6 +39,8 @@ RUN \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
+
+FROM pyrustbase as pypgstac
 COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
 WORKDIR /tmp
 RUN \
