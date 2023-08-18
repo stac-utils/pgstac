@@ -147,15 +147,16 @@ jobs:
       image:  ${{ needs.changes.outputs.pyrustdocker }}
       volumes:
         - /home/github/pgstac/pgstac/src/pypgstac:/workspace
-    env:
-      POSTGRES_PASSWORD: postgres
-      PGPASSWORD: postgres
-      PGHOST: postgres
-      PGDATABASE: postgres
-      PGUSER: postgres
+      env:
+        PGPASSWORD: postgres
+        PGHOST: postgres
+        PGDATABASE: postgres
+        PGUSER: postgres
 
     services:
       postgres:
+        env:
+          POSTGRES_PASSWORD: postgres
         image: ${{ needs.changes.outputs.pgdocker }}
         options: >-
           --health-cmd pg_isready
