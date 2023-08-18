@@ -38,11 +38,11 @@ jobs:
       postgres: ${{ steps.filter.outputs.postgres }}
       ref: ${{ github.ref.name }}
     steps:
-    # For pull requests it's not necessary to checkout the code
+    - uses: actions/checkout@v3
     - uses: dorny/paths-filter@v2
       id: filter
       with:
-        base: HEAD
+        base: HEAD^
         filters: |
           postgres:
             - 'docker/pgstac/**'
