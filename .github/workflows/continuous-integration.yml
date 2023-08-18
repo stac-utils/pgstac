@@ -12,22 +12,41 @@ env:
   DOCKER_BUILDKIT: 1
 
 jobs:
-  # masterchanges:
-  #   runs-on: ubuntu-latest
-  #   # Required permissions
-  #   permissions:
-  #     pull-requests: read
-  #   # Set job outputs to values from filter step
-  #   outputs:
-  #     postgres: ${{ steps.filter.outputs.postgres }}
-  #   steps:
-  #   # For pull requests it's not necessary to checkout the code
-  #   - uses: dorny/paths-filter@v2
-  #     id: filter
-  #     with:
-  #       filters: |
-  #         postgres:
-  #           - 'docker/pgstac/**'
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      pgdocker: ${{ steps.check.outputs.pgtag }}
+      buildpgdocker: ${{ steps.check.outputs.buildpg }}
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        filters: |
+          main:
+            - 'docker/pgstac/**'
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        base: HEAD^
+        filters: |
+          head:
+            - 'docker/pgstac/**'
+    - id: check
+      run: |
+        buildpg=false;
+        ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
+        if [[ ${{ steps.changes.outputs.main }} == 'true' ]]; then
+          ref=latest
+        elif [[ ${{ steps.changes.outputs.base }} == 'true' ]]; then
+          buildpg=true;
+        fi;
+        echo "pgdocker=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
+        echo "buildpgdocker=$buildpg" >>$GITHUB_OUTPUT;
+
   # currentchanges:
   #   runs-on: ubuntu-latest
   #   # Required permissions
@@ -47,25 +66,29 @@ jobs:
   #         postgres:
   #           - 'docker/pgstac/**'
 
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      pgtag: ${{ steps.check.outputs.pgtag }}
-      buildpg: ${{ steps.check.outputs.buildpg }}
-    steps:
-      - uses: actions/checkout@v3
-      - id: check
-        run: |
-          git fetch origin main;
-          buildpg=false;
-          pgtag=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
-          if ! git diff --stat main -- docker | head -c1 | grep -E '.'; then
-            pgtag=latest;
-          elif git diff --stat HEAD^ -- docker | head -c1 | grep -E '.'; then
-            buildpg=true;
-          fi;
-          echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
-          echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
+  # changes:
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     pgtag: ${{ steps.check.outputs.pgtag }}
+  #     buildpg: ${{ steps.check.outputs.buildpg }}
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - id: check
+  #       run: |
+  #         git fetch origin main;
+  #         buildpg=false;
+  #         pgtag=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
+  #         if ! git diff --stat main -- docker | head -c1 | grep -E '.'; then
+  #           pgtag=latest;
+  #         elif git diff --stat HEAD^ -- docker | head -c1 | grep -E '.'; then
+  #           buildpg=true;
+  #         fi;
+  #         echo "pgtag=${{ env.REGISTRY }}/pgstac-pg:$pgtag" >>$GITHUB_OUTPUT;
+  #         echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
+  #     - id: show
+  #       run: |
+  #         echo "${{ steps.check.outputs.pgtag }}"
+  #         echo "${{ steps.check.outputs.buildpg }}"
 
 
   buildpg:
