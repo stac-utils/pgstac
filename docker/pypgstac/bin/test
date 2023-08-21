@@ -137,6 +137,12 @@ ALTER DATABASE pgstac_test_migration SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.1.9"
+    cd $SRCDIR/pypgstac
+    python -m venv venv
+    source venv/bin/activate
+    pip install --cache /tmp/.pipcache --upgrade pip
+    pip install --cache /tmp/.pipcache -e .[dev,test,psycopg]
+
     pypgstac migrate --toversion 0.1.9
     pypgstac --version
 
