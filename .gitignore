@@ -7,3 +7,4 @@ src/pypgstac/dist
 venv
 .direnv
 src/pypgstac/target
+src/pypgstac/python/pypgstac/*.so

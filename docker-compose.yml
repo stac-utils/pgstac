@@ -35,7 +35,6 @@ services:
       - PGDATABASE=postgis
     volumes:
       - .:/opt
-      - ./docker/pypgstac/bin:/opt/bin
     depends_on:
       - pgstac
 volumes:

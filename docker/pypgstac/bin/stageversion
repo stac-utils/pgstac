@@ -1,6 +1,8 @@
 #!/bin/bash
-
-BASEDIR=/opt/src
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SRCDIR=$SCRIPT_DIR/../../../src
+cd $SRCDIR
+BASEDIR=$SRCDIR
 SQLDIR=$BASEDIR/pgstac/sql
 PYPGSTACDIR=$BASEDIR/pypgstac
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
@@ -43,7 +45,7 @@ ln -s migrations/pgstac.${VERSION}.sql pgstac.sql
 # Update the version number in the appropriate places
 [[ $VERSION == 'unreleased' ]] && PYVERSION="${OLDVERSION}-dev" || PYVERSION="$VERSION"
 echo "Setting pypgstac version to $PYVERSION"
-cat <<EOD > $PYPGSTACDIR/pypgstac/version.py
+cat <<EOD > $PYPGSTACDIR/python/pypgstac/version.py
 """Version."""
 __version__ = "${PYVERSION}"
 EOD

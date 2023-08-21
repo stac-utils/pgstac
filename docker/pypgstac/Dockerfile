@@ -1,26 +1,3 @@
-
-FROM python:3-slim-bullseye AS pyreqs
-ENV PYTHONWRITEBYTECODE=1
-ENV PYTHONBUFFERED=1
-RUN pip3 install --upgrade pip toml-to-requirements
-COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
-RUN toml-to-req --toml-file /tmp/pyproject.toml --include-optional >/tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt --target /py
-
-
-FROM rust:1-slim-bullseye as rustbuilder
-WORKDIR /workspace
-COPY src/pypgstac/Cargo.toml .
-COPY src/pypgstac/src src
-RUN ls && ls src
-RUN cargo build
-
-FROM python:3-slim-bullseye AS pypgstac1
-ENV PTYHONPATH=/pypgstac:/py:$PYTHONPATH
-COPY --from=pyreqs /py /py
-COPY src/pypgstac /pypgstac
-COPY --from=rustbuilder /workspace/target/debug/libpgstacrs.so /pypgstac/pgstacrs/libpgstacrs.so
-
 FROM rust:1-slim-bullseye as pyrustbase
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
@@ -51,14 +28,3 @@ COPY src/pypgstac /opt/src/pypgstac
 COPY src/pgstac/migrations /opt/src/pypgstac/pypgstac/migrations
 WORKDIR /opt/src/pypgstac
 RUN pip install -e .
-
-# FROM ghcr.io/pyo3/maturin:latest as maturin
-# COPY src/pypgstac /opt/pypgstac
-# WORKDIR /opt/pypgstac
-# RUN maturin build --release
-
-# FROM python:3-slim-bullseye AS pypgstac
-# ENV PYTHONPATH=/opt/pypgstac:$PYTHONPATH
-# WORKDIR /workspace
-# COPY --from=maturin /opt/pypgstac/target/wheels/*.whl .
-# RUN pip install *.whl --target /opt/pypgstac
