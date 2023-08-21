@@ -115,6 +115,10 @@ function test_pypgstac(){
 [[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
 TEMPLATEDB=${1:-pgstac_test_db_template}
     cd $SRCDIR/pypgstac
+    python -m venv venv
+    source venv/bin/activate
+    pip install --cache /tmp/.pipcache --upgrade pip
+    pip install --cache /tmp/.pipcache -e . --no-deps
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
