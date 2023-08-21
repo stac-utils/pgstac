@@ -169,11 +169,12 @@ jobs:
       - name: Show mounts
         run: |
           pwd;
-          ls;
+          ls /__w/pgstac/pgstac/;
+          du /__w/pgstac/pgstac/;
           du;
-          ls /opt;
-          ls /opt/docker;
-          ls /opt/docker/pypgstac;
+          ls /opt/;
+          ls /opt/docker/;
+          ls /opt/docker/pypgstac/;
       - name: Install pypgstac
         working-directory: /opt/src/pypgstac
         run:  |
