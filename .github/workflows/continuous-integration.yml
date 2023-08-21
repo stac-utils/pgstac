@@ -193,13 +193,13 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out /home/runner/work/pgstac/pgstac/dist
+          args: --release --out /tmp/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: /home/runner/work/pgstac/pgstac/dist/*
+          path: /tmp/dist/*
 
   sdist:
     runs-on: ubuntu-latest
