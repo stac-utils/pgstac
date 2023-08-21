@@ -4,7 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [unreleased]
+
+### Changed
+
+- update `pydantic` requirement to `~=2.0`
+- update docker and ci workflows to build binary wheels for rust additions to pypgstac
+- split docker into database service and python/rust container
+- Modify scripts to auto-generate unreleased migration
+- Add pre commit tasks to generate migration and to rebuild and compile pypgstac with maturin for rust
+- Add private jsonb column to items and collections table to hold private metadata that should not be returned as part of a stac item
+- Add generated columns to collections with the bounding box as a geometry and the datetime and end_datetime from the extents (this is to help with forthcoming work on collections search)
+- Add PLRust to the Docker postgres image for forthcoming work to add optional PLRust functions for expensive json manipulation (including hydration)
+
 ## [v0.7.10]
+
 ### Fixed
 - Return an empty jsonb array from all_collections() when the collections table is empty, instead of NULL. Fixes #186.
 - Add delete trigger to collections to clean up partition_stats records and remove any partitions. Fixes #185
@@ -364,29 +378,43 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.6.10...HEAD
-[v0.6.10]: https://github.com//stac-utils/pgstac/compare/v0.6.9...v0.6.10
-[v0.6.9]: https://github.com//stac-utils/pgstac/compare/v0.6.8...v0.6.9
-[v0.6.8]: https://github.com//stac-utils/pgstac/compare/v0.6.7...v0.6.8
-[v0.6.7]: https://github.com//stac-utils/pgstac/compare/v0.6.6...v0.6.7
-[v0.6.6]: https://github.com//stac-utils/pgstac/compare/v0.6.5...v0.6.6
-[v0.6.5]: https://github.com//stac-utils/pgstac/compare/v0.6.4...v0.6.5
-[v0.6.4]: https://github.com//stac-utils/pgstac/compare/v0.6.3...v0.6.4
-[v0.6.3]: https://github.com//stac-utils/pgstac/compare/v0.6.2...v0.6.3
-[v0.6.2]: https://github.com//stac-utils/pgstac/compare/v0.6.1...v0.6.2
-[v0.6.1]: https://github.com//stac-utils/pgstac/compare/v0.6.0...v0.6.1
-[v0.6.0]: https://github.com//stac-utils/pgstac/compare/v0.5.1...v0.6.0
-[v0.5.1]: https://github.com//stac-utils/pgstac/compare/v0.5.0...v0.5.1
-[v0.5.0]: https://github.com//stac-utils/pgstac/compare/v0.4.5...v0.5.0
-[v0.4.5]: https://github.com//stac-utils/pgstac/compare/v0.4.4...v0.4.5
-[v0.4.4]: https://github.com//stac-utils/pgstac/compare/v0.4.3...v0.4.4
-[v0.4.3]: https://github.com//stac-utils/pgstac/compare/v0.4.2...v0.4.3
-[v0.4.2]: https://github.com//stac-utils/pgstac/compare/v0.4.1...v0.4.2
-[v0.4.1]: https://github.com//stac-utils/pgstac/compare/v0.4.0...v0.4.1
-[v0.4.0]: https://github.com//stac-utils/pgstac/compare/v0.3.4...v0.4.0
-[v0.3.4]: https://github.com//stac-utils/pgstac/compare/v0.3.3...v0.3.4
-[v0.3.3]: https://github.com//stac-utils/pgstac/compare/v0.3.2...v0.3.3
-[v0.3.2]: https://github.com//stac-utils/pgstac/compare/v0.3.1...v0.3.2
-[v0.3.1]: https://github.com//stac-utils/pgstac/compare/v0.3.0...v0.3.1
-[v0.3.0]: https://github.com//stac-utils/pgstac/compare/v0.2.8...v0.3.0
-[v0.2.8]: https://github.com//stac-utils/pgstac/compare/ff02c9cee7bbb0a2de21530b0aeb34e823f2e95c...v0.2.8
+[unreleased]: https://github.com/stac-utils/pgstac/compare/v0.7.10...HEAD
+[v0.7.10]: https://github.com/stac-utils/pgstac/compare/v0.7.9...v0.7.10
+[v0.7.9]: https://github.com/stac-utils/pgstac/compare/v0.7.8...v0.7.9
+[v0.7.8]: https://github.com/stac-utils/pgstac/compare/v0.7.7...v0.7.8
+[v0.7.7]: https://github.com/stac-utils/pgstac/compare/v0.7.6...v0.7.7
+[v0.7.6]: https://github.com/stac-utils/pgstac/compare/v0.7.5...v0.7.6
+[v0.7.5]: https://github.com/stac-utils/pgstac/compare/v0.7.4...v0.7.5
+[v0.7.4]: https://github.com/stac-utils/pgstac/compare/v0.7.3...v0.7.4
+[v0.7.3]: https://github.com/stac-utils/pgstac/compare/v0.7.2...v0.7.3
+[v0.7.2]: https://github.com/stac-utils/pgstac/compare/v0.7.1...v0.7.2
+[v0.7.1]: https://github.com/stac-utils/pgstac/compare/v0.7.0...v0.7.1
+[v0.7.0]: https://github.com/stac-utils/pgstac/compare/v0.6.13...v0.7.0
+[v0.6.13]: https://github.com/stac-utils/pgstac/compare/v0.6.12...v0.6.13
+[v0.6.12]: https://github.com/stac-utils/pgstac/compare/v0.6.11...v0.6.12
+[v0.6.11]: https://github.com/stac-utils/pgstac/compare/v0.6.10...v0.6.11
+[v0.6.10]: https://github.com/stac-utils/pgstac/compare/v0.6.9...v0.6.10
+[v0.6.9]: https://github.com/stac-utils/pgstac/compare/v0.6.8...v0.6.9
+[v0.6.8]: https://github.com/stac-utils/pgstac/compare/v0.6.7...v0.6.8
+[v0.6.7]: https://github.com/stac-utils/pgstac/compare/v0.6.6...v0.6.7
+[v0.6.6]: https://github.com/stac-utils/pgstac/compare/v0.6.5...v0.6.6
+[v0.6.5]: https://github.com/stac-utils/pgstac/compare/v0.6.4...v0.6.5
+[v0.6.4]: https://github.com/stac-utils/pgstac/compare/v0.6.3...v0.6.4
+[v0.6.3]: https://github.com/stac-utils/pgstac/compare/v0.6.2...v0.6.3
+[v0.6.2]: https://github.com/stac-utils/pgstac/compare/v0.6.1...v0.6.2
+[v0.6.1]: https://github.com/stac-utils/pgstac/compare/v0.6.0...v0.6.1
+[v0.6.0]: https://github.com/stac-utils/pgstac/compare/v0.5.1...v0.6.0
+[v0.5.1]: https://github.com/stac-utils/pgstac/compare/v0.5.0...v0.5.1
+[v0.5.0]: https://github.com/stac-utils/pgstac/compare/v0.4.5...v0.5.0
+[v0.4.5]: https://github.com/stac-utils/pgstac/compare/v0.4.4...v0.4.5
+[v0.4.4]: https://github.com/stac-utils/pgstac/compare/v0.4.3...v0.4.4
+[v0.4.3]: https://github.com/stac-utils/pgstac/compare/v0.4.2...v0.4.3
+[v0.4.2]: https://github.com/stac-utils/pgstac/compare/v0.4.1...v0.4.2
+[v0.4.1]: https://github.com/stac-utils/pgstac/compare/v0.4.0...v0.4.1
+[v0.4.0]: https://github.com/stac-utils/pgstac/compare/v0.3.4...v0.4.0
+[v0.3.4]: https://github.com/stac-utils/pgstac/compare/v0.3.3...v0.3.4
+[v0.3.3]: https://github.com/stac-utils/pgstac/compare/v0.3.2...v0.3.3
+[v0.3.2]: https://github.com/stac-utils/pgstac/compare/v0.3.1...v0.3.2
+[v0.3.1]: https://github.com/stac-utils/pgstac/compare/v0.3.0...v0.3.1
+[v0.3.0]: https://github.com/stac-utils/pgstac/compare/v0.2.8...v0.3.0
+[v0.2.8]: https://github.com/stac-utils/pgstac/compare/ff02c9cee7bbb0a2de21530b0aeb34e823f2e95c...v0.2.8
