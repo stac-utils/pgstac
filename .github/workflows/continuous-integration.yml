@@ -166,6 +166,7 @@ jobs:
           --health-retries 5
 
     steps:
+      - uses: actions/checkout@v3
       - name: Show mounts
         run: |
           pwd;
