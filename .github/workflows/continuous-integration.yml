@@ -173,7 +173,7 @@ jobs:
       - name: Run tests
         working-directory: /opt
         run:  |
-          pre-commit run -a
+          ./docker/pypgstac/bin/test
 
 
       # - uses: docker/setup-buildx-action@v2
