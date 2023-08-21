@@ -130,3 +130,46 @@ DO $$
     RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+
+-- Install these idempotently as migrations do not put them before trying to modify the collections table
+
+
+CREATE OR REPLACE FUNCTION collection_geom(content jsonb)
+RETURNS geometry AS $$
+    WITH box AS (SELECT content->'extent'->'spatial'->'bbox'->0 as box)
+    SELECT
+        st_makeenvelope(
+            (box->>0)::float,
+            (box->>1)::float,
+            (box->>2)::float,
+            (box->>3)::float,
+            4326
+        )
+    FROM box;
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION collection_datetime(content jsonb)
+RETURNS timestamptz AS $$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>0) IS NULL
+            THEN '-infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>0)::timestamptz
+        END
+    ;
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION collection_enddatetime(content jsonb)
+RETURNS timestamptz AS $$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>1) IS NULL
+            THEN 'infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>1)::timestamptz
+        END
+    ;
+$$ LANGUAGE SQL IMMUTABLE STRICT;

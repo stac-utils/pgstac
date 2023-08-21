@@ -132,7 +132,132 @@ DO $$
     RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+
+-- Install these idempotently as migrations do not put them before trying to modify the collections table
+
+
+CREATE OR REPLACE FUNCTION collection_geom(content jsonb)
+RETURNS geometry AS $$
+    WITH box AS (SELECT content->'extent'->'spatial'->'bbox'->0 as box)
+    SELECT
+        st_makeenvelope(
+            (box->>0)::float,
+            (box->>1)::float,
+            (box->>2)::float,
+            (box->>3)::float,
+            4326
+        )
+    FROM box;
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION collection_datetime(content jsonb)
+RETURNS timestamptz AS $$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>0) IS NULL
+            THEN '-infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>0)::timestamptz
+        END
+    ;
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION collection_enddatetime(content jsonb)
+RETURNS timestamptz AS $$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>1) IS NULL
+            THEN 'infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>1)::timestamptz
+        END
+    ;
+$$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
+alter table "pgstac"."collections" add column "datetime" timestamp with time zone generated always as (collection_datetime(content)) stored;
+
+alter table "pgstac"."collections" add column "end_datetime" timestamp with time zone generated always as (collection_enddatetime(content)) stored;
+
+alter table "pgstac"."collections" add column "geometry" geometry generated always as (collection_geom(content)) stored;
+
+alter table "pgstac"."collections" add column "private" jsonb;
+
+alter table "pgstac"."items" add column "private" jsonb;
+
+set check_function_bodies = off;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_datetime(content jsonb)
+ RETURNS timestamp with time zone
+ LANGUAGE sql
+ IMMUTABLE STRICT
+AS $function$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>0) IS NULL
+            THEN '-infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>0)::timestamptz
+        END
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_enddatetime(content jsonb)
+ RETURNS timestamp with time zone
+ LANGUAGE sql
+ IMMUTABLE STRICT
+AS $function$
+    SELECT
+        CASE
+            WHEN
+                (content->'extent'->'temporal'->'interval'->0->>1) IS NULL
+            THEN 'infinity'::timestamptz
+            ELSE
+                (content->'extent'->'temporal'->'interval'->0->>1)::timestamptz
+        END
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_geom(content jsonb)
+ RETURNS geometry
+ LANGUAGE sql
+ IMMUTABLE STRICT
+AS $function$
+    WITH box AS (SELECT content->'extent'->'spatial'->'bbox'->0 as box)
+    SELECT
+        st_makeenvelope(
+            (box->>0)::float,
+            (box->>1)::float,
+            (box->>2)::float,
+            (box->>3)::float,
+            4326
+        )
+    FROM box;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.content_dehydrate(content jsonb)
+ RETURNS items
+ LANGUAGE sql
+ STABLE
+AS $function$
+    SELECT
+            content->>'id' as id,
+            stac_geom(content) as geometry,
+            content->>'collection' as collection,
+            stac_datetime(content) as datetime,
+            stac_end_datetime(content) as end_datetime,
+            content_slim(content) as content,
+            null::jsonb as private
+    ;
+$function$
+;
+
+
 -- END migra calculated SQL
 DO $$
   BEGIN
