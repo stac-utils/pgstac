@@ -145,14 +145,14 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out /tmp/dist
+          args: --release --out /home/runner/work/pgstac/pgstac/dist
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: /tmp/dist/*
+          path: /home/runner/work/pgstac/pgstac/dist/*
 
   windows:
     runs-on: windows-latest
@@ -170,13 +170,13 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out /tmp/dist
+          args: --release --out /home/runner/work/pgstac/pgstac/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: /tmp/dist/*
+          path: /home/runner/work/pgstac/pgstac/dist/*
 
   macos:
     runs-on: macos-latest
@@ -193,13 +193,13 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out /tmp/dist
+          args: --release --out /home/runner/work/pgstac/pgstac/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: /tmp/dist/*
+          path: /home/runner/work/pgstac/pgstac/dist/*
 
   sdist:
     runs-on: ubuntu-latest
@@ -210,12 +210,12 @@ jobs:
         with:
           working-directory: src/pypgstac
           command: sdist
-          args: --out /tmp/dist
+          args: --out /home/runner/work/pgstac/pgstac/dist
       - name: Upload sdist
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: /tmp/dist/*
+          path: /home/runner/work/pgstac/pgstac/dist/*
 
   # release:
   #   name: Release
