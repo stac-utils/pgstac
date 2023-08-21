@@ -1,0 +1,17 @@
+[package]
+name = "pgstacrs"
+version = "0.7.10-dev"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+path = "src/lib.rs"
+name = "pgstacrs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.19.1", features = ["abi3-py38", "extension-module"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+pythonize = "0.19"

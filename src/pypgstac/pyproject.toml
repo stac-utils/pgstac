@@ -1,5 +1,6 @@
 [project]
 name = "pypgstac"
+version = "0.7.10-dev"
 description = "Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -18,14 +19,14 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-dynamic = ["version"]
 dependencies = [
-    "smart-open>=4.2,<7.0",
+    "smart-open==6.3.*",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
     "fire==0.4.*",
     "plpygis==0.2.*",
-    "pydantic[dotenv]==1.10.*",
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
     "tenacity==8.1.*",
     "cachetools==5.3.*",
     "version-parser>= 1.0.1",
@@ -38,6 +39,9 @@ test = [
     "pystac[validation]==1.*",
     "types-cachetools",
 ]
+build = [
+    "maturin>=1,<2",
+]
 dev = [
     "flake8==3.9.*",
     "black>=21.7b0",
@@ -46,12 +50,14 @@ dev = [
     "types-pkg-resources",
     "ruff==0.0.231",
     "pre-commit",
-    "psycopg2-binary",
-    "migra",
 ]
 psycopg = [
     "psycopg[binary]==3.1.*",
     "psycopg-pool==3.1.*",
+]
+migrations = [
+    "psycopg2-binary",
+    "migra"
 ]
 
 
@@ -65,21 +71,9 @@ Changelog = "https://stac-utils.github.io/pgstac/release-notes/"
 [project.scripts]
 pypgstac = "pypgstac.pypgstac:cli"
 
-
-[tool.hatch.version]
-path = "pypgstac/version.py"
-
-[tool.hatch.build.targets.sdist]
-exclude = [
-  "/tests",
-  "/docs",
-  ".pytest_cache",
-  ".gitignore",
-]
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
 
 [tool.coverage.run]
 branch = true
@@ -133,3 +127,12 @@ namespace_packages = "True"
 [tool.pydocstyle]
 select = "D1"
 match = "(?!test).*.py"
+
+[tool.maturin]
+python-source = "python"
+module-name = "pypgstac.pgstacrs"
+strip = true
+sdist-generator = "cargo"
+include = [
+    "pypgstac/migrations/*.sql"
+]

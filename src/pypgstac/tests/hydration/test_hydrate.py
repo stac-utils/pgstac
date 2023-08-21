@@ -1,5 +1,6 @@
 """Test Hydration."""
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, cast
 
@@ -36,7 +37,10 @@ class TestHydrate:
     def hydrate(
         self, base_item: Dict[str, Any], item: Dict[str, Any],
     ) -> Dict[str, Any]:
-        return hydration.hydrate(base_item, item)
+        hpy = hydration.hydrate_py(deepcopy(base_item), deepcopy(item))
+        hrs = hydration.hydrate(deepcopy(base_item), deepcopy(item))
+        assert hpy == hrs
+        return hrs
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
         """Test that a dehydrated item is is equal to the raw item it was dehydrated
