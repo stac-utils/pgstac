@@ -39,7 +39,7 @@ function test_formatting(){
     mypy python
 
     echo "Checking if there are any staged migrations."
-    find pypgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
+    find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
 
 
     VERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
