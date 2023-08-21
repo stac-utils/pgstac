@@ -165,14 +165,15 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install pypgstac
-        working-directory: /__w/pgstac/pgstac/src/pypgstac
         run:  |
+          ln -s /__w/pgstac/pgstac /opt
+          cd /opt/src/pypgstac
           pip install .[dev,test,psycopg];
 
       - name: Run tests
-        working-directory: /__w/pgstac/pgstac/
+        working-directory: /opt
         run:  |
-          ./docker/pypgstac/bin/test
+          pre-commit run -a
 
 
       # - uses: docker/setup-buildx-action@v2
