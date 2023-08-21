@@ -145,14 +145,14 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out /tmp/dist
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: dist
+          path: /tmp/dist
 
   windows:
     runs-on: windows-latest
@@ -193,13 +193,13 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out /tmp/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: dist
+          path: /tmp/dist
 
   sdist:
     runs-on: ubuntu-latest
@@ -210,12 +210,12 @@ jobs:
         with:
           working-directory: src/pypgstac
           command: sdist
-          args: --out dist
+          args: --out /tmp/dist
       - name: Upload sdist
         uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: dist
+          path: /tmp/dist
 
   # release:
   #   name: Release
