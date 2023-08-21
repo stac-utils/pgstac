@@ -170,7 +170,7 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out /tmp/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
