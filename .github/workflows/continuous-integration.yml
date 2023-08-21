@@ -164,21 +164,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Show mounts
-        run: |
-          pwd;
-          ls /__w/pgstac/pgstac/;
-          du /__w/pgstac/pgstac/;
-          du;
-          ls /opt/;
-          ls /opt/docker/;
-          ls /opt/docker/pypgstac/;
       - name: Install pypgstac
-        working-directory: /opt/src/pypgstac
+        working-directory: /__w/pgstac/pgstac/src/pypgstac
         run:  |
           pip install .[dev,test,psycopg];
 
       - name: Run tests
+        working-directory: /__w/pgstac/pgstac/
         run:  |
           ./docker/pypgstac/bin/test
 
