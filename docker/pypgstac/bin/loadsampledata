@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src/pgstac
+psql -f pgstac.sql
+psql -v ON_ERROR_STOP=1 <<-EOSQL
+    \copy collections (content) FROM 'tests/testdata/collections.ndjson'
+    \copy items_staging (content) FROM 'tests/testdata/items.ndjson'
+EOSQL

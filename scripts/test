@@ -1,21 +1,4 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd $SCRIPT_DIR/..
-set -e
-
-if [[ "${CI}" ]]; then
-    set -x
-fi
-
-function usage() {
-    echo -n \
-        "Usage: $(basename "$0")
-"
-}
-
-
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    docker-compose build
-    echo "test $@"
-    docker-compose run -T --rm pgstac test $@
-fi
+$SCRIPT_DIR/update
+$SCRIPT_DIR/runinpypgstac test "$@"
