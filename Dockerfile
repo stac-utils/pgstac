@@ -1,7 +1,7 @@
-FROM postgres:15-bullseye as pg
+FROM postgres:15-bookworm as pg
 ENV PGSTACDOCKER=1
 ENV POSTGIS_MAJOR 3
-ENV POSTGIS_VERSION 3.3.3+dfsg-1~exp1.pgdg110+1
+ENV POSTGIS_VERSION 3.3.2+dfsg-1+b1
 ENV PYTHONPATH=/opt/src/pypgstac:/opt/python:${PYTHONPATH}
 ENV PATH=/opt/bin:${PATH}
 ENV PYTHONWRITEBYTECODE=1
@@ -31,8 +31,8 @@ RUN set -ex \
 COPY ./src/pypgstac/pyproject.toml /opt/src/pypgstac/pyproject.toml
 
 RUN \
-    pip3 install --upgrade pip \
-    && pip3 install /opt/src/pypgstac[dev,test,psycopg]
+    pip3 install --upgrade --break-system-packages pip \
+    && pip3 install --break-system-packages /opt/src/pypgstac[dev,test,psycopg]
 
 COPY ./src /opt/src
 COPY ./scripts/bin /opt/bin
