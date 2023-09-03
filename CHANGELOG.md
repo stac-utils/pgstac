@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+### Unreleased
+- Revert an optimisation which limited the number of results from a search query to the number of item IDs specified in the query.
+This fixes an issue where items with the same ID that are in multiple collections could be left out of search results.
+
 ## [v0.7.10]
 ### Fixed
 - Return an empty jsonb array from all_collections() when the collections table is empty, instead of NULL. Fixes #186.
