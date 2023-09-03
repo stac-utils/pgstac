@@ -650,3 +650,24 @@ SELECT * FROM pg_temp.testpaging('asc','asc');
 SELECT * FROM pg_temp.testpaging('asc','desc');
 SELECT * FROM pg_temp.testpaging('desc','desc');
 SELECT * FROM pg_temp.testpaging('desc','asc');
+
+
+\copy items_staging (content) FROM 'tests/testdata/items_duplicate_ids.ndjson'
+
+SELECT is(
+    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"]}')->'features')),
+    '2',
+    'Make sure all matching items are returned when items with the same ID are in multiple collections, no collections specified. #192'
+);
+
+SELECT is(
+    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection"]}')->'features')),
+    '1',
+    'Make sure all matching items are returned when items with the same ID are in multiple collections, some collections specified. #192'
+);
+
+SELECT is(
+    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection", "pgstac-test-collection2"]}')->'features')),
+    '2',
+    'Make sure all matching items are returned when items with the same ID are in multiple collections, all collections specified. #192'
+);
