@@ -9,11 +9,3 @@ set -e
 if [[ "${CI}" ]]; then
     set -x
 fi
-
-function usage() {
-    echo -n \
-        "Usage: $(basename "$0")
-Format code in this project
-
-"
-}

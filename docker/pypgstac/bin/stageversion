@@ -50,8 +50,5 @@ cat <<EOD > $PYPGSTACDIR/python/pypgstac/version.py
 __version__ = "${PYVERSION}"
 EOD
 sed -i "s/^version[ ]*=[ ]*.*/version = \"${PYVERSION}\"/" $PYPGSTACDIR/pyproject.toml
-sed -i "s/^version[ ]*=[ ]*.*/version = \"${PYVERSION}\"/" $PYPGSTACDIR/Cargo.toml
 
 makemigration -f $OLDVERSION -t $VERSION
-
-# git add $PYPGSTACDIR/pypgstac/version.py $PYPGSTACDIR/pyproject.toml $PYPGSTACDIR/Cargo.toml $MIGRATIONSDIR/pgstac.${VERSION}.sql $MIGRATIONSDIR/pgstac.${OLDVERSION}-${VERSION}.sql $BASEDIR/pgstac/pgstac.sql
