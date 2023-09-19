@@ -1,11 +1,11 @@
 #!/bin/bash
-if [ ! $PGSTACDOCKER == 1 ]; then
-    echo "This script should only be run within pgstac docker"; exit 1;
-fi
-cd /opt/src/pgstac
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src/pgstac
+
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 ALTER DATABASE $POSTGRES_DB SET CLIENT_MIN_MESSAGES TO WARNING;
 ALTER DATABASE $POSTGRES_DB SET SEARCH_PATH to pgstac, public;
 \connect $POSTGRES_DB;
+CREATE EXTENSION IF NOT EXISTS plrust;
 \i pgstac.sql
 EOSQL

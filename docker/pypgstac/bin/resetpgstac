@@ -1,10 +1,7 @@
 #!/bin/bash
-if [ ! $PGSTACDOCKER == 1 ]; then
-    echo "This script should only be run within pgstac docker"; exit 1;
-fi
-cd /opt/src/pgstac
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src/pgstac
 set -e
-psql -f pgstac.sql
 psql -v ON_ERROR_STOP=1 <<-EOSQL
     DROP SCHEMA IF EXISTS pgstac CASCADE;
     \i pgstac.sql

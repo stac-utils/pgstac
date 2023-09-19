@@ -1,0 +1,54 @@
+#!/bin/bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SRCDIR=$SCRIPT_DIR/../../../src
+cd $SRCDIR
+BASEDIR=$SRCDIR
+SQLDIR=$BASEDIR/pgstac/sql
+PYPGSTACDIR=$BASEDIR/pypgstac
+MIGRATIONSDIR=$BASEDIR/pgstac/migrations
+
+
+# Remove any existing unreleased migrations
+find $MIGRATIONSDIR -name "*unreleased*" -exec rm {} \;
+
+# Get Version
+if [[ ! -z "$1" ]]; then
+    VERSION=$1
+    if echo "$VERSION" | grep -E "^[0-9]+[.][0-9]+[.][0-9]+$"; then
+        echo "STAGING VERSION: $VERSION"
+    else
+        echo "Version must be in the format 0.1.2"
+        exit 1
+    fi
+    git tag -f "v$VERSION"
+else
+    VERSION="unreleased"
+fi
+
+
+OLDVERSION=$(find $MIGRATIONSDIR -name "pgstac.*.sql" | sed -En 's/^.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' | grep -v "$VERSION" | sort -Vr | head -1)
+
+
+
+echo "Bumping version from $OLDVERSION to $VERSION"
+
+# Assemble a base migration for the version and put it in the migrations directory.
+cd $SQLDIR
+echo "SELECT set_version('${VERSION}');" >999_version.sql
+cat *.sql >$MIGRATIONSDIR/pgstac.${VERSION}.sql
+cd $BASEDIR/pgstac
+
+# make the base pgstac.sql a symbolic link to the most recent version
+rm pgstac.sql
+ln -s migrations/pgstac.${VERSION}.sql pgstac.sql
+
+# Update the version number in the appropriate places
+[[ $VERSION == 'unreleased' ]] && PYVERSION="${OLDVERSION}-dev" || PYVERSION="$VERSION"
+echo "Setting pypgstac version to $PYVERSION"
+cat <<EOD > $PYPGSTACDIR/python/pypgstac/version.py
+"""Version."""
+__version__ = "${PYVERSION}"
+EOD
+sed -i "s/^version[ ]*=[ ]*.*/version = \"${PYVERSION}\"/" $PYPGSTACDIR/pyproject.toml
+
+makemigration -f $OLDVERSION -t $VERSION

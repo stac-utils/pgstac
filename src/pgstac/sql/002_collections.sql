@@ -7,11 +7,16 @@ CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS 
     );
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+
 CREATE TABLE IF NOT EXISTS collections (
     key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE,
     content JSONB NOT NULL,
     base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
+    geometry geometry GENERATED ALWAYS AS (pgstac.collection_geom(content)) STORED,
+    datetime timestamptz GENERATED ALWAYS AS (pgstac.collection_datetime(content)) STORED,
+    end_datetime timestamptz GENERATED ALWAYS AS (pgstac.collection_enddatetime(content)) STORED,
+    private jsonb,
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 

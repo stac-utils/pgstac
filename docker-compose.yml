@@ -5,7 +5,8 @@ services:
     image: pgstac
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/pgstac/Dockerfile
+      target: pgstac
     platform: linux/amd64
     environment:
       - POSTGRES_USER=username
@@ -18,7 +19,23 @@ services:
       - "5439:5432"
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
-      - ./src:/opt/src
-      - ./scripts/bin:/opt/bin
+    command: postgres
+  pypgstac:
+    container_name: pypgstac
+    image: pypgstac
+    build:
+      context: .
+      dockerfile: docker/pypgstac/Dockerfile
+      target: pypgstac
+    platform: linux/amd64
+    environment:
+      - PGHOST=pgstac
+      - PGUSER=username
+      - PGPASSWORD=password
+      - PGDATABASE=postgis
+    volumes:
+      - .:/opt
+    depends_on:
+      - pgstac
 volumes:
   pgstac-pgdata:

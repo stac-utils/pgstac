@@ -4,7 +4,8 @@ CREATE TABLE items (
     collection text NOT NULL,
     datetime timestamptz NOT NULL,
     end_datetime timestamptz NOT NULL,
-    content JSONB NOT NULL
+    content JSONB NOT NULL,
+    private jsonb
 )
 PARTITION BY LIST (collection)
 ;
@@ -66,7 +67,8 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content->>'collection' as collection,
             stac_datetime(content) as datetime,
             stac_end_datetime(content) as end_datetime,
-            content_slim(content) as content
+            content_slim(content) as content,
+            null::jsonb as private
     ;
 $$ LANGUAGE SQL STABLE;
 
