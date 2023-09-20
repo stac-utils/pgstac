@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [unreleased]
 
+### Fixed
+
+- Revert an optimisation which limited the number of results from a search query to the number of item IDs specified in the query.
+This fixes an issue where items with the same ID that are in multiple collections could be left out of search results.
+
 ### Changed
 
 - update `pydantic` requirement to `~=2.0`
@@ -16,6 +21,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add private jsonb column to items and collections table to hold private metadata that should not be returned as part of a stac item
 - Add generated columns to collections with the bounding box as a geometry and the datetime and end_datetime from the extents (this is to help with forthcoming work on collections search)
 - Add PLRust to the Docker postgres image for forthcoming work to add optional PLRust functions for expensive json manipulation (including hydration)
+- Remove default queryable for eo:cloud_cover
 
 ## [v0.7.10]
 
