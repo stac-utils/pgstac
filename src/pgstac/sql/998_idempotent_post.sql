@@ -25,15 +25,6 @@ DO $$
   END
 $$;
 
-DO $$
-  BEGIN
-    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-    ('eo:cloud_cover','{"$ref": "https://stac-extensions.github.io/eo/v1.0.0/schema.json#/definitions/fieldsproperties/eo:cloud_cover"}','to_int','BTREE');
-  EXCEPTION WHEN unique_violation THEN
-    RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
 
