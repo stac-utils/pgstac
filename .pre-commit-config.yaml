@@ -35,13 +35,6 @@ repos:
         verbose: true
         fail_fast: true
         files: Dockerfile$|\.rs$
-    -   id: stageversion
-        name: stageversion
-        entry: scripts/stageversion
-        language: script
-        pass_filenames: false
-        verbose: true
-        fail_fast: true
     -   id: sql
         name: sql
         entry: scripts/test
