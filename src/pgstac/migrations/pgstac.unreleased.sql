@@ -3596,22 +3596,11 @@ DECLARE
     out_records jsonb;
     out_len int;
     _limit int := coalesce((_search->>'limit')::int, 10);
-    init_limit int := _limit;
     _querylimit int;
     _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
     has_prev boolean := FALSE;
     has_next boolean := FALSE;
-    items_cnt int := coalesce(jsonb_array_length(_search->'ids'),0);
 BEGIN
-    RAISE NOTICE 'Items Count: %', items_cnt;
-    IF items_cnt > 0 THEN
-        IF items_cnt <= _limit THEN
-            _limit := items_cnt - 1;
-        ELSE
-            _limit := items_cnt;
-        END IF;
-        RAISE NOTICE 'Items is set. Changing limit to %', items_cnt;
-    END IF;
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
@@ -3683,7 +3672,7 @@ BEGIN
 
     out_len := jsonb_array_length(out_records);
 
-    IF out_len = init_limit + 1 THEN
+    IF out_len = _limit + 1 THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;
@@ -3708,13 +3697,13 @@ BEGIN
 
     IF context(_search->'conf') != 'off' THEN
         context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', init_limit,
+            'limit', _limit,
             'matched', total_count,
             'returned', coalesce(jsonb_array_length(out_records), 0)
         ));
     ELSE
         context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', init_limit,
+            'limit', _limit,
             'returned', coalesce(jsonb_array_length(out_records), 0)
         ));
     END IF;
