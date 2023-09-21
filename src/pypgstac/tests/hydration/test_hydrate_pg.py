@@ -27,7 +27,8 @@ class TestHydratePG(THydrate):
         os.environ["PGDATABASE"] = "pgstactestdb"
 
         pgdb = PgstacDB()
-        pgdb.query("DROP SCHEMA IF EXISTS pgstac CASCADE;")
+        with psycopg.connect(autocommit=True) as conn:
+            conn.execute("DROP SCHEMA IF EXISTS pgstac CASCADE;")
         Migrate(pgdb).run_migration()
 
         yield pgdb
