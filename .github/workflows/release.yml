@@ -105,7 +105,7 @@ jobs:
         with:
           context: .
           target: pyrustbase
-          file: docker/pgstac/Dockerfile
+          file: docker/pypgstac/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
@@ -135,7 +135,7 @@ jobs:
         with:
           context: .
           target: pypgstac
-          file: docker/pgstac/Dockerfile
+          file: docker/pypgstac/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
