@@ -113,6 +113,8 @@ The `queryables` table controls the indexes that PGStac will build as well as th
 
 Each record in the queryables table references a single property but can apply to any number of collections. If the `collection_ids` field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single queryable record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
 
+By default, any property may be used in filter expressions. If you wish to restrict it and only allow the queryables, you should either set the additional_properties setting variable to False or make the corresponding adjustment in the pgstac_settings table.
+
 ##### Queryable Metadata
 
 When used with [stac-fastapi](https://stac-utils.github.io/stac-fastapi/), the metadata returned in the queryables endpoint is determined using the definition field on the `queryables` table. This is a jsonb field that will be returned as-is in the queryables response. The full queryable response for a collection will be determined by all the `queryables` records that have a match in `collection_ids` or have a NULL `collection_ids`.

@@ -260,6 +260,7 @@ DECLARE
     _wrapper text;
     leftarg text;
     rightarg text;
+    extra_props bool := pgstac.additional_properties();
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -353,6 +354,12 @@ BEGIN
                     EXIT;
                 END IF;
             END LOOP;
+
+            IF
+                NOT extra_props AND wrapper IS NULL
+            THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
+            END IF;
 
             -- if the property was not in queryables, see if any args were numbers
             IF
