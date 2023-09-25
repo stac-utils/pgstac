@@ -39,7 +39,8 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
   ('update_collection_extent', 'false'),
-  ('format_cache', 'false')
+  ('format_cache', 'false'),
+  ('readonly', 'false')
 ON CONFLICT DO NOTHING
 ;
 

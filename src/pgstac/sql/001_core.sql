@@ -51,6 +51,10 @@ SELECT COALESCE(
 )::boolean;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION readonly(conf jsonb DEFAULT NULL) RETURNS boolean AS $$
+    SELECT pgstac.get_setting_bool('readonly', conf);
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
   SELECT pgstac.get_setting('context', conf);
 $$ LANGUAGE SQL;
