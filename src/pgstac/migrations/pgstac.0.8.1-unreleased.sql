@@ -367,6 +367,73 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.get_queryables(_collection_ids text[] DEFAULT NULL::text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+BEGIN
+    -- Build up queryables if the input contains valid collection ids or is empty
+    IF EXISTS (
+        SELECT 1 FROM collections
+        WHERE
+            _collection_ids IS NULL
+            OR cardinality(_collection_ids) = 0
+            OR id = ANY(_collection_ids)
+    )
+    THEN
+        RETURN (
+            WITH base AS (
+                SELECT
+                    unnest(collection_ids) as collection_id,
+                    name,
+                    coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables
+                WHERE
+                    _collection_ids IS NULL OR
+                    _collection_ids = '{}'::text[] OR
+                    _collection_ids && collection_ids
+                UNION ALL
+                SELECT null, name, coalesce(definition, '{"type":"string"}'::jsonb) as definition
+                FROM queryables WHERE collection_ids IS NULL OR collection_ids = '{}'::text[]
+            ), g AS (
+                SELECT
+                    name,
+                    first_notnull(definition) as definition,
+                    jsonb_array_unique_merge(definition->'enum') as enum,
+                    jsonb_min(definition->'minimum') as minimum,
+                    jsonb_min(definition->'maxiumn') as maximum
+                FROM base
+                GROUP BY 1
+            )
+            SELECT
+                jsonb_build_object(
+                    '$schema', 'http://json-schema.org/draft-07/schema#',
+                    '$id', '',
+                    'type', 'object',
+                    'title', 'STAC Queryables.',
+                    'properties', jsonb_object_agg(
+                        name,
+                        definition
+                        ||
+                        jsonb_strip_nulls(jsonb_build_object(
+                            'enum', enum,
+                            'minimum', minimum,
+                            'maximum', maximum
+                        ))
+                    ),
+                    'additionalProperties', pgstac.additional_properties()
+                )
+                FROM g
+        );
+    ELSE
+        RETURN NULL;
+    END IF;
+END;
+$function$
+;
+
 
 -- END migra calculated SQL
 DO $$

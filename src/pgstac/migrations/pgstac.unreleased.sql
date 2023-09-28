@@ -1328,7 +1328,8 @@ BEGIN
                             'minimum', minimum,
                             'maximum', maximum
                         ))
-                    )
+                    ),
+                    'additionalProperties', pgstac.additional_properties()
                 )
                 FROM g
         );
