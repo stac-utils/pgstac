@@ -226,6 +226,10 @@ SELECT COALESCE(
 )::boolean;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION additional_properties() RETURNS boolean AS $$
+    SELECT pgstac.get_setting_bool('additional_properties');
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION readonly(conf jsonb DEFAULT NULL) RETURNS boolean AS $$
     SELECT pgstac.get_setting_bool('readonly', conf);
 $$ LANGUAGE SQL;
@@ -1328,7 +1332,8 @@ BEGIN
                             'minimum', minimum,
                             'maximum', maximum
                         ))
-                    )
+                    ),
+                    'additionalProperties', pgstac.additional_properties()
                 )
                 FROM g
         );
@@ -1703,6 +1708,7 @@ DECLARE
     _wrapper text;
     leftarg text;
     rightarg text;
+    extra_props bool := pgstac.additional_properties();
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -1796,6 +1802,12 @@ BEGIN
                     EXIT;
                 END IF;
             END LOOP;
+
+            IF
+                NOT extra_props AND wrapper IS NULL
+            THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
+            END IF;
 
             -- if the property was not in queryables, see if any args were numbers
             IF
