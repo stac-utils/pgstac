@@ -77,3 +77,42 @@ SELECT lives_ok(
     $$ UPDATE queryables SET collection_ids = '{pgstac-test-collection}' WHERE name='testqueryable'; $$,
     'Can update a queryable from null to a single collection.'
 );
+
+SET pgstac.additional_properties to 'false';
+
+SELECT results_eq(
+    $$ SELECT pgstac.additional_properties(); $$,
+    $$ SELECT FALSE; $$,
+    'Make sure additional_properties is set to false'
+);
+
+SELECT throws_ok(
+    $$ SELECT search('{"filter": {"eq": [{"property": "xyzzy"}, "dummy"]}}'); $$,
+    'Term xyzzy is not found in queryables.',
+    'Make sure a term not present in the list of queryables cannot be used in a filter'
+);
+
+SELECT lives_ok(
+    $$ SELECT search('{"filter": {"eq": [{"property": "datetime"}, "2020-11-11T00:00:00Z"]}}'); $$,
+    'Make sure a term present in the list of queryables can be used in a filter'
+);
+
+SET pgstac.additional_properties to 'true';
+
+SELECT results_eq(
+    $$ SELECT pgstac.additional_properties(); $$,
+    $$ SELECT TRUE; $$,
+    'Make sure additional_properties is set to true'
+);
+
+SELECT lives_ok(
+    $$ SELECT search('{"filter": {"eq": [{"property": "xyzzy"}, "dummy"]}}'); $$,
+    'Make sure a term not present in the list of queryables can be used in a filter'
+);
+
+SELECT lives_ok(
+    $$ SELECT search('{"filter": {"eq": [{"property": "datetime"}, "2020-11-11T00:00:00Z"]}}'); $$,
+    'Make sure a term present in the list of queryables can be used in a filter'
+);
+
+RESET pgstac.additional_properties;
