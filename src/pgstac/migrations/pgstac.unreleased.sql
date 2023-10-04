@@ -1786,6 +1786,18 @@ BEGIN
             args := jsonb_build_array(args);
         END IF;
 
+        -- check if all arguments that are properties are represented in the queryables
+        IF NOT extra_props THEN
+            FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
+                IF arg->>'property' IN ('id', 'datetime', 'end_datetime', 'collection') THEN
+                    CONTINUE;
+                END IF;
+                IF (queryable(arg->>'property')).nulled_wrapper IS NULL THEN
+                    RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
+                END IF;
+            END LOOP;
+        END IF;
+
         IF jsonb_path_exists(args, '$[*] ? (@.property == "id" || @.property == "datetime" || @.property == "end_datetime" || @.property == "collection")') THEN
             wrapper := NULL;
         ELSE
@@ -1798,12 +1810,6 @@ BEGIN
                     EXIT;
                 END IF;
             END LOOP;
-
-            IF
-                NOT extra_props AND wrapper IS NULL AND jsonb_path_exists(args, '$[*] ? (@.property != null)')
-            THEN
-                RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
-            END IF;
 
             -- if the property was not in queryables, see if any args were numbers
             IF

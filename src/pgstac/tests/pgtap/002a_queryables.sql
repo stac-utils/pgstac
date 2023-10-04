@@ -99,7 +99,7 @@ SELECT lives_ok(
 
 SELECT lives_ok(
     $$ SELECT search('{"filter": {"and": [{"t_after": [{"property": "datetime"}, "2020-11-11T00:00:00"]}, {"t_before": [{"property": "datetime"}, "2022-11-11T00:00:00"]}]}}'); $$,
-    'Make sure that only arguments that are properties are cheked'
+    'Make sure that only arguments that are properties are checked'
 );
 
 SELECT throws_ok(
