@@ -297,7 +297,7 @@ BEGIN
             END LOOP;
 
             IF
-                NOT extra_props AND wrapper IS NULL
+                NOT extra_props AND wrapper IS NULL AND jsonb_path_exists(args, '$[*] ? (@.property != null)')
             THEN
                 RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
             END IF;

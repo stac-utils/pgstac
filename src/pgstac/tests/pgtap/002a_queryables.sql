@@ -97,6 +97,17 @@ SELECT lives_ok(
     'Make sure a term present in the list of queryables can be used in a filter'
 );
 
+SELECT lives_ok(
+    $$ SELECT search('{"filter": {"and": [{"t_after": [{"property": "datetime"}, "2020-11-11T00:00:00"]}, {"t_before": [{"property": "datetime"}, "2022-11-11T00:00:00"]}]}}'); $$,
+    'Make sure that only arguments that are properties are cheked'
+);
+
+SELECT throws_ok(
+    $$ SELECT search('{"filter": {"and": [{"t_after": [{"property": "datetime"}, "2020-11-11T00:00:00"]}, {"eq": [{"property": "xyzzy"}, "dummy"]}]}}'); $$,
+    'Term xyzzy is not found in queryables.',
+    'Make sure a term not present in the list of queryables cannot be used in a filter with nested arguments'
+);
+
 SET pgstac.additional_properties to 'true';
 
 SELECT results_eq(
