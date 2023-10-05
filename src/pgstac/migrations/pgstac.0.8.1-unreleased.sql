@@ -201,12 +201,27 @@ DECLARE
     _wrapper text;
     leftarg text;
     rightarg text;
+    prop text;
     extra_props bool := pgstac.additional_properties();
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'CQL2_QUERY: %', j;
+
+    -- check if all properties are represented in the queryables
+    IF NOT extra_props THEN
+        FOR prop IN
+            SELECT DISTINCT p->>0
+            FROM jsonb_path_query(j, 'strict $.**.property') p
+            WHERE p->>0 NOT IN ('id', 'datetime', 'end_datetime', 'collection')
+        LOOP
+            IF (queryable(prop)).nulled_wrapper IS NULL THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', prop;
+            END IF;
+        END LOOP;
+    END IF;
+
     IF j ? 'filter' THEN
         RETURN cql2_query(j->'filter');
     END IF;
@@ -295,12 +310,6 @@ BEGIN
                     EXIT;
                 END IF;
             END LOOP;
-
-            IF
-                NOT extra_props AND wrapper IS NULL
-            THEN
-                RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
-            END IF;
 
             -- if the property was not in queryables, see if any args were numbers
             IF
