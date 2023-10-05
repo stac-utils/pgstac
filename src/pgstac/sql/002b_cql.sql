@@ -260,12 +260,27 @@ DECLARE
     _wrapper text;
     leftarg text;
     rightarg text;
+    prop text;
     extra_props bool := pgstac.additional_properties();
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
     END IF;
     RAISE NOTICE 'CQL2_QUERY: %', j;
+
+    -- check if all properties are represented in the queryables
+    IF NOT extra_props THEN
+        FOR prop IN
+            SELECT DISTINCT p->>0
+            FROM jsonb_path_query(j, 'strict $.**.property') p
+            WHERE p->>0 NOT IN ('id', 'datetime', 'end_datetime', 'collection')
+        LOOP
+            IF (queryable(prop)).nulled_wrapper IS NULL THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', prop;
+            END IF;
+        END LOOP;
+    END IF;
+
     IF j ? 'filter' THEN
         RETURN cql2_query(j->'filter');
     END IF;
@@ -340,18 +355,6 @@ BEGIN
     IF j ? 'args' THEN
         IF jsonb_typeof(args) != 'array' THEN
             args := jsonb_build_array(args);
-        END IF;
-
-        -- check if all arguments that are properties are represented in the queryables
-        IF NOT extra_props THEN
-            FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
-                IF arg->>'property' IN ('id', 'datetime', 'end_datetime', 'collection') THEN
-                    CONTINUE;
-                END IF;
-                IF (queryable(arg->>'property')).nulled_wrapper IS NULL THEN
-                    RAISE EXCEPTION 'Term % is not found in queryables.', arg->>'property';
-                END IF;
-            END LOOP;
         END IF;
 
         IF jsonb_path_exists(args, '$[*] ? (@.property == "id" || @.property == "datetime" || @.property == "end_datetime" || @.property == "collection")') THEN
