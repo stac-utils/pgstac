@@ -1,3 +1,4 @@
+\set on_error_stop to on
 CREATE OR REPLACE FUNCTION collection_search_matched(
     IN _search jsonb DEFAULT '{}'::jsonb,
     OUT matched bigint
@@ -66,20 +67,72 @@ CREATE OR REPLACE FUNCTION collection_search(
 DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
-    _limit int := coalesce((_search->>'limit')::int, 10);
+    number_returned bigint;
+    _limit int := coalesce((_search->>'limit')::float::int, 10);
+    _offset int := coalesce((_search->>'offset')::float::int, 0);
+    links jsonb := '[]';
+    ret jsonb;
+    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
+    prevoffset int;
+    nextoffset int;
 BEGIN
     SELECT
         coalesce(jsonb_agg(c), '[]')
     INTO out_records
     FROM collection_search_rows(_search) c;
-    RETURN jsonb_build_object(
-        'type', 'FeatureCollection',
-        'features', out_records,
+
+    number_returned := jsonb_array_length(out_records);
+
+    IF _limit <= number_matched THEN --need to have paging links
+        nextoffset := least(_offset + _limit, number_matched - 1);
+        prevoffset := greatest(_offset - _limit, 0);
+        IF _offset = 0 THEN -- no previous paging
+
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        ELSE
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'prev',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', prevoffset),
+                    'merge', TRUE
+                ),
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        END IF;
+    END IF;
+
+    ret := jsonb_build_object(
+        'collections', out_records,
         'context', jsonb_build_object(
-            'limit', _search->'limit',
+            'limit', _limit,
             'matched', number_matched,
-            'returned', jsonb_array_length(out_records)
-        )
+            'returned', number_returned
+        ),
+        'links', links
     );
+    RETURN ret;
+
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+
+set pgstac.base_url to 'https://test.com/';
+select * from collection_search('{"datetime":["2012-01-01","2015-02-01"]}');
