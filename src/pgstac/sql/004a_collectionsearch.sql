@@ -1,4 +1,17 @@
 \set on_error_stop to on
+
+DROP VIEW IF EXISTS collections_asitems;
+CREATE OR REPLACE VIEW collections_asitems AS
+SELECT
+    id,
+    geometry,
+    'collections' AS collection,
+    datetime,
+    end_datetime,
+    jsonb_build_object('properties', content) AS content
+FROM collections;
+
+
 CREATE OR REPLACE FUNCTION collection_search_matched(
     IN _search jsonb DEFAULT '{}'::jsonb,
     OUT matched bigint
@@ -11,7 +24,7 @@ BEGIN
             SELECT
                 count(*)
             FROM
-                collections
+                collections_asitems
             WHERE %s
             ;
         $query$,
@@ -45,7 +58,7 @@ BEGIN
             SELECT
                 jsonb_fields(content, %L) as c
             FROM
-                collections
+                collections_asitems
             WHERE %s
             ORDER BY %s
             LIMIT %L
