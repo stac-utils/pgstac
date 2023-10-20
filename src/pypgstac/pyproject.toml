@@ -59,6 +59,19 @@ migrations = [
     "psycopg2-binary",
     "migra"
 ]
+workshop = [
+    "jupyter",
+    "ipython-sql",
+    "pgspecial"
+]
+docs = [
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocs-jupyter"
+]
+server = [
+    "stac-fastapi-pgstac"
+]
 
 
 [project.urls]

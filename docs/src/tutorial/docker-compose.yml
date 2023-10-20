@@ -1,0 +1,50 @@
+version: "3"
+services:
+  pgstac:
+    container_name: pgstac-tutorial-postgis
+    image: postgis/postgis:15-3.4
+    platform: linux/amd64
+    environment:
+      - POSTGRES_USER=adminrole
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=pgstac
+      - PGUSER=adminrole
+      - PGPASSWORD=password
+      - PGDATABASE=pgstac
+    ports:
+      - "5438:5432"
+    command: postgres
+  stacfastapi:
+    container_name: pgstac-tutorial-stacfastapi
+    image: pgstac/tutorial
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    platform: linux/amd64
+    environment:
+      - PGHOST=pgstac
+      - PGUSER=adminrole
+      - PGPASSWORD=password
+      - PGDATABASE=pgstac
+    volumes:
+      - .:/opt
+    ports:
+      - "8890:80"
+    depends_on:
+      - pgstac
+  tutorial:
+    container_name: pgstac-tutorial-notebook
+    image: pgstac/tutorial
+    environment:
+      - PGHOST=pgstac
+      - PGUSER=adminrole
+      - PGPASSWORD=password
+      - PGDATABASE=pgstac
+      - JUPYTER_TOKEN=token
+    volumes:
+      - .:/opt
+    ports:
+      - "8891:8891"
+    depends_on:
+      - pgstac
+    command: starttutorial

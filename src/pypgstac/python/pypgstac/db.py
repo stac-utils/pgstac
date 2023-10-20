@@ -102,6 +102,9 @@ class PgstacDB:
             self.connection.autocommit = True
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
+                self.connection.execute(
+                    "SET CLIENT_MIN_MESSAGES TO NOTICE;",
+                )
             atexit.register(self.disconnect)
             self.connection.execute(
                 """
@@ -273,6 +276,10 @@ class PgstacDB:
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
-    def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
+    def search(
+            self,
+            query: Union[dict, str, psycopg.types.json.Jsonb] = "{}",
+            hydrate: bool = True,
+        ) -> str:
         """Search PgStac."""
-        return dumps(next(self.func("search", query))[0])
+        return next(self.func("search", query))[0]

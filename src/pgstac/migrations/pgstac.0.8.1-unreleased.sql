@@ -443,6 +443,60 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT false)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    c RECORD;
+    q text;
+    from_trunc text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+    IF triggered THEN
+        RAISE NOTICE 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
+    ELSE
+        RAISE NOTICE 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
+        IF c.partition_trunc IS NOT DISTINCT FROM _partition_trunc THEN
+            RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+            RETURN _collection;
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM partitions_view WHERE collection=_collection LIMIT 1) THEN
+        EXECUTE format(
+            $q$
+                CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+                DROP TABLE IF EXISTS %I CASCADE;
+                WITH p AS (
+                    SELECT
+                        collection,
+                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
+                        ELSE date_trunc(%L, datetime)
+                        END as d,
+                        tstzrange(min(datetime),max(datetime),'[]') as dtrange,
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
+                    FROM changepartitionstaging
+                    GROUP BY 1,2
+                ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
+                INSERT INTO items SELECT * FROM changepartitionstaging;
+                DROP TABLE changepartitionstaging;
+            $q$,
+            concat('_items_', c.key),
+            concat('_items_', c.key),
+            c.partition_trunc,
+            c.partition_trunc
+        );
+    END IF;
+    RETURN _collection;
+END;
+$function$
+;
+
 
 -- END migra calculated SQL
 DO $$
