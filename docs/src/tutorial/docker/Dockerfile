@@ -12,10 +12,11 @@ RUN \
     && python3 -m pip install --upgrade \
         pip \
         jupyter \
-        pypgstac[psycopg] \
         stac-fastapi-pgstac \
         pystac \
         pystac-client \
+        uvicorn \
+    && python3 -m pip install --upgrade --no-deps pypgstac[psycopg] \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*

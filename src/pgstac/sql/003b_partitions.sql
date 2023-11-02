@@ -150,7 +150,7 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
 
 
-    RAISE NOTICE 'Checking if we need to modify constraints.';
+    RAISE NOTICE 'Checking if we need to modify constraints. cdtrange: % dtrange: % cedtrange: % edtrange: %', cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
@@ -180,7 +180,7 @@ BEGIN
     END IF;
 
 END;
-$$ LANGUAGE PLPGSQL STRICT;
+$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -419,6 +419,8 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
+                GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
             $q$,
             format('_items_%s', c.key),
             _collection,
@@ -442,7 +444,6 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
-    PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
     REFRESH MATERIALIZED VIEW partitions;
@@ -480,8 +481,9 @@ BEGIN
                 WITH p AS (
                     SELECT
                         collection,
-                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
-                        ELSE date_trunc(%L, datetime)
+                        CASE
+                            WHEN %L IS NULL THEN '-infinity'::timestamptz
+                            ELSE date_trunc(%L, datetime)
                         END as d,
                         tstzrange(min(datetime),max(datetime),'[]') as dtrange,
                         tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
