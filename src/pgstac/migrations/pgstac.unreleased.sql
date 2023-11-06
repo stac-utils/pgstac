@@ -230,6 +230,10 @@ CREATE OR REPLACE FUNCTION additional_properties() RETURNS boolean AS $$
     SELECT pgstac.get_setting_bool('additional_properties');
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION readonly(conf jsonb DEFAULT NULL) RETURNS boolean AS $$
+    SELECT pgstac.get_setting_bool('readonly', conf);
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION context(conf jsonb DEFAULT NULL) RETURNS text AS $$
   SELECT pgstac.get_setting('context', conf);
 $$ LANGUAGE SQL;
@@ -3293,7 +3297,12 @@ DECLARE
     _stats_ttl interval := context_stats_ttl(conf);
     _estimated_cost float := context_estimated_cost(conf);
     _estimated_count int := context_estimated_count(conf);
+    ro bool := pgstac.readonly(conf);
 BEGIN
+    IF ro THEN
+        updatestats := FALSE;
+    END IF;
+
     IF _context = 'off' THEN
         sw._where := inwhere;
         return sw;
@@ -3308,9 +3317,11 @@ BEGIN
         RAISE NOTICE 'TTL: %, Age: %', _stats_ttl, now() - sw.statslastupdated;
         RAISE NOTICE 'Context: %, Existing Total: %', _context, sw.total_count;
         IF
-            sw.statslastupdated IS NULL
-            OR (now() - sw.statslastupdated) > _stats_ttl
-            OR (context(conf) != 'off' AND sw.total_count IS NULL)
+            (
+                sw.statslastupdated IS NULL
+                OR (now() - sw.statslastupdated) > _stats_ttl
+                OR (context(conf) != 'off' AND sw.total_count IS NULL)
+            ) AND NOT ro
         THEN
             updatestats := TRUE;
         END IF;
@@ -3371,22 +3382,23 @@ BEGIN
         sw.time_to_count := NULL;
     END IF;
 
-
-    INSERT INTO search_wheres
-        (_where, lastused, usecount, statslastupdated, estimated_count, estimated_cost, time_to_estimate, partitions, total_count, time_to_count)
-    SELECT sw._where, sw.lastused, sw.usecount, sw.statslastupdated, sw.estimated_count, sw.estimated_cost, sw.time_to_estimate, sw.partitions, sw.total_count, sw.time_to_count
-    ON CONFLICT ((md5(_where)))
-    DO UPDATE
-        SET
-            lastused = sw.lastused,
-            usecount = sw.usecount,
-            statslastupdated = sw.statslastupdated,
-            estimated_count = sw.estimated_count,
-            estimated_cost = sw.estimated_cost,
-            time_to_estimate = sw.time_to_estimate,
-            total_count = sw.total_count,
-            time_to_count = sw.time_to_count
-    ;
+    IF NOT ro THEN
+        INSERT INTO search_wheres
+            (_where, lastused, usecount, statslastupdated, estimated_count, estimated_cost, time_to_estimate, partitions, total_count, time_to_count)
+        SELECT sw._where, sw.lastused, sw.usecount, sw.statslastupdated, sw.estimated_count, sw.estimated_cost, sw.time_to_estimate, sw.partitions, sw.total_count, sw.time_to_count
+        ON CONFLICT ((md5(_where)))
+        DO UPDATE
+            SET
+                lastused = sw.lastused,
+                usecount = sw.usecount,
+                statslastupdated = sw.statslastupdated,
+                estimated_count = sw.estimated_count,
+                estimated_cost = sw.estimated_cost,
+                time_to_estimate = sw.time_to_estimate,
+                total_count = sw.total_count,
+                time_to_count = sw.time_to_count
+        ;
+    END IF;
     RETURN sw;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -3405,7 +3417,12 @@ DECLARE
     _hash text := search_hash(_search, _metadata);
     doupdate boolean := FALSE;
     insertfound boolean := FALSE;
+    ro boolean := pgstac.readonly();
 BEGIN
+    IF ro THEN
+        updatestats := FALSE;
+    END IF;
+
     SELECT * INTO search FROM searches
     WHERE hash=_hash;
 
@@ -3427,26 +3444,28 @@ BEGIN
 
     PERFORM where_stats(search._where, updatestats, _search->'conf');
 
-    IF NOT doupdate THEN
-        INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
-        VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
-        ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
-        IF FOUND THEN
-            RETURN search;
+    IF NOT ro THEN
+        IF NOT doupdate THEN
+            INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
+            VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
+            ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
+            IF FOUND THEN
+                RETURN search;
+            END IF;
         END IF;
-    END IF;
 
-    UPDATE searches
-        SET
-            lastused=clock_timestamp(),
-            usecount=usecount+1
-    WHERE hash=(
-        SELECT hash FROM searches
-        WHERE hash=_hash
-        FOR UPDATE SKIP LOCKED
-    );
-    IF NOT FOUND THEN
-        RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
+        UPDATE searches
+            SET
+                lastused=clock_timestamp(),
+                usecount=usecount+1
+        WHERE hash=(
+            SELECT hash FROM searches
+            WHERE hash=_hash
+            FOR UPDATE SKIP LOCKED
+        );
+        IF NOT FOUND THEN
+            RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
+        END IF;
     END IF;
 
     RETURN search;
@@ -4100,7 +4119,8 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
   ('update_collection_extent', 'false'),
-  ('format_cache', 'false')
+  ('format_cache', 'false'),
+  ('readonly', 'false')
 ON CONFLICT DO NOTHING
 ;
 
