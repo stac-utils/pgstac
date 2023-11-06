@@ -1,6 +1,12 @@
+.so
 .envrc
-pypgstac/dist
+src/pypgstac/dist
 *.pyc
 *.egg-info
 *.eggs
 venv
+.direnv
+src/pypgstac/target
+src/pypgstac/python/pypgstac/*.so
+.vscode
+.ipynb_checkpoints

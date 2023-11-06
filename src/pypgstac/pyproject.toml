@@ -1,0 +1,138 @@
+[project]
+name = "pypgstac"
+version = "0.8.1-dev"
+description = "Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    {name = "David Bitner", email = "bitner@dbspatial.com"},
+]
+keywords = ["STAC", "Postgresql", "PgSTAC"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "smart-open==6.3.*",
+    "orjson>=3.5.2",
+    "python-dateutil==2.8.*",
+    "fire==0.4.*",
+    "plpygis==0.2.*",
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
+    "tenacity==8.1.*",
+    "cachetools==5.3.*",
+    "version-parser>= 1.0.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pystac[validation]==1.*",
+    "types-cachetools",
+]
+build = [
+    "maturin>=1,<2",
+]
+dev = [
+    "flake8==3.9.*",
+    "black>=21.7b0",
+    "mypy>=0.910",
+    "types-orjson==0.1.1",
+    "types-pkg-resources",
+    "ruff==0.0.231",
+    "pre-commit",
+]
+psycopg = [
+    "psycopg[binary]==3.1.*",
+    "psycopg-pool==3.1.*",
+]
+migrations = [
+    "psycopg2-binary",
+    "migra"
+]
+
+
+[project.urls]
+Homepage = "https://stac-utils.github.io/pgstac/"
+Documentation = "https://stac-utils.github.io/pgstac/"
+Issues = "https://github.com/stac-utils/pgstac/issues"
+Source = "https://github.com/stac-utils/pgstac"
+Changelog = "https://stac-utils.github.io/pgstac/release-notes/"
+
+[project.scripts]
+pypgstac = "pypgstac.pypgstac:cli"
+
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[tool.coverage.run]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+    # "D",  # pydocstyle
+    "C4", # flake8-comprehensions
+    "T20", # flake8-print
+    # "PT", # flake8-pytest-style
+    "Q", # flake8-quotes
+    # "SIM", # flake8-simplify
+    "DTZ", # flake8-datetimez
+    "ERA", # eradicate
+    "PLC",
+    "PLE",
+    # "PLR",
+    "PLW",
+    "COM", # flake8-commas
+]
+ignore = [
+    # "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "B905",
+]
+
+[tool.ruff.isort]
+known-first-party = ["pypgstac"]
+
+[tool.mypy]
+no_strict_optional = "True"
+ignore_missing_imports = "True"
+disallow_untyped_defs = "True"
+namespace_packages = "True"
+
+[tool.pydocstyle]
+select = "D1"
+match = "(?!test).*.py"
+
+[tool.maturin]
+python-source = "python"
+module-name = "pypgstac.pgstacrs"
+strip = true
+sdist-generator = "cargo"
+include = [
+    "pypgstac/migrations/*.sql"
+]

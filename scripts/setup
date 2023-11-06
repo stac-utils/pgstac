@@ -1,5 +1,6 @@
 #!/bin/bash
-
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
 set -e
 
 if [[ "${CI}" ]]; then
@@ -14,31 +15,12 @@ Sets up this project for development.
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+
     # Build docker containers
     scripts/update
 
-    echo "migrating..."
-    scripts/migrate
-
     echo "Bringing up database..."
     scripts/server --detach
-
-    echo "Ingesting development data..."
-    docker-compose \
-        -f docker-compose.yml \
-        run --rm \
-        dev \
-        pypgstac load collections \
-        /opt/src/test/testdata/collections.ndjson \
-        --method upsert
-
-    docker-compose \
-        -f docker-compose.yml \
-        run --rm \
-        dev \
-        pypgstac load items \
-        /opt/src/test/testdata/items.ndjson \
-        --method upsert
 
     echo "Done."
 

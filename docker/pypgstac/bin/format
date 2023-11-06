@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/../../../src
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0")
+Format code.
+
+This scripts is meant to be run inside the dev container.
+
+"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    echo "Formatting pypgstac..."
+    ruff --fix pypgstac/pypgstac
+    ruff --fix pypgstac/tests
+fi

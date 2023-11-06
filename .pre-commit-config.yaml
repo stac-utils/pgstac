@@ -1,0 +1,73 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: check-yaml
+    -   id: check-added-large-files
+    -   id: check-toml
+    -   id: detect-aws-credentials
+        args: [--allow-missing-credential]
+    -   id: detect-private-key
+    -   id: check-json
+    -   id: mixed-line-ending
+    -   id: check-merge-conflict
+    -   id: check-executables-have-shebangs
+    -   id: check-symlinks
+
+
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: 'v0.0.284'
+    hooks:
+    -   id: ruff
+        files: pypgstac\/.*\.py$
+        args: [--fix, --exit-non-zero-on-fix]
+
+-   repo: local
+    hooks:
+    -   id: dockerbuild
+        name: dockerbuild
+        entry: scripts/update
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        files: Dockerfile$|\.rs$
+    -   id: sql
+        name: sql
+        entry: scripts/test
+        args: [--basicsql, --pgtap]
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        files: sql\/.*\.sql$
+    -   id: formatting
+        name: formatting
+        entry: scripts/test
+        args: [--formatting]
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        always_run: true
+    -   id: pypgstac
+        name: pypgstac
+        entry: scripts/test
+        args: [--pypgstac]
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        files: pypgstac\/.*\.py$
+    -   id: migrations
+        name: migrations
+        entry: scripts/test
+        args: [--migrations]
+        language: script
+        pass_filenames: false
+        verbose: true
+        fail_fast: true
+        files: migrations\/.*\.sql$

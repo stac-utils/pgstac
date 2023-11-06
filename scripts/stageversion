@@ -1,21 +1,4 @@
 #!/bin/bash
-
-set -e
-
-if [[ "${CI}" ]]; then
-    set -x
-fi
-
-function usage() {
-    echo -n \
-        "Usage: $(basename "$0") version string or rule(patch,minor,major)
-Create a new tag
-
-"
-}
-
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "Updating Version..."
-    docker-compose run --rm dev scripts/bin/stageversion $1
-    docker-compose exec -T database scripts/bin/stageversiondb
-fi
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+$SCRIPT_DIR/runinpypgstac stageversion "$@"

@@ -5,3 +5,15 @@
 *.eggs
 venv/*
 */.direnv/*
+*/.ruff_cache/*
+*/.pytest_cache/*
+*/.vscode/*
+*/.mypy_cache/*
+*/.pgadmin/*
+*/.ipynb_checkpoints/*
+*/.git/*
+*/.github/*
+*/env/*
+Dockerfile
+docker compose.yml
+*/.devcontainer/*
