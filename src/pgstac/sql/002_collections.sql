@@ -20,48 +20,6 @@ CREATE TABLE IF NOT EXISTS collections (
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 
-CREATE TABLE pgstac_dict (
-    proj_hash bigint GENERATED ALWAYS AS identity,
-    j jsonb UNIQUE NOT NULL
-);
-REVOKE ALL ON TABLE pgstac_dict FROM PUBLIC;
-GRANT INSERT ON TABLE pgstac_dict TO pgstac_admin;
-
-CREATE TABLE pgstac_dict_keys(
-    key text PRIMARY KEY,
-    compress_keys text[] NOT NULL
-);
-
-CREATE OR REPLACE FUNCTION compress_key(_j jsonb) RETURNS jsonb AS $$
-DECLARE
-    keygroups text[][] :=
-        '{
-            {proj:wkt2,proj:projjson,proj:epsg},
-            {proj:shape,proj:transform},
-            {classification:bitfields},
-            {description, title, type, roles},
-            {eo:bands, raster:bands},
-            {s3.shape, s3.spatial_resolution}
-        }'::text[][];
-    t := jsonb_typeof(_j);
-
-
-BEGIN
-    IF t = 'object' THEN
-
-    ELSIF t = 'array' THEN
-        -- run compress on each elemnt of array
-    ELSE
-        RETURN _j;
-    END IF;
-
-
-END;
-$$ LANGUAGE PLPGSQL STRICT;
-
-
-
-
 CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
     SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;

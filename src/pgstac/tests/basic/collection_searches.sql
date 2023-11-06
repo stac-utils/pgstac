@@ -1,7 +1,6 @@
 
 SET pgstac.context TO 'on';
 SET pgstac."default_filter_lang" TO 'cql2-json';
-
 WITH t AS (
     SELECT
         row_number() over () as id,

@@ -226,6 +226,10 @@ SELECT COALESCE(
 )::boolean;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION base_url(conf jsonb DEFAULT NULL) RETURNS text AS $$
+  SELECT COALESCE(pgstac.get_setting('base_url', conf), '.');
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION additional_properties() RETURNS boolean AS $$
     SELECT pgstac.get_setting_bool('additional_properties');
 $$ LANGUAGE SQL;
@@ -846,8 +850,6 @@ CREATE TABLE IF NOT EXISTS collections (
     private jsonb,
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
-
-
 
 CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
     SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
@@ -3787,6 +3789,24 @@ BEGIN
     RETURN curs;
 END;
 $$ LANGUAGE PLPGSQL;
+CREATE OR REPLACE VIEW collections_asitems AS
+SELECT
+    id,
+    geometry,
+    'collections' AS collection,
+    datetime,
+    end_datetime,
+    jsonb_build_object(
+        'properties', content - '{links,assets,stac_version,stac_extensions}',
+        'links', content->'links',
+        'assets', content->'assets',
+        'stac_version', content->'stac_version',
+        'stac_extensions', content->'stac_extensions'
+    ) AS content,
+    content as collectionjson
+FROM collections;
+
+
 CREATE OR REPLACE FUNCTION collection_search_matched(
     IN _search jsonb DEFAULT '{}'::jsonb,
     OUT matched bigint
@@ -3799,7 +3819,7 @@ BEGIN
             SELECT
                 count(*)
             FROM
-                collections
+                collections_asitems
             WHERE %s
             ;
         $query$,
@@ -3831,9 +3851,9 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
             SELECT
-                jsonb_fields(content, %L) as c
+                jsonb_fields(collectionjson, %L) as c
             FROM
-                collections
+                collections_asitems
             WHERE %s
             ORDER BY %s
             LIMIT %L
@@ -3855,21 +3875,70 @@ CREATE OR REPLACE FUNCTION collection_search(
 DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
-    _limit int := coalesce((_search->>'limit')::int, 10);
+    number_returned bigint;
+    _limit int := coalesce((_search->>'limit')::float::int, 10);
+    _offset int := coalesce((_search->>'offset')::float::int, 0);
+    links jsonb := '[]';
+    ret jsonb;
+    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
+    prevoffset int;
+    nextoffset int;
 BEGIN
     SELECT
         coalesce(jsonb_agg(c), '[]')
     INTO out_records
     FROM collection_search_rows(_search) c;
-    RETURN jsonb_build_object(
-        'type', 'FeatureCollection',
-        'features', out_records,
+
+    number_returned := jsonb_array_length(out_records);
+
+    IF _limit <= number_matched THEN --need to have paging links
+        nextoffset := least(_offset + _limit, number_matched - 1);
+        prevoffset := greatest(_offset - _limit, 0);
+        IF _offset = 0 THEN -- no previous paging
+
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        ELSE
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'prev',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', prevoffset),
+                    'merge', TRUE
+                ),
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        END IF;
+    END IF;
+
+    ret := jsonb_build_object(
+        'collections', out_records,
         'context', jsonb_build_object(
-            'limit', _search->'limit',
+            'limit', _limit,
             'matched', number_matched,
-            'returned', jsonb_array_length(out_records)
-        )
+            'returned', number_returned
+        ),
+        'links', links
     );
+    RETURN ret;
+
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 SET SEARCH_PATH TO pgstac, public;

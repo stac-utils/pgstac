@@ -59,3 +59,13 @@ SELECT results_eq($$
     $$,
     'Test search passing in collection ids with descending sort'
 );
+
+SET pgstac.base_url='https://test.com/';
+
+SELECT results_eq($$
+    select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
+    $$,$$
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "https://test.com/collections", "type": "application/json", "merge": true, "method": "GET"}], "context": {"limit": 1, "matched": 2, "returned": 1}, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    $$,
+    'Test search passing in collection ids with base_url set'
+);

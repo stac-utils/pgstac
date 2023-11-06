@@ -1,6 +1,3 @@
-\set on_error_stop to on
-
-DROP VIEW IF EXISTS collections_asitems;
 CREATE OR REPLACE VIEW collections_asitems AS
 SELECT
     id,
@@ -8,7 +5,14 @@ SELECT
     'collections' AS collection,
     datetime,
     end_datetime,
-    jsonb_build_object('properties', content) AS content
+    jsonb_build_object(
+        'properties', content - '{links,assets,stac_version,stac_extensions}',
+        'links', content->'links',
+        'assets', content->'assets',
+        'stac_version', content->'stac_version',
+        'stac_extensions', content->'stac_extensions'
+    ) AS content,
+    content as collectionjson
 FROM collections;
 
 
@@ -56,7 +60,7 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
             SELECT
-                jsonb_fields(content, %L) as c
+                jsonb_fields(collectionjson, %L) as c
             FROM
                 collections_asitems
             WHERE %s
@@ -146,6 +150,3 @@ BEGIN
 
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-set pgstac.base_url to 'https://test.com/';
-select * from collection_search('{"datetime":["2012-01-01","2015-02-01"]}');
