@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add support functions and tests for Collection Search
 - Add configuration parameter for base_url to be able to generate absolute links
  - With this release, this is only used to create links for paging in collection_search
+- Adds read only mode to allow use of pgstac on read replicas
+ - Note: Turning on romode disables any caching (particularly when context is turned on) and does not allow to store q query hash that can be used with geometry_search.
 
 ## [v0.8.1]
 

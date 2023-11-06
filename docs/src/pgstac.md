@@ -77,6 +77,10 @@ The check_pgstac_settings function can be used to check what pgstac settings are
 SELECT check_pgstac_settings('16GB');
 ```
 
+##### Read Only Mode
+The pgstac.readonly setting can be used when using pgstac with a read replica.
+Note that when pgstac.readonly is set to TRUE that pgstac is unable to use a cache for calculating the total count for context which can make use of the context extension very expensive (see notes above). In readonly mode, pgstac is also unable to register the hash that is used to store queries that can be used with geometry_search (used by titiler-pgstac). A registered has will still be readable, but new hashes cannot be created on the read only replica, they must be registered on the main database.
+
 #### Runtime Configurations
 
 Runtime configuration of variables can be made with search by passing in configuration in the search json "conf" item.

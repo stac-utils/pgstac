@@ -346,6 +346,14 @@ create or replace view "pgstac"."collections_asitems" as  SELECT collections.id,
    FROM collections;
 
 
+CREATE OR REPLACE FUNCTION pgstac.readonly(conf jsonb DEFAULT NULL::jsonb)
+ RETURNS boolean
+ LANGUAGE sql
+AS $function$
+    SELECT pgstac.get_setting_bool('readonly', conf);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.cql2_query(j jsonb, wrapper text DEFAULT NULL::text)
  RETURNS text
  LANGUAGE plpgsql
@@ -536,6 +544,112 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.geometrysearch(geom geometry, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, exitwhenfull boolean DEFAULT true, skipcovered boolean DEFAULT true)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    search searches%ROWTYPE;
+    curs refcursor;
+    _where text;
+    query text;
+    iter_record items%ROWTYPE;
+    out_records jsonb := '{}'::jsonb[];
+    exit_flag boolean := FALSE;
+    counter int := 1;
+    scancounter int := 1;
+    remaining_limit int := _scanlimit;
+    tilearea float;
+    unionedgeom geometry;
+    clippedgeom geometry;
+    unionedgeom_area float := 0;
+    prev_area float := 0;
+    excludes text[];
+    includes text[];
+
+BEGIN
+    DROP TABLE IF EXISTS pgstac_results;
+    CREATE TEMP TABLE pgstac_results (content jsonb) ON COMMIT DROP;
+
+    -- If the passed in geometry is not an area set exitwhenfull and skipcovered to false
+    IF ST_GeometryType(geom) !~* 'polygon' THEN
+        RAISE NOTICE 'GEOMETRY IS NOT AN AREA';
+        skipcovered = FALSE;
+        exitwhenfull = FALSE;
+    END IF;
+
+    -- If skipcovered is true then you will always want to exit when the passed in geometry is full
+    IF skipcovered THEN
+        exitwhenfull := TRUE;
+    END IF;
+
+    SELECT * INTO search FROM searches WHERE hash=queryhash;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Search with Query Hash % Not Found', queryhash;
+    END IF;
+
+    tilearea := st_area(geom);
+    _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
+
+
+    FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
+        query := format('%s LIMIT %L', query, remaining_limit);
+        RAISE NOTICE '%', query;
+        OPEN curs FOR EXECUTE query;
+        LOOP
+            FETCH curs INTO iter_record;
+            EXIT WHEN NOT FOUND;
+            IF exitwhenfull OR skipcovered THEN -- If we are not using exitwhenfull or skipcovered, we do not need to do expensive geometry operations
+                clippedgeom := st_intersection(geom, iter_record.geometry);
+
+                IF unionedgeom IS NULL THEN
+                    unionedgeom := clippedgeom;
+                ELSE
+                    unionedgeom := st_union(unionedgeom, clippedgeom);
+                END IF;
+
+                unionedgeom_area := st_area(unionedgeom);
+
+                IF skipcovered AND prev_area = unionedgeom_area THEN
+                    scancounter := scancounter + 1;
+                    CONTINUE;
+                END IF;
+
+                prev_area := unionedgeom_area;
+
+                RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
+            END IF;
+            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
+            INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
+
+            IF counter >= _limit
+                OR scancounter > _scanlimit
+                OR ftime() > _timelimit
+                OR (exitwhenfull AND unionedgeom_area >= tilearea)
+            THEN
+                exit_flag := TRUE;
+                EXIT;
+            END IF;
+            counter := counter + 1;
+            scancounter := scancounter + 1;
+
+        END LOOP;
+        CLOSE curs;
+        EXIT WHEN exit_flag;
+        remaining_limit := _scanlimit - scancounter;
+    END LOOP;
+
+    SELECT jsonb_agg(content) INTO out_records FROM pgstac_results WHERE content IS NOT NULL;
+
+    RETURN jsonb_build_object(
+        'type', 'FeatureCollection',
+        'features', coalesce(out_records, '[]'::jsonb)
+    );
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.get_queryables(_collection_ids text[] DEFAULT NULL::text[])
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -603,6 +717,199 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.search_query(_search jsonb DEFAULT '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS searches
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    search searches%ROWTYPE;
+    pexplain jsonb;
+    t timestamptz;
+    i interval;
+    _hash text := search_hash(_search, _metadata);
+    doupdate boolean := FALSE;
+    insertfound boolean := FALSE;
+    ro boolean := pgstac.readonly();
+BEGIN
+    IF ro THEN
+        updatestats := FALSE;
+    END IF;
+
+    SELECT * INTO search FROM searches
+    WHERE hash=_hash;
+
+    search.hash := _hash;
+
+    -- Calculate the where clause if not already calculated
+    IF search._where IS NULL THEN
+        search._where := stac_search_to_where(_search);
+    ELSE
+        doupdate := TRUE;
+    END IF;
+
+    -- Calculate the order by clause if not already calculated
+    IF search.orderby IS NULL THEN
+        search.orderby := sort_sqlorderby(_search);
+    ELSE
+        doupdate := TRUE;
+    END IF;
+
+    PERFORM where_stats(search._where, updatestats, _search->'conf');
+
+    IF NOT ro THEN
+        IF NOT doupdate THEN
+            INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
+            VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
+            ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
+            IF FOUND THEN
+                RETURN search;
+            END IF;
+        END IF;
+
+        UPDATE searches
+            SET
+                lastused=clock_timestamp(),
+                usecount=usecount+1
+        WHERE hash=(
+            SELECT hash FROM searches
+            WHERE hash=_hash
+            FOR UPDATE SKIP LOCKED
+        );
+        IF NOT FOUND THEN
+            RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
+        END IF;
+    END IF;
+
+    RETURN search;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.where_stats(inwhere text, updatestats boolean DEFAULT false, conf jsonb DEFAULT NULL::jsonb)
+ RETURNS search_wheres
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    t timestamptz;
+    i interval;
+    explain_json jsonb;
+    partitions text[];
+    sw search_wheres%ROWTYPE;
+    inwhere_hash text := md5(inwhere);
+    _context text := lower(context(conf));
+    _stats_ttl interval := context_stats_ttl(conf);
+    _estimated_cost float := context_estimated_cost(conf);
+    _estimated_count int := context_estimated_count(conf);
+    ro bool := pgstac.readonly(conf);
+BEGIN
+    IF ro THEN
+        updatestats := FALSE;
+    END IF;
+
+    IF _context = 'off' THEN
+        sw._where := inwhere;
+        return sw;
+    END IF;
+
+    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+
+    -- Update statistics if explicitly set, if statistics do not exist, or statistics ttl has expired
+    IF NOT updatestats THEN
+        RAISE NOTICE 'Checking if update is needed for: % .', inwhere;
+        RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
+        RAISE NOTICE 'TTL: %, Age: %', _stats_ttl, now() - sw.statslastupdated;
+        RAISE NOTICE 'Context: %, Existing Total: %', _context, sw.total_count;
+        IF
+            (
+                sw.statslastupdated IS NULL
+                OR (now() - sw.statslastupdated) > _stats_ttl
+                OR (context(conf) != 'off' AND sw.total_count IS NULL)
+            ) AND NOT ro
+        THEN
+            updatestats := TRUE;
+        END IF;
+    END IF;
+
+    sw._where := inwhere;
+    sw.lastused := now();
+    sw.usecount := coalesce(sw.usecount,0) + 1;
+
+    IF NOT updatestats THEN
+        UPDATE search_wheres SET
+            lastused = sw.lastused,
+            usecount = sw.usecount
+        WHERE md5(_where) = inwhere_hash
+        RETURNING * INTO sw
+        ;
+        RETURN sw;
+    END IF;
+
+    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
+    t := clock_timestamp();
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+    INTO explain_json;
+    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
+    i := clock_timestamp() - t;
+
+    sw.statslastupdated := now();
+    sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
+    sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
+    sw.time_to_estimate := extract(epoch from i);
+
+    RAISE NOTICE 'ESTIMATED_COUNT: % < %', sw.estimated_count, _estimated_count;
+    RAISE NOTICE 'ESTIMATED_COST: % < %', sw.estimated_cost, _estimated_cost;
+
+    -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
+    IF
+        _context = 'on'
+        OR
+        ( _context = 'auto' AND
+            (
+                sw.estimated_count < _estimated_count
+                AND
+                sw.estimated_cost < _estimated_cost
+            )
+        )
+    THEN
+        t := clock_timestamp();
+        RAISE NOTICE 'Calculating actual count...';
+        EXECUTE format(
+            'SELECT count(*) FROM items WHERE %s',
+            inwhere
+        ) INTO sw.total_count;
+        i := clock_timestamp() - t;
+        RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
+        sw.time_to_count := extract(epoch FROM i);
+    ELSE
+        sw.total_count := NULL;
+        sw.time_to_count := NULL;
+    END IF;
+
+    IF NOT ro THEN
+        INSERT INTO search_wheres
+            (_where, lastused, usecount, statslastupdated, estimated_count, estimated_cost, time_to_estimate, partitions, total_count, time_to_count)
+        SELECT sw._where, sw.lastused, sw.usecount, sw.statslastupdated, sw.estimated_count, sw.estimated_cost, sw.time_to_estimate, sw.partitions, sw.total_count, sw.time_to_count
+        ON CONFLICT ((md5(_where)))
+        DO UPDATE
+            SET
+                lastused = sw.lastused,
+                usecount = sw.usecount,
+                statslastupdated = sw.statslastupdated,
+                estimated_count = sw.estimated_count,
+                estimated_cost = sw.estimated_cost,
+                time_to_estimate = sw.time_to_estimate,
+                total_count = sw.total_count,
+                time_to_count = sw.time_to_count
+        ;
+    END IF;
+    RETURN sw;
+END;
+$function$
+;
+
 
 -- END migra calculated SQL
 DO $$
@@ -646,7 +953,8 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
   ('update_collection_extent', 'false'),
-  ('format_cache', 'false')
+  ('format_cache', 'false'),
+  ('readonly', 'false')
 ON CONFLICT DO NOTHING
 ;
 
