@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [unreleased]
+- Add support functions and tests for Collection Search
+- Add configuration parameter for base_url to be able to generate absolute links
+ - With this release, this is only used to create links for paging in collection_search
+
 ## [v0.8.1]
 
 ### Fixed
