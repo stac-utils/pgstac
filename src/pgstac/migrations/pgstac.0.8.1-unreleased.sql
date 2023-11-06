@@ -376,6 +376,112 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.geometrysearch(geom geometry, queryhash text, fields jsonb DEFAULT NULL::jsonb, _scanlimit integer DEFAULT 10000, _limit integer DEFAULT 100, _timelimit interval DEFAULT '00:00:05'::interval, exitwhenfull boolean DEFAULT true, skipcovered boolean DEFAULT true)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    search searches%ROWTYPE;
+    curs refcursor;
+    _where text;
+    query text;
+    iter_record items%ROWTYPE;
+    out_records jsonb := '{}'::jsonb[];
+    exit_flag boolean := FALSE;
+    counter int := 1;
+    scancounter int := 1;
+    remaining_limit int := _scanlimit;
+    tilearea float;
+    unionedgeom geometry;
+    clippedgeom geometry;
+    unionedgeom_area float := 0;
+    prev_area float := 0;
+    excludes text[];
+    includes text[];
+
+BEGIN
+    DROP TABLE IF EXISTS pgstac_results;
+    CREATE TEMP TABLE pgstac_results (content jsonb) ON COMMIT DROP;
+
+    -- If the passed in geometry is not an area set exitwhenfull and skipcovered to false
+    IF ST_GeometryType(geom) !~* 'polygon' THEN
+        RAISE NOTICE 'GEOMETRY IS NOT AN AREA';
+        skipcovered = FALSE;
+        exitwhenfull = FALSE;
+    END IF;
+
+    -- If skipcovered is true then you will always want to exit when the passed in geometry is full
+    IF skipcovered THEN
+        exitwhenfull := TRUE;
+    END IF;
+
+    SELECT * INTO search FROM searches WHERE hash=queryhash;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Search with Query Hash % Not Found', queryhash;
+    END IF;
+
+    tilearea := st_area(geom);
+    _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
+
+
+    FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
+        query := format('%s LIMIT %L', query, remaining_limit);
+        RAISE NOTICE '%', query;
+        OPEN curs FOR EXECUTE query;
+        LOOP
+            FETCH curs INTO iter_record;
+            EXIT WHEN NOT FOUND;
+            IF exitwhenfull OR skipcovered THEN -- If we are not using exitwhenfull or skipcovered, we do not need to do expensive geometry operations
+                clippedgeom := st_intersection(geom, iter_record.geometry);
+
+                IF unionedgeom IS NULL THEN
+                    unionedgeom := clippedgeom;
+                ELSE
+                    unionedgeom := st_union(unionedgeom, clippedgeom);
+                END IF;
+
+                unionedgeom_area := st_area(unionedgeom);
+
+                IF skipcovered AND prev_area = unionedgeom_area THEN
+                    scancounter := scancounter + 1;
+                    CONTINUE;
+                END IF;
+
+                prev_area := unionedgeom_area;
+
+                RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
+            END IF;
+            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
+            INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
+
+            IF counter >= _limit
+                OR scancounter > _scanlimit
+                OR ftime() > _timelimit
+                OR (exitwhenfull AND unionedgeom_area >= tilearea)
+            THEN
+                exit_flag := TRUE;
+                EXIT;
+            END IF;
+            counter := counter + 1;
+            scancounter := scancounter + 1;
+
+        END LOOP;
+        CLOSE curs;
+        EXIT WHEN exit_flag;
+        remaining_limit := _scanlimit - scancounter;
+    END LOOP;
+
+    SELECT jsonb_agg(content) INTO out_records FROM pgstac_results WHERE content IS NOT NULL;
+
+    RETURN jsonb_build_object(
+        'type', 'FeatureCollection',
+        'features', coalesce(out_records, '[]'::jsonb)
+    );
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.get_queryables(_collection_ids text[] DEFAULT NULL::text[])
  RETURNS jsonb
  LANGUAGE plpgsql

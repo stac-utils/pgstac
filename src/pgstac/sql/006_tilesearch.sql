@@ -34,6 +34,13 @@ BEGIN
     DROP TABLE IF EXISTS pgstac_results;
     CREATE TEMP TABLE pgstac_results (content jsonb) ON COMMIT DROP;
 
+    -- If the passed in geometry is not an area set exitwhenfull and skipcovered to false
+    IF ST_GeometryType(geom) !~* 'polygon' THEN
+        RAISE NOTICE 'GEOMETRY IS NOT AN AREA';
+        skipcovered = FALSE;
+        exitwhenfull = FALSE;
+    END IF;
+
     -- If skipcovered is true then you will always want to exit when the passed in geometry is full
     IF skipcovered THEN
         exitwhenfull := TRUE;
