@@ -172,7 +172,7 @@ BEGIN
         COMMIT;
     END LOOP;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET ROLE pgstac_admin;
 
 CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
@@ -202,7 +202,7 @@ BEGIN
     END LOOP;
     RETURN cnt;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET ROLE pgstac_admin;
 
 
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$

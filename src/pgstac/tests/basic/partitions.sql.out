@@ -1,3 +1,6 @@
+-- run tests as pgstac_ingest
+SET ROLE pgstac_ingest;
+SET
 SET pgstac.use_queue=FALSE;
 SET
 SELECT get_setting_bool('use_queue');

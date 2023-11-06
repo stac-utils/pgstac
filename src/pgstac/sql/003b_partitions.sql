@@ -407,10 +407,12 @@ BEGIN
             $q$
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I to pgstac_ingest;
             $q$,
             _partition_name,
             _collection,
             concat(_partition_name,'_pk'),
+            _partition_name,
             _partition_name
         );
     ELSE
@@ -419,8 +421,7 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
-                GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
-                GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
+                GRANT ALL ON %I TO pgstac_ingest;
             $q$,
             format('_items_%s', c.key),
             _collection,
@@ -429,6 +430,7 @@ BEGIN
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
+            _partition_name,
             _partition_name
         );
     END IF;

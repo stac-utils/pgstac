@@ -49,6 +49,17 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
+ALTER FUNCTION update_partition_stats SECURITY DEFINER;
+ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
+ALTER FUNCTION create_table_constraints SECURITY DEFINER;
+ALTER FUNCTION check_partition SECURITY DEFINER;
+ALTER FUNCTION repartition SECURITY DEFINER;
+ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION format_item SECURITY DEFINER;
+ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
+ALTER FUNCTION maintain_partitions SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -66,4 +77,7 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+RESET ROLE;
+
+SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
