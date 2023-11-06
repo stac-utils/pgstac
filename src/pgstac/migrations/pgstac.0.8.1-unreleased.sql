@@ -114,9 +114,20 @@ GRANT ALL ON SCHEMA pgstac TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
-SET ROLE pgstac_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
 SET SEARCH_PATH TO pgstac, public;
+SET ROLE pgstac_admin;
 
 DO $$
   BEGIN
@@ -191,6 +202,141 @@ CREATE OR REPLACE FUNCTION pgstac.readonly(conf jsonb DEFAULT NULL::jsonb)
  LANGUAGE sql
 AS $function$
     SELECT pgstac.get_setting_bool('readonly', conf);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.check_partition(_collection text, _dtrange tstzrange, _edtrange tstzrange)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    c RECORD;
+    pm RECORD;
+    _partition_name text;
+    _partition_dtrange tstzrange;
+    _constraint_dtrange tstzrange;
+    _constraint_edtrange tstzrange;
+    q text;
+    deferrable_q text;
+    err_context text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+
+    IF c.partition_trunc IS NOT NULL THEN
+        _partition_dtrange := tstzrange(
+            date_trunc(c.partition_trunc, lower(_dtrange)),
+            date_trunc(c.partition_trunc, lower(_dtrange)) + (concat('1 ', c.partition_trunc))::interval,
+            '[)'
+        );
+    ELSE
+        _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
+    END IF;
+
+    IF NOT _partition_dtrange @> _dtrange THEN
+        RAISE EXCEPTION 'dtrange % is greater than the partition size % for collection %', _dtrange, c.partition_trunc, _collection;
+    END IF;
+
+
+    IF c.partition_trunc = 'year' THEN
+        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYY'));
+    ELSIF c.partition_trunc = 'month' THEN
+        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYYMM'));
+    ELSE
+        _partition_name := format('_items_%s', c.key);
+    END IF;
+
+    SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
+    IF FOUND THEN
+        RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
+        _constraint_edtrange :=
+            tstzrange(
+                least(
+                    lower(_edtrange),
+                    nullif(lower(pm.constraint_edtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_edtrange),
+                    nullif(upper(pm.constraint_edtrange), 'infinity')
+                ),
+                '[]'
+            );
+        _constraint_dtrange :=
+            tstzrange(
+                least(
+                    lower(_dtrange),
+                    nullif(lower(pm.constraint_dtrange), '-infinity')
+                ),
+                greatest(
+                    upper(_dtrange),
+                    nullif(upper(pm.constraint_dtrange), 'infinity')
+                ),
+                '[]'
+            );
+
+        IF pm.constraint_edtrange @> _edtrange AND pm.constraint_dtrange @> _dtrange THEN
+            RETURN pm.partition;
+        ELSE
+            PERFORM drop_table_constraints(_partition_name);
+        END IF;
+    ELSE
+        _constraint_edtrange := _edtrange;
+        _constraint_dtrange := _dtrange;
+    END IF;
+    RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
+    IF c.partition_trunc IS NULL THEN
+        q := format(
+            $q$
+                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
+                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I to pgstac_ingest;
+            $q$,
+            _partition_name,
+            _collection,
+            concat(_partition_name,'_pk'),
+            _partition_name,
+            _partition_name
+        );
+    ELSE
+        q := format(
+            $q$
+                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
+                CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
+                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I TO pgstac_ingest;
+            $q$,
+            format('_items_%s', c.key),
+            _collection,
+            _partition_name,
+            format('_items_%s', c.key),
+            lower(_partition_dtrange),
+            upper(_partition_dtrange),
+            format('%s_pk', _partition_name),
+            _partition_name,
+            _partition_name
+        );
+    END IF;
+
+    BEGIN
+        EXECUTE q;
+    EXCEPTION
+        WHEN duplicate_table THEN
+            RAISE NOTICE 'Partition % already exists.', _partition_name;
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
+            RAISE INFO 'Error Name:%',SQLERRM;
+            RAISE INFO 'Error State:%', SQLSTATE;
+            RAISE INFO 'Error Context:%', err_context;
+    END;
+    PERFORM maintain_partitions(_partition_name);
+    PERFORM update_partition_stats_q(_partition_name, true);
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
+    RETURN _partition_name;
+END;
 $function$
 ;
 
@@ -557,6 +703,152 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.maintain_partition_queries(part text DEFAULT 'items'::text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false, idxconcurrently boolean DEFAULT false)
+ RETURNS SETOF text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+   rec record;
+BEGIN
+    FOR rec IN (
+        WITH p AS (
+           SELECT
+                relid::text as partition,
+                replace(replace(
+                    CASE
+                        WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
+                        ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                    END,
+                    'FOR VALUES IN (''',''), ''')',
+                    ''
+                ) AS collection
+            FROM pg_partition_tree('items')
+            JOIN pg_class c ON (relid::regclass = c.oid)
+            JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+        ), i AS (
+            SELECT
+                partition,
+                indexname,
+                regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+                COALESCE(
+                    (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+                    (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                    CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+                ) AS field
+            FROM
+                pg_indexes
+                JOIN p ON (tablename=partition)
+        ), q AS (
+            SELECT
+                name AS field,
+                collection,
+                partition,
+                format(indexdef(queryables), partition) as qidx
+            FROM queryables, unnest_collection(queryables.collection_ids) collection
+                JOIN p USING (collection)
+            WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+        )
+        SELECT * FROM i FULL JOIN q USING (field, partition)
+        WHERE lower(iidx) IS DISTINCT FROM lower(qidx)
+    ) LOOP
+        IF rec.iidx IS NULL THEN
+            IF idxconcurrently THEN
+                RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
+            ELSE
+                RETURN NEXT rec.qidx;
+            END IF;
+        ELSIF rec.qidx IS NULL AND dropindexes THEN
+            RETURN NEXT format('DROP INDEX IF EXISTS %I;', rec.indexname);
+        ELSIF lower(rec.qidx) != lower(rec.iidx) THEN
+            IF dropindexes THEN
+                RETURN NEXT format('DROP INDEX IF EXISTS %I; %s;', rec.indexname, rec.qidx);
+            ELSE
+                IF idxconcurrently THEN
+                    RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
+                ELSE
+                    RETURN NEXT rec.qidx;
+                END IF;
+            END IF;
+        ELSIF rebuildindexes and rec.indexname IS NOT NULL THEN
+            IF idxconcurrently THEN
+                RETURN NEXT format('REINDEX INDEX CONCURRENTLY %I;', rec.indexname);
+            ELSE
+                RETURN NEXT format('REINDEX INDEX %I;', rec.indexname);
+            END IF;
+        END IF;
+    END LOOP;
+    RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.maintain_partitions(part text DEFAULT 'items'::text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false)
+ RETURNS void
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    WITH t AS (
+        SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
+    ) SELECT count(*) FROM t;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT false)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    c RECORD;
+    q text;
+    from_trunc text;
+BEGIN
+    SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
+    END IF;
+    IF triggered THEN
+        RAISE NOTICE 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
+    ELSE
+        RAISE NOTICE 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
+        IF c.partition_trunc IS NOT DISTINCT FROM _partition_trunc THEN
+            RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
+            RETURN _collection;
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM partitions_view WHERE collection=_collection LIMIT 1) THEN
+        EXECUTE format(
+            $q$
+                CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
+                DROP TABLE IF EXISTS %I CASCADE;
+                WITH p AS (
+                    SELECT
+                        collection,
+                        CASE
+                            WHEN %L IS NULL THEN '-infinity'::timestamptz
+                            ELSE date_trunc(%L, datetime)
+                        END as d,
+                        tstzrange(min(datetime),max(datetime),'[]') as dtrange,
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
+                    FROM changepartitionstaging
+                    GROUP BY 1,2
+                ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
+                INSERT INTO items SELECT * FROM changepartitionstaging;
+                DROP TABLE changepartitionstaging;
+            $q$,
+            concat('_items_', c.key),
+            concat('_items_', c.key),
+            c.partition_trunc,
+            c.partition_trunc
+        );
+    END IF;
+    RETURN _collection;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.search_query(_search jsonb DEFAULT '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT '{}'::jsonb)
  RETURNS searches
  LANGUAGE plpgsql
@@ -622,6 +914,81 @@ BEGIN
     END IF;
 
     RETURN search;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.update_partition_stats(_partition text, istrigger boolean DEFAULT false)
+ RETURNS void
+ LANGUAGE plpgsql
+ STRICT SECURITY DEFINER
+AS $function$
+DECLARE
+    dtrange tstzrange;
+    edtrange tstzrange;
+    cdtrange tstzrange;
+    cedtrange tstzrange;
+    extent geometry;
+    collection text;
+BEGIN
+    RAISE NOTICE 'Updating stats for %.', _partition;
+    EXECUTE format(
+        $q$
+            SELECT
+                tstzrange(min(datetime), max(datetime),'[]'),
+                tstzrange(min(end_datetime), max(end_datetime), '[]')
+            FROM %I
+        $q$,
+        _partition
+    ) INTO dtrange, edtrange;
+    extent := st_estimatedextent('pgstac', _partition, 'geometry');
+    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
+        SELECT _partition, dtrange, edtrange, extent, now()
+        ON CONFLICT (partition) DO
+            UPDATE SET
+                dtrange=EXCLUDED.dtrange,
+                edtrange=EXCLUDED.edtrange,
+                spatial=EXCLUDED.spatial,
+                last_updated=EXCLUDED.last_updated
+    ;
+
+    SELECT
+        constraint_dtrange, constraint_edtrange, pv.collection
+        INTO cdtrange, cedtrange, collection
+    FROM partitions_view pv WHERE partition = _partition;
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
+
+
+    RAISE NOTICE 'Checking if we need to modify constraints. cdtrange: % dtrange: % cedtrange: % edtrange: %', cdtrange, dtrange, cedtrange, edtrange;
+    IF
+        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
+        AND NOT istrigger
+    THEN
+        RAISE NOTICE 'Modifying Constraints';
+        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
+        RAISE NOTICE 'New      % %', dtrange, edtrange;
+        PERFORM drop_table_constraints(_partition);
+        PERFORM create_table_constraints(_partition, dtrange, edtrange);
+    END IF;
+    RAISE NOTICE 'Checking if we need to update collection extents.';
+    IF get_setting_bool('update_collection_extent') THEN
+        RAISE NOTICE 'updating collection extent for %', collection;
+        PERFORM run_or_queue(format($q$
+            UPDATE collections
+            SET content = jsonb_set_lax(
+                content,
+                '{extent}'::text[],
+                collection_extent(%L, FALSE),
+                true,
+                'use_json_null'
+            ) WHERE id=%L
+            ;
+        $q$, collection, collection));
+    ELSE
+        RAISE NOTICE 'Not updating collection extent for %', collection;
+    END IF;
 
 END;
 $function$
@@ -804,6 +1171,17 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
+ALTER FUNCTION update_partition_stats SECURITY DEFINER;
+ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
+ALTER FUNCTION create_table_constraints SECURITY DEFINER;
+ALTER FUNCTION check_partition SECURITY DEFINER;
+ALTER FUNCTION repartition SECURITY DEFINER;
+ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION format_item SECURITY DEFINER;
+ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
+ALTER FUNCTION maintain_partitions SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -821,5 +1199,8 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+RESET ROLE;
+
+SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
 SELECT set_version('unreleased');

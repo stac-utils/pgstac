@@ -53,3 +53,14 @@ SELECT lives_ok(
 );
 RESET transaction_read_only;
 RESET pgstac.readonly;
+SELECT is_definer('update_partition_stats');
+SELECT is_definer('partition_after_triggerfunc');
+SELECT is_definer('drop_table_constraints');
+SELECT is_definer('create_table_constraints');
+SELECT is_definer('check_partition');
+SELECT is_definer('repartition');
+SELECT is_definer('where_stats');
+SELECT is_definer('search_query');
+SELECT is_definer('format_item');
+SELECT is_definer('maintain_partitions');
+SELECT is_definer('maintain_partition_queries');

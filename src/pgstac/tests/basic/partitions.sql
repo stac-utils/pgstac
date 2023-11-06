@@ -1,3 +1,5 @@
+-- run tests as pgstac_ingest
+SET ROLE pgstac_ingest;
 SET pgstac.use_queue=FALSE;
 SELECT get_setting_bool('use_queue');
 SET pgstac.update_collection_extent=TRUE;

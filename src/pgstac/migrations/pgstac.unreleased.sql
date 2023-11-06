@@ -112,9 +112,20 @@ GRANT ALL ON SCHEMA pgstac TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
-SET ROLE pgstac_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
 SET SEARCH_PATH TO pgstac, public;
+SET ROLE pgstac_admin;
 
 DO $$
   BEGIN
@@ -351,7 +362,7 @@ BEGIN
         COMMIT;
     END LOOP;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET ROLE pgstac_admin;
 
 CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
@@ -381,7 +392,7 @@ BEGIN
     END LOOP;
     RETURN cnt;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET ROLE pgstac_admin;
 
 
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
@@ -1113,6 +1124,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
         out text;
@@ -1133,7 +1145,6 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
         RETURN btrim(out, ' \n\t');
     END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
-
 
 DROP VIEW IF EXISTS pgstac_indexes;
 CREATE VIEW pgstac_indexes AS
@@ -1256,7 +1267,7 @@ BEGIN
     END LOOP;
     RETURN;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION maintain_partitions(
     part text DEFAULT 'items',
@@ -1266,7 +1277,7 @@ CREATE OR REPLACE FUNCTION maintain_partitions(
     WITH t AS (
         SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
     ) SELECT count(*) FROM t;
-$$ LANGUAGE SQL;
+$$ LANGUAGE SQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
@@ -2466,7 +2477,7 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
 
 
-    RAISE NOTICE 'Checking if we need to modify constraints.';
+    RAISE NOTICE 'Checking if we need to modify constraints. cdtrange: % dtrange: % cedtrange: % edtrange: %', cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
@@ -2496,7 +2507,7 @@ BEGIN
     END IF;
 
 END;
-$$ LANGUAGE PLPGSQL STRICT;
+$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -2723,10 +2734,12 @@ BEGIN
             $q$
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I to pgstac_ingest;
             $q$,
             _partition_name,
             _collection,
             concat(_partition_name,'_pk'),
+            _partition_name,
             _partition_name
         );
     ELSE
@@ -2735,6 +2748,7 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I TO pgstac_ingest;
             $q$,
             format('_items_%s', c.key),
             _collection,
@@ -2743,6 +2757,7 @@ BEGIN
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
+            _partition_name,
             _partition_name
         );
     END IF;
@@ -2758,7 +2773,6 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
-    PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
     REFRESH MATERIALIZED VIEW partitions;
@@ -2796,11 +2810,12 @@ BEGIN
                 WITH p AS (
                     SELECT
                         collection,
-                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
-                        ELSE date_trunc(%L, datetime)
+                        CASE
+                            WHEN %L IS NULL THEN '-infinity'::timestamptz
+                            ELSE date_trunc(%L, datetime)
                         END as d,
                         tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
                     FROM changepartitionstaging
                     GROUP BY 1,2
                 ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
@@ -4130,6 +4145,17 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
+ALTER FUNCTION update_partition_stats SECURITY DEFINER;
+ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
+ALTER FUNCTION create_table_constraints SECURITY DEFINER;
+ALTER FUNCTION check_partition SECURITY DEFINER;
+ALTER FUNCTION repartition SECURITY DEFINER;
+ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION format_item SECURITY DEFINER;
+ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
+ALTER FUNCTION maintain_partitions SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -4147,5 +4173,8 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+RESET ROLE;
+
+SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
 SELECT set_version('unreleased');

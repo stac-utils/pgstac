@@ -189,6 +189,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
         out text;
@@ -209,7 +210,6 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
         RETURN btrim(out, ' \n\t');
     END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
-
 
 DROP VIEW IF EXISTS pgstac_indexes;
 CREATE VIEW pgstac_indexes AS
@@ -332,7 +332,7 @@ BEGIN
     END LOOP;
     RETURN;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION maintain_partitions(
     part text DEFAULT 'items',
@@ -342,7 +342,7 @@ CREATE OR REPLACE FUNCTION maintain_partitions(
     WITH t AS (
         SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
     ) SELECT count(*) FROM t;
-$$ LANGUAGE SQL;
+$$ LANGUAGE SQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
