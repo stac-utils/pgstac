@@ -484,7 +484,7 @@ BEGIN
                         ELSE date_trunc(%L, datetime)
                         END as d,
                         tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
                     FROM changepartitionstaging
                     GROUP BY 1,2
                 ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
