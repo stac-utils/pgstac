@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
  - With this release, this is only used to create links for paging in collection_search
 - Adds read only mode to allow use of pgstac on read replicas
  - Note: Turning on romode disables any caching (particularly when context is turned on) and does not allow to store q query hash that can be used with geometry_search.
+- Add option to pypgstac loader "--usequeue" that forces use of the query queue for the loading process
+- Add "pypgstac runqueue" command to run any commands that are set in the query queue
 
  ### Fixed
  - Fix bug with end_datetime constraint management leading to inability to add data outside of constraints

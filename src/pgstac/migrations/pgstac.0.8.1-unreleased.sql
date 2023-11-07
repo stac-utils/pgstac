@@ -1012,6 +1012,73 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE PROCEDURE pgstac.run_queued_queries()
+ LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    SET ROLE pgstac_admin;
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        COMMIT;
+    END LOOP;
+    RESET ROLE;
+END;
+$procedure$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.run_queued_queries_intransaction()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    timeout_ts timestamptz;
+    error text;
+    cnt int := 0;
+BEGIN
+    timeout_ts := statement_timestamp() + queue_timeout();
+    WHILE clock_timestamp() < timeout_ts LOOP
+        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
+        IF NOT FOUND THEN
+            RETURN cnt;
+        END IF;
+        cnt := cnt + 1;
+        BEGIN
+            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
+            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
+
+            EXECUTE qitem.query;
+            EXCEPTION WHEN others THEN
+                error := format('%s | %s', SQLERRM, SQLSTATE);
+                RAISE WARNING '%', error;
+        END;
+        INSERT INTO query_queue_history (query, added, finished, error)
+            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+    END LOOP;
+    RETURN cnt;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.search_query(_search jsonb DEFAULT '{}'::jsonb, updatestats boolean DEFAULT false, _metadata jsonb DEFAULT '{}'::jsonb)
  RETURNS searches
  LANGUAGE plpgsql
@@ -1348,6 +1415,7 @@ ALTER FUNCTION search_query SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
 ALTER FUNCTION maintain_partitions SECURITY DEFINER;
+ALTER FUNCTION run_queued_queries_intransaction SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -1364,6 +1432,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
+GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
+GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
 
 RESET ROLE;
 

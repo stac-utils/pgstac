@@ -61,6 +61,7 @@ ALTER FUNCTION search_query SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
 ALTER FUNCTION maintain_partitions SECURITY DEFINER;
+ALTER FUNCTION run_queued_queries_intransaction SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -77,6 +78,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
+GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
+GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
 
 RESET ROLE;
 
