@@ -187,6 +187,8 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
+alter table "pgstac"."collections" alter column "id" set not null;
+
 set check_function_bodies = off;
 
 CREATE OR REPLACE FUNCTION pgstac.additional_properties()
