@@ -20,8 +20,6 @@ CREATE TABLE IF NOT EXISTS collections (
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 
-
-
 CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
     SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;

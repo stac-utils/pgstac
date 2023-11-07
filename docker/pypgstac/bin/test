@@ -102,20 +102,25 @@ ALTER DATABASE pgstac_test_basicsql SET pgstac."default_filter_lang" TO 'cql-jso
 EOSQL
 
 for SQLFILE in tests/basic/*.sql; do
-TMPFILE=$(mktemp)
-trap 'rm "$TMPFILE"' 0 2 3 15
+    SQLOUTFILE=${SQLFILE}.out
+    if [[ $CREATEBASICSQLOUT == 1 && ! -f $SQLOUTFILE ]]; then
+        TMPFILE=$SQLOUTFILE
+    else
+        TMPFILE=$(mktemp)
+        trap 'rm "$TMPFILE"' 0 2 3 15
+    fi
 
-SQLOUTFILE=${SQLFILE}.out
-cd $PGSTACDIR
 
-echo "Running basic tests for $SQLFILE"
-psql -X -t -a -v ON_ERROR_STOP=1 pgstac_test_basicsql \
-    -c "BEGIN;" \
-    -f $SQLFILE \
-    -c "ROLLBACK;" \
-    | sed -e '/^ROLLBACK/d' -e '/^BEGIN/d' >"$TMPFILE"
+    cd $PGSTACDIR
 
-diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
+    echo "Running basic tests for $SQLFILE"
+    psql -X -t -a -v ON_ERROR_STOP=1 pgstac_test_basicsql \
+        -c "BEGIN;" \
+        -f $SQLFILE \
+        -c "ROLLBACK;" \
+        | sed -e '/^ROLLBACK/d' -e '/^BEGIN/d' >"$TMPFILE"
+
+    diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
 
 done
 psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";
@@ -174,6 +179,7 @@ PYPGSTAC=0
 MIGRATIONS=0
 MESSAGENOTICE=0
 MESSAGELOG=0
+CREATEBASICSQLOUT=0
 
 while [[ $# -gt 0 ]]
     do
@@ -210,6 +216,13 @@ while [[ $# -gt 0 ]]
             --basicsql)
             SETUPDB=1
             BASICSQL=1
+            shift
+            ;;
+
+            --basicsql-createout)
+            SETUPDB=1
+            BASICSQL=1
+            export CREATEBASICSQLOUT=1
             shift
             ;;
 

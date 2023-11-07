@@ -186,6 +186,166 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.base_url(conf jsonb DEFAULT NULL::jsonb)
+ RETURNS text
+ LANGUAGE sql
+AS $function$
+  SELECT COALESCE(pgstac.get_setting('base_url', conf), '.');
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_search(_search jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    out_records jsonb;
+    number_matched bigint := collection_search_matched(_search);
+    number_returned bigint;
+    _limit int := coalesce((_search->>'limit')::float::int, 10);
+    _offset int := coalesce((_search->>'offset')::float::int, 0);
+    links jsonb := '[]';
+    ret jsonb;
+    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
+    prevoffset int;
+    nextoffset int;
+BEGIN
+    SELECT
+        coalesce(jsonb_agg(c), '[]')
+    INTO out_records
+    FROM collection_search_rows(_search) c;
+
+    number_returned := jsonb_array_length(out_records);
+
+    IF _limit <= number_matched THEN --need to have paging links
+        nextoffset := least(_offset + _limit, number_matched - 1);
+        prevoffset := greatest(_offset - _limit, 0);
+        IF _offset = 0 THEN -- no previous paging
+
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        ELSE
+            links := jsonb_build_array(
+                jsonb_build_object(
+                    'rel', 'prev',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', prevoffset),
+                    'merge', TRUE
+                ),
+                jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                )
+            );
+        END IF;
+    END IF;
+
+    ret := jsonb_build_object(
+        'collections', out_records,
+        'context', jsonb_build_object(
+            'limit', _limit,
+            'matched', number_matched,
+            'returned', number_returned
+        ),
+        'links', links
+    );
+    RETURN ret;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_search_matched(_search jsonb DEFAULT '{}'::jsonb, OUT matched bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    _where text := stac_search_to_where(_search);
+BEGIN
+    EXECUTE format(
+        $query$
+            SELECT
+                count(*)
+            FROM
+                collections_asitems
+            WHERE %s
+            ;
+        $query$,
+        _where
+    ) INTO matched;
+    RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_search_rows(_search jsonb DEFAULT '{}'::jsonb)
+ RETURNS SETOF jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    _where text := stac_search_to_where(_search);
+    _limit int := coalesce((_search->>'limit')::int, 10);
+    _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
+    _orderby text;
+    _offset int := COALESCE((_search->>'offset')::int, 0);
+BEGIN
+    _orderby := sort_sqlorderby(
+        jsonb_build_object(
+            'sortby',
+            coalesce(
+                _search->'sortby',
+                '[{"field": "id", "direction": "asc"}]'::jsonb
+            )
+        )
+    );
+    RETURN QUERY EXECUTE format(
+        $query$
+            SELECT
+                jsonb_fields(collectionjson, %L) as c
+            FROM
+                collections_asitems
+            WHERE %s
+            ORDER BY %s
+            LIMIT %L
+            OFFSET %L
+            ;
+        $query$,
+        _fields,
+        _where,
+        _orderby,
+        _limit,
+        _offset
+    );
+END;
+$function$
+;
+
+create or replace view "pgstac"."collections_asitems" as  SELECT collections.id,
+    collections.geometry,
+    'collections'::text AS collection,
+    collections.datetime,
+    collections.end_datetime,
+    jsonb_build_object('properties', (collections.content - '{links,assets,stac_version,stac_extensions}'::text), 'links', (collections.content -> 'links'::text), 'assets', (collections.content -> 'assets'::text), 'stac_version', (collections.content -> 'stac_version'::text), 'stac_extensions', (collections.content -> 'stac_extensions'::text)) AS content,
+    collections.content AS collectionjson
+   FROM collections;
+
+
 CREATE OR REPLACE FUNCTION pgstac.readonly(conf jsonb DEFAULT NULL::jsonb)
  RETURNS boolean
  LANGUAGE sql

@@ -51,6 +51,10 @@ SELECT COALESCE(
 )::boolean;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION base_url(conf jsonb DEFAULT NULL) RETURNS text AS $$
+  SELECT COALESCE(pgstac.get_setting('base_url', conf), '.');
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION additional_properties() RETURNS boolean AS $$
     SELECT pgstac.get_setting_bool('additional_properties');
 $$ LANGUAGE SQL;
