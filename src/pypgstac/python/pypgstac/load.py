@@ -441,7 +441,10 @@ class Loader:
                         "Available modes are insert, ignore, upsert, and delsert."
                         f"You entered {insert_mode}.",
                     )
+                logger.debug("Updating Partition Stats")
                 cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
+                logger.debug(cur.statusmessage)
+                logger.debug(f"Rows affected: {cur.rowcount}")
         logger.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds",
         )

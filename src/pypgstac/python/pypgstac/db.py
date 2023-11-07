@@ -10,7 +10,12 @@ import psycopg
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-from pydantic_settings import BaseSettings
+
+try:
+    from pydantic.v1 import BaseSettings  # type:ignore
+except ImportError:
+    from pydantic import BaseSettings  # type:ignore
+
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 logger = logging.getLogger(__name__)
@@ -102,6 +107,10 @@ class PgstacDB:
             self.connection.autocommit = True
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
+                self.connection.execute(
+                    "SET CLIENT_MIN_MESSAGES TO NOTICE;",
+                    prepare=False,
+                )
             atexit.register(self.disconnect)
             self.connection.execute(
                 """

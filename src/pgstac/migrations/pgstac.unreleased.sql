@@ -2477,7 +2477,8 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
 
 
-    RAISE NOTICE 'Checking if we need to modify constraints. cdtrange: % dtrange: % cedtrange: % edtrange: %', cdtrange, dtrange, cedtrange, edtrange;
+    RAISE NOTICE 'Checking if we need to modify constraints...';
+    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
@@ -2487,6 +2488,8 @@ BEGIN
         RAISE NOTICE 'New      % %', dtrange, edtrange;
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
+        REFRESH MATERIALIZED VIEW partitions;
+        REFRESH MATERIALIZED VIEW partition_steps;
     END IF;
     RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
@@ -2728,6 +2731,7 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
+    RAISE NOTICE 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
     RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
