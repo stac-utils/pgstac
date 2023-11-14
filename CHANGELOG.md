@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Make sure that pgstac_ingest role always has read/write permissions on all tables
 - Remove call to create_table_constraints from check_partition function. create_table_constraints was being called twice as it also gets called from update_partition_stats
 - Add NOT NULL constraint to collections table (FIXES #224)
+- Fix issue with indexes not getting created as the pg_admin role using SECURITY DEFINER
 
  ### Changed
  - Revert pydantic requirement back to '>=1.7' and use basesettings conditionally from pydantic or pydantic.v1 to allow compatibility with pydantic 2 as well as with stac-fastapi that requires pydantic <2
