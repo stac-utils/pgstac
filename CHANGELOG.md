@@ -5,11 +5,28 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [unreleased]
+
+## Added
 - Add support functions and tests for Collection Search
 - Add configuration parameter for base_url to be able to generate absolute links
  - With this release, this is only used to create links for paging in collection_search
 - Adds read only mode to allow use of pgstac on read replicas
  - Note: Turning on romode disables any caching (particularly when context is turned on) and does not allow to store q query hash that can be used with geometry_search.
+- Add option to pypgstac loader "--usequeue" that forces use of the query queue for the loading process
+- Add "pypgstac runqueue" command to run any commands that are set in the query queue
+
+ ### Fixed
+ - Fix bug with end_datetime constraint management leading to inability to add data outside of constraints
+ - Fix bugs dealing with table ownership to ensure that all pgstac tables are owned by the pgstac_admin role
+  - Fixes issues with errors/warnings caused when doing index maintenance
+  - Fixes issues with errors/warnings caused with partition management
+- Make sure that pgstac_ingest role always has read/write permissions on all tables
+- Remove call to create_table_constraints from check_partition function. create_table_constraints was being called twice as it also gets called from update_partition_stats
+- Add NOT NULL constraint to collections table (FIXES #224)
+- Fix issue with indexes not getting created as the pg_admin role using SECURITY DEFINER
+
+ ### Changed
+ - Revert pydantic requirement back to '>=1.7' and use basesettings conditionally from pydantic or pydantic.v1 to allow compatibility with pydantic 2 as well as with stac-fastapi that requires pydantic <2
 
 ## [v0.8.1]
 

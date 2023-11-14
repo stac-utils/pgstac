@@ -112,9 +112,20 @@ GRANT ALL ON SCHEMA pgstac TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
 ALTER DEFAULT PRIVILEGES IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
-SET ROLE pgstac_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_admin IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT SELECT ON TABLES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT USAGE ON TYPES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON SEQUENCES TO pgstac_read;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON TABLES TO pgstac_ingest;
+ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON FUNCTIONS TO pgstac_ingest;
 
 SET SEARCH_PATH TO pgstac, public;
+SET ROLE pgstac_admin;
 
 DO $$
   BEGIN
@@ -845,7 +856,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE TABLE IF NOT EXISTS collections (
     key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE,
+    id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE NOT NULL,
     content JSONB NOT NULL,
     base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
     geometry geometry GENERATED ALWAYS AS (pgstac.collection_geom(content)) STORED,
@@ -1115,6 +1126,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
         out text;
@@ -1135,7 +1147,6 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
         RETURN btrim(out, ' \n\t');
     END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
-
 
 DROP VIEW IF EXISTS pgstac_indexes;
 CREATE VIEW pgstac_indexes AS
@@ -1179,6 +1190,96 @@ FROM
     LEFT JOIN pg_stats s ON (s.tablename = i.indexname)
 WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
 
+CREATE OR REPLACE FUNCTION queryable_indexes(
+    IN treeroot text DEFAULT 'items',
+    IN changes boolean DEFAULT FALSE,
+    OUT collection text,
+    OUT partition text,
+    OUT field text,
+    OUT indexname text,
+    OUT existing_idx text,
+    OUT queryable_idx text
+) RETURNS SETOF RECORD AS $$
+WITH p AS (
+        SELECT
+            relid::text as partition,
+            replace(replace(
+                CASE
+                    WHEN parentrelid::regclass::text='items' THEN pg_get_expr(c.relpartbound, c.oid)
+                    ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                END,
+                'FOR VALUES IN (''',''), ''')',
+                ''
+            ) AS collection
+        FROM pg_partition_tree(treeroot)
+        JOIN pg_class c ON (relid::regclass = c.oid)
+        JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    ), i AS (
+        SELECT
+            partition,
+            indexname,
+            regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+            COALESCE(
+                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+            ) AS field
+        FROM
+            pg_indexes
+            JOIN p ON (tablename=partition)
+    ), q AS (
+        SELECT
+            name AS field,
+            collection,
+            partition,
+            format(indexdef(queryables), partition) as qidx
+        FROM queryables, unnest_collection(queryables.collection_ids) collection
+            JOIN p USING (collection)
+        WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+    )
+    SELECT
+        collection,
+        partition,
+        field,
+        indexname,
+        iidx as existing_idx,
+        qidx as queryable_idx
+    FROM i FULL JOIN q USING (field, partition)
+    WHERE CASE WHEN changes THEN lower(iidx) IS DISTINCT FROM lower(qidx) ELSE TRUE END;
+;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION maintain_index(
+    indexname text,
+    queryable_idx text,
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE,
+    idxconcurrently boolean DEFAULT FALSE
+) RETURNS VOID AS $$
+DECLARE
+BEGIN
+    IF indexname IS NOT NULL THEN
+        IF dropindexes OR queryable_idx IS NOT NULL THEN
+            EXECUTE format('DROP INDEX IF EXISTS %I;', indexname);
+        ELSIF rebuildindexes THEN
+            IF idxconcurrently THEN
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            ELSE
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            END IF;
+        END IF;
+    END IF;
+    IF queryable_idx IS NOT NULL THEN
+        IF idxconcurrently THEN
+            EXECUTE replace(queryable_idx, 'INDEX', 'INDEX CONCURRENTLY');
+        ELSE EXECUTE queryable_idx;
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+
 set check_function_bodies to off;
 CREATE OR REPLACE FUNCTION maintain_partition_queries(
     part text DEFAULT 'items',
@@ -1188,73 +1289,23 @@ CREATE OR REPLACE FUNCTION maintain_partition_queries(
 ) RETURNS SETOF text AS $$
 DECLARE
    rec record;
+   q text;
 BEGIN
     FOR rec IN (
-        WITH p AS (
-           SELECT
-                relid::text as partition,
-                replace(replace(
-                    CASE
-                        WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-                        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-                    END,
-                    'FOR VALUES IN (''',''), ''')',
-                    ''
-                ) AS collection
-            FROM pg_partition_tree('items')
-            JOIN pg_class c ON (relid::regclass = c.oid)
-            JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-        ), i AS (
-            SELECT
-                partition,
-                indexname,
-                regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
-                COALESCE(
-                    (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                    (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
-                    CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
-                ) AS field
-            FROM
-                pg_indexes
-                JOIN p ON (tablename=partition)
-        ), q AS (
-            SELECT
-                name AS field,
-                collection,
-                partition,
-                format(indexdef(queryables), partition) as qidx
-            FROM queryables, unnest_collection(queryables.collection_ids) collection
-                JOIN p USING (collection)
-            WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
-        )
-        SELECT * FROM i FULL JOIN q USING (field, partition)
-        WHERE lower(iidx) IS DISTINCT FROM lower(qidx)
+        SELECT * FROM queryable_indexes(part,true)
     ) LOOP
-        IF rec.iidx IS NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-            ELSE
-                RETURN NEXT rec.qidx;
-            END IF;
-        ELSIF rec.qidx IS NULL AND dropindexes THEN
-            RETURN NEXT format('DROP INDEX IF EXISTS %I;', rec.indexname);
-        ELSIF lower(rec.qidx) != lower(rec.iidx) THEN
-            IF dropindexes THEN
-                RETURN NEXT format('DROP INDEX IF EXISTS %I; %s;', rec.indexname, rec.qidx);
-            ELSE
-                IF idxconcurrently THEN
-                    RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-                ELSE
-                    RETURN NEXT rec.qidx;
-                END IF;
-            END IF;
-        ELSIF rebuildindexes and rec.indexname IS NOT NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT format('REINDEX INDEX CONCURRENTLY %I;', rec.indexname);
-            ELSE
-                RETURN NEXT format('REINDEX INDEX %I;', rec.indexname);
-            END IF;
-        END IF;
+        q := format(
+            'SELECT maintain_index(
+                %L,%L,%L,%L,%L
+            );',
+            rec.indexname,
+            rec.queryable_idx,
+            dropindexes,
+            rebuildindexes,
+            idxconcurrently
+        );
+        RAISE NOTICE 'Q: %s', q;
+        RETURN NEXT q;
     END LOOP;
     RETURN;
 END;
@@ -2468,7 +2519,8 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
 
 
-    RAISE NOTICE 'Checking if we need to modify constraints.';
+    RAISE NOTICE 'Checking if we need to modify constraints...';
+    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
@@ -2478,6 +2530,8 @@ BEGIN
         RAISE NOTICE 'New      % %', dtrange, edtrange;
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
+        REFRESH MATERIALIZED VIEW partitions;
+        REFRESH MATERIALIZED VIEW partition_steps;
     END IF;
     RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
@@ -2498,7 +2552,7 @@ BEGIN
     END IF;
 
 END;
-$$ LANGUAGE PLPGSQL STRICT;
+$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -2719,16 +2773,19 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
+    RAISE NOTICE 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
     RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
             $q$
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I to pgstac_ingest;
             $q$,
             _partition_name,
             _collection,
             concat(_partition_name,'_pk'),
+            _partition_name,
             _partition_name
         );
     ELSE
@@ -2737,6 +2794,7 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I TO pgstac_ingest;
             $q$,
             format('_items_%s', c.key),
             _collection,
@@ -2745,6 +2803,7 @@ BEGIN
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
+            _partition_name,
             _partition_name
         );
     END IF;
@@ -2760,7 +2819,6 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
-    PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
     REFRESH MATERIALIZED VIEW partitions;
@@ -2798,11 +2856,12 @@ BEGIN
                 WITH p AS (
                     SELECT
                         collection,
-                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
-                        ELSE date_trunc(%L, datetime)
+                        CASE
+                            WHEN %L IS NULL THEN '-infinity'::timestamptz
+                            ELSE date_trunc(%L, datetime)
                         END as d,
                         tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
                     FROM changepartitionstaging
                     GROUP BY 1,2
                 ) SELECT check_partition(collection, dtrange, edtrange) FROM p;
@@ -4284,6 +4343,16 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
+ALTER FUNCTION update_partition_stats SECURITY DEFINER;
+ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
+ALTER FUNCTION create_table_constraints SECURITY DEFINER;
+ALTER FUNCTION check_partition SECURITY DEFINER;
+ALTER FUNCTION repartition SECURITY DEFINER;
+ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION format_item SECURITY DEFINER;
+ALTER FUNCTION maintain_index SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -4301,5 +4370,14 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
+GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
+GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
+
+RESET ROLE;
+
+SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
 SELECT set_version('unreleased');

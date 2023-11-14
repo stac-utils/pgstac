@@ -150,7 +150,8 @@ BEGIN
     REFRESH MATERIALIZED VIEW partition_steps;
 
 
-    RAISE NOTICE 'Checking if we need to modify constraints.';
+    RAISE NOTICE 'Checking if we need to modify constraints...';
+    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
@@ -160,6 +161,8 @@ BEGIN
         RAISE NOTICE 'New      % %', dtrange, edtrange;
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
+        REFRESH MATERIALIZED VIEW partitions;
+        REFRESH MATERIALIZED VIEW partition_steps;
     END IF;
     RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
@@ -180,7 +183,7 @@ BEGIN
     END IF;
 
 END;
-$$ LANGUAGE PLPGSQL STRICT;
+$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -401,16 +404,19 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
+    RAISE NOTICE 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
     RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
             $q$
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I to pgstac_ingest;
             $q$,
             _partition_name,
             _collection,
             concat(_partition_name,'_pk'),
+            _partition_name,
             _partition_name
         );
     ELSE
@@ -419,6 +425,7 @@ BEGIN
                 CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
                 CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
                 CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                GRANT ALL ON %I TO pgstac_ingest;
             $q$,
             format('_items_%s', c.key),
             _collection,
@@ -427,6 +434,7 @@ BEGIN
             lower(_partition_dtrange),
             upper(_partition_dtrange),
             format('%s_pk', _partition_name),
+            _partition_name,
             _partition_name
         );
     END IF;
@@ -442,7 +450,6 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
-    PERFORM create_table_constraints(_partition_name, _constraint_dtrange, _constraint_edtrange);
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
     REFRESH MATERIALIZED VIEW partitions;
@@ -480,11 +487,12 @@ BEGIN
                 WITH p AS (
                     SELECT
                         collection,
-                        CASE WHEN %L IS NULL THEN '-infinity'::timestamptz
-                        ELSE date_trunc(%L, datetime)
+                        CASE
+                            WHEN %L IS NULL THEN '-infinity'::timestamptz
+                            ELSE date_trunc(%L, datetime)
                         END as d,
                         tstzrange(min(datetime),max(datetime),'[]') as dtrange,
-                        tstzrange(min(datetime),max(datetime),'[]') as edtrange
+                        tstzrange(min(end_datetime),max(end_datetime),'[]') as edtrange
                     FROM changepartitionstaging
                     GROUP BY 1,2
                 ) SELECT check_partition(collection, dtrange, edtrange) FROM p;

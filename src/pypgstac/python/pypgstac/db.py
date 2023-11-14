@@ -10,7 +10,12 @@ import psycopg
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-from pydantic_settings import BaseSettings
+
+try:
+    from pydantic.v1 import BaseSettings  # type:ignore
+except ImportError:
+    from pydantic import BaseSettings  # type:ignore
+
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,7 @@ class PgstacDB:
         connection: Optional[Connection] = None,
         commit_on_exit: bool = True,
         debug: bool = False,
+        use_queue: bool = False,
     ) -> None:
         """Initialize Database."""
         self.dsn: str
@@ -69,6 +75,7 @@ class PgstacDB:
         self.commit_on_exit = commit_on_exit
         self.initial_version = "0.1.9"
         self.debug = debug
+        self.use_queue = use_queue
         if self.debug:
             logging.basicConfig(level=logging.DEBUG)
 
@@ -102,6 +109,15 @@ class PgstacDB:
             self.connection.autocommit = True
             if self.debug:
                 self.connection.add_notice_handler(pg_notice_handler)
+                self.connection.execute(
+                    "SET CLIENT_MIN_MESSAGES TO NOTICE;",
+                    prepare=False,
+                )
+            if self.use_queue:
+                self.connection.execute(
+                    "SET pgstac.use_queue TO TRUE;",
+                    prepare=False,
+                )
             atexit.register(self.disconnect)
             self.connection.execute(
                 """
@@ -218,6 +234,15 @@ class PgstacDB:
         if len(r) == 1:
             return r[0]
         return r
+
+    def run_queued(self) -> str:
+        try:
+            self.connect().execute("""
+                CALL run_queued_queries();
+            """)
+            return "Ran Queued Queries"
+        except Exception as e:
+            return f"Error Running Queued Queries: {e}"
 
     @property
     def version(self) -> Optional[str]:

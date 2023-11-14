@@ -419,9 +419,10 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
     cdtmin = loader.db.query_one(
         """
         SELECT lower(constraint_dtrange)::text
-        FROM partitions WHERE partition = '_items_1';
+        FROM partition_sys_meta WHERE partition = '_items_1';
         """,
     )
+
     assert cdtmin == "2011-07-31 00:00:00+00"
     with loader.db.connect() as conn:
         conn.execute(
@@ -432,7 +433,7 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
     cdtmin = loader.db.query_one(
         """
         SELECT lower(constraint_dtrange)::text
-        FROM partitions_view WHERE partition = '_items_1';
+        FROM partition_sys_meta WHERE partition = '_items_1';
         """,
     )
     assert cdtmin == "-infinity"
@@ -441,3 +442,10 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
         str(TEST_ITEMS),
         insert_mode=Methods.upsert,
     )
+    cdtmin = loader.db.query_one(
+        """
+        SELECT lower(constraint_dtrange)::text
+        FROM partition_sys_meta WHERE partition = '_items_1';
+        """,
+    )
+    assert cdtmin == "2011-07-31 00:00:00+00"

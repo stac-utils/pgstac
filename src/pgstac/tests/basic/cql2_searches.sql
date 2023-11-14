@@ -1,3 +1,4 @@
+SET ROLE pgstac_read;
 SET pgstac."default_filter_lang" TO 'cql2-json';
 
 SELECT search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id"]}}');

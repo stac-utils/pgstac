@@ -16,14 +16,18 @@ class PgstacCLI:
     """CLI for PgStac."""
 
     def __init__(
-        self, dsn: Optional[str] = "", version: bool = False, debug: bool = False,
+        self,
+        dsn: Optional[str] = "",
+        version: bool = False,
+        debug: bool = False,
+        usequeue: bool = False,
     ):
         """Initialize PgStac CLI."""
         if version:
             sys.exit(0)
 
         self.dsn = dsn
-        self._db = PgstacDB(dsn=dsn, debug=debug)
+        self._db = PgstacDB(dsn=dsn, debug=debug, use_queue=usequeue)
         if debug:
             logging.basicConfig(level=logging.DEBUG)
             sys.tracebacklimit = 1000
@@ -70,6 +74,9 @@ class PgstacCLI:
             loader.load_collections(file, method)
         if table == "items":
             loader.load_items(file, method, dehydrated, chunksize)
+
+    def runqueue(self) -> str:
+        return self._db.run_queued()
 
     def loadextensions(self) -> None:
         conn = self._db.connect()
