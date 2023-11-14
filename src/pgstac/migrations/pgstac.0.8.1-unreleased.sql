@@ -359,6 +359,88 @@ create or replace view "pgstac"."collections_asitems" as  SELECT collections.id,
    FROM collections;
 
 
+CREATE OR REPLACE FUNCTION pgstac.maintain_index(indexname text, queryable_idx text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false, idxconcurrently boolean DEFAULT false)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+BEGIN
+    IF indexname IS NOT NULL THEN
+        IF dropindexes OR queryable_idx IS NOT NULL THEN
+            EXECUTE format('DROP INDEX IF EXISTS %I;', indexname);
+        ELSIF rebuildindexes THEN
+            IF idxconcurrently THEN
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            ELSE
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            END IF;
+        END IF;
+    END IF;
+    IF queryable_idx IS NOT NULL THEN
+        IF idxconcurrently THEN
+            EXECUTE replace(queryable_idx, 'INDEX', 'INDEX CONCURRENTLY');
+        ELSE EXECUTE queryable_idx;
+        END IF;
+    END IF;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.queryable_indexes(treeroot text DEFAULT 'items'::text, changes boolean DEFAULT false, OUT collection text, OUT partition text, OUT field text, OUT indexname text, OUT existing_idx text, OUT queryable_idx text)
+ RETURNS SETOF record
+ LANGUAGE sql
+AS $function$
+WITH p AS (
+        SELECT
+            relid::text as partition,
+            replace(replace(
+                CASE
+                    WHEN parentrelid::regclass::text='items' THEN pg_get_expr(c.relpartbound, c.oid)
+                    ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                END,
+                'FOR VALUES IN (''',''), ''')',
+                ''
+            ) AS collection
+        FROM pg_partition_tree(treeroot)
+        JOIN pg_class c ON (relid::regclass = c.oid)
+        JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    ), i AS (
+        SELECT
+            partition,
+            indexname,
+            regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+            COALESCE(
+                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+            ) AS field
+        FROM
+            pg_indexes
+            JOIN p ON (tablename=partition)
+    ), q AS (
+        SELECT
+            name AS field,
+            collection,
+            partition,
+            format(indexdef(queryables), partition) as qidx
+        FROM queryables, unnest_collection(queryables.collection_ids) collection
+            JOIN p USING (collection)
+        WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+    )
+    SELECT
+        collection,
+        partition,
+        field,
+        indexname,
+        iidx as existing_idx,
+        qidx as queryable_idx
+    FROM i FULL JOIN q USING (field, partition)
+    WHERE CASE WHEN changes THEN lower(iidx) IS DISTINCT FROM lower(qidx) ELSE TRUE END;
+;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.readonly(conf jsonb DEFAULT NULL::jsonb)
  RETURNS boolean
  LANGUAGE sql
@@ -869,91 +951,29 @@ $function$
 CREATE OR REPLACE FUNCTION pgstac.maintain_partition_queries(part text DEFAULT 'items'::text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false, idxconcurrently boolean DEFAULT false)
  RETURNS SETOF text
  LANGUAGE plpgsql
- SECURITY DEFINER
 AS $function$
 DECLARE
    rec record;
+   q text;
 BEGIN
     FOR rec IN (
-        WITH p AS (
-           SELECT
-                relid::text as partition,
-                replace(replace(
-                    CASE
-                        WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-                        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-                    END,
-                    'FOR VALUES IN (''',''), ''')',
-                    ''
-                ) AS collection
-            FROM pg_partition_tree('items')
-            JOIN pg_class c ON (relid::regclass = c.oid)
-            JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-        ), i AS (
-            SELECT
-                partition,
-                indexname,
-                regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
-                COALESCE(
-                    (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                    (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
-                    CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
-                ) AS field
-            FROM
-                pg_indexes
-                JOIN p ON (tablename=partition)
-        ), q AS (
-            SELECT
-                name AS field,
-                collection,
-                partition,
-                format(indexdef(queryables), partition) as qidx
-            FROM queryables, unnest_collection(queryables.collection_ids) collection
-                JOIN p USING (collection)
-            WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
-        )
-        SELECT * FROM i FULL JOIN q USING (field, partition)
-        WHERE lower(iidx) IS DISTINCT FROM lower(qidx)
+        SELECT * FROM queryable_indexes(part,true)
     ) LOOP
-        IF rec.iidx IS NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-            ELSE
-                RETURN NEXT rec.qidx;
-            END IF;
-        ELSIF rec.qidx IS NULL AND dropindexes THEN
-            RETURN NEXT format('DROP INDEX IF EXISTS %I;', rec.indexname);
-        ELSIF lower(rec.qidx) != lower(rec.iidx) THEN
-            IF dropindexes THEN
-                RETURN NEXT format('DROP INDEX IF EXISTS %I; %s;', rec.indexname, rec.qidx);
-            ELSE
-                IF idxconcurrently THEN
-                    RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-                ELSE
-                    RETURN NEXT rec.qidx;
-                END IF;
-            END IF;
-        ELSIF rebuildindexes and rec.indexname IS NOT NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT format('REINDEX INDEX CONCURRENTLY %I;', rec.indexname);
-            ELSE
-                RETURN NEXT format('REINDEX INDEX %I;', rec.indexname);
-            END IF;
-        END IF;
+        q := format(
+            'SELECT maintain_index(
+                %L,%L,%L,%L,%L
+            );',
+            rec.indexname,
+            rec.queryable_idx,
+            dropindexes,
+            rebuildindexes,
+            idxconcurrently
+        );
+        RAISE NOTICE 'Q: %s', q;
+        RETURN NEXT q;
     END LOOP;
     RETURN;
 END;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION pgstac.maintain_partitions(part text DEFAULT 'items'::text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false)
- RETURNS void
- LANGUAGE sql
- SECURITY DEFINER
-AS $function$
-    WITH t AS (
-        SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
-    ) SELECT count(*) FROM t;
 $function$
 ;
 
@@ -1008,73 +1028,6 @@ BEGIN
         );
     END IF;
     RETURN _collection;
-END;
-$function$
-;
-
-CREATE OR REPLACE PROCEDURE pgstac.run_queued_queries()
- LANGUAGE plpgsql
-AS $procedure$
-DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
-    cnt int := 0;
-BEGIN
-    SET ROLE pgstac_admin;
-    timeout_ts := statement_timestamp() + queue_timeout();
-    WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        cnt := cnt + 1;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-        COMMIT;
-    END LOOP;
-    RESET ROLE;
-END;
-$procedure$
-;
-
-CREATE OR REPLACE FUNCTION pgstac.run_queued_queries_intransaction()
- RETURNS integer
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
-    cnt int := 0;
-BEGIN
-    timeout_ts := statement_timestamp() + queue_timeout();
-    WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            RETURN cnt;
-        END IF;
-        cnt := cnt + 1;
-        BEGIN
-            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-                RAISE WARNING '%', error;
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
-    END LOOP;
-    RETURN cnt;
 END;
 $function$
 ;
@@ -1413,9 +1366,7 @@ ALTER FUNCTION repartition SECURITY DEFINER;
 ALTER FUNCTION where_stats SECURITY DEFINER;
 ALTER FUNCTION search_query SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
-ALTER FUNCTION maintain_partition_queries SECURITY DEFINER;
-ALTER FUNCTION maintain_partitions SECURITY DEFINER;
-ALTER FUNCTION run_queued_queries_intransaction SECURITY DEFINER;
+ALTER FUNCTION maintain_index SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;

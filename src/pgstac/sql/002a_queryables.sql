@@ -253,6 +253,96 @@ FROM
     LEFT JOIN pg_stats s ON (s.tablename = i.indexname)
 WHERE i.schemaname='pgstac' and i.tablename ~ '_items_';
 
+CREATE OR REPLACE FUNCTION queryable_indexes(
+    IN treeroot text DEFAULT 'items',
+    IN changes boolean DEFAULT FALSE,
+    OUT collection text,
+    OUT partition text,
+    OUT field text,
+    OUT indexname text,
+    OUT existing_idx text,
+    OUT queryable_idx text
+) RETURNS SETOF RECORD AS $$
+WITH p AS (
+        SELECT
+            relid::text as partition,
+            replace(replace(
+                CASE
+                    WHEN parentrelid::regclass::text='items' THEN pg_get_expr(c.relpartbound, c.oid)
+                    ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                END,
+                'FOR VALUES IN (''',''), ''')',
+                ''
+            ) AS collection
+        FROM pg_partition_tree(treeroot)
+        JOIN pg_class c ON (relid::regclass = c.oid)
+        JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    ), i AS (
+        SELECT
+            partition,
+            indexname,
+            regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+            COALESCE(
+                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
+                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+            ) AS field
+        FROM
+            pg_indexes
+            JOIN p ON (tablename=partition)
+    ), q AS (
+        SELECT
+            name AS field,
+            collection,
+            partition,
+            format(indexdef(queryables), partition) as qidx
+        FROM queryables, unnest_collection(queryables.collection_ids) collection
+            JOIN p USING (collection)
+        WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+    )
+    SELECT
+        collection,
+        partition,
+        field,
+        indexname,
+        iidx as existing_idx,
+        qidx as queryable_idx
+    FROM i FULL JOIN q USING (field, partition)
+    WHERE CASE WHEN changes THEN lower(iidx) IS DISTINCT FROM lower(qidx) ELSE TRUE END;
+;
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION maintain_index(
+    indexname text,
+    queryable_idx text,
+    dropindexes boolean DEFAULT FALSE,
+    rebuildindexes boolean DEFAULT FALSE,
+    idxconcurrently boolean DEFAULT FALSE
+) RETURNS VOID AS $$
+DECLARE
+BEGIN
+    IF indexname IS NOT NULL THEN
+        IF dropindexes OR queryable_idx IS NOT NULL THEN
+            EXECUTE format('DROP INDEX IF EXISTS %I;', indexname);
+        ELSIF rebuildindexes THEN
+            IF idxconcurrently THEN
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            ELSE
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+            END IF;
+        END IF;
+    END IF;
+    IF queryable_idx IS NOT NULL THEN
+        IF idxconcurrently THEN
+            EXECUTE replace(queryable_idx, 'INDEX', 'INDEX CONCURRENTLY');
+        ELSE EXECUTE queryable_idx;
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+
 set check_function_bodies to off;
 CREATE OR REPLACE FUNCTION maintain_partition_queries(
     part text DEFAULT 'items',
@@ -262,77 +352,27 @@ CREATE OR REPLACE FUNCTION maintain_partition_queries(
 ) RETURNS SETOF text AS $$
 DECLARE
    rec record;
+   q text;
 BEGIN
     FOR rec IN (
-        WITH p AS (
-           SELECT
-                relid::text as partition,
-                replace(replace(
-                    CASE
-                        WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-                        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-                    END,
-                    'FOR VALUES IN (''',''), ''')',
-                    ''
-                ) AS collection
-            FROM pg_partition_tree('items')
-            JOIN pg_class c ON (relid::regclass = c.oid)
-            JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-        ), i AS (
-            SELECT
-                partition,
-                indexname,
-                regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
-                COALESCE(
-                    (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                    (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
-                    CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
-                ) AS field
-            FROM
-                pg_indexes
-                JOIN p ON (tablename=partition)
-        ), q AS (
-            SELECT
-                name AS field,
-                collection,
-                partition,
-                format(indexdef(queryables), partition) as qidx
-            FROM queryables, unnest_collection(queryables.collection_ids) collection
-                JOIN p USING (collection)
-            WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
-        )
-        SELECT * FROM i FULL JOIN q USING (field, partition)
-        WHERE lower(iidx) IS DISTINCT FROM lower(qidx)
+        SELECT * FROM queryable_indexes(part,true)
     ) LOOP
-        IF rec.iidx IS NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-            ELSE
-                RETURN NEXT rec.qidx;
-            END IF;
-        ELSIF rec.qidx IS NULL AND dropindexes THEN
-            RETURN NEXT format('DROP INDEX IF EXISTS %I;', rec.indexname);
-        ELSIF lower(rec.qidx) != lower(rec.iidx) THEN
-            IF dropindexes THEN
-                RETURN NEXT format('DROP INDEX IF EXISTS %I; %s;', rec.indexname, rec.qidx);
-            ELSE
-                IF idxconcurrently THEN
-                    RETURN NEXT replace(rec.qidx, 'INDEX', 'INDEX CONCURRENTLY');
-                ELSE
-                    RETURN NEXT rec.qidx;
-                END IF;
-            END IF;
-        ELSIF rebuildindexes and rec.indexname IS NOT NULL THEN
-            IF idxconcurrently THEN
-                RETURN NEXT format('REINDEX INDEX CONCURRENTLY %I;', rec.indexname);
-            ELSE
-                RETURN NEXT format('REINDEX INDEX %I;', rec.indexname);
-            END IF;
-        END IF;
+        q := format(
+            'SELECT maintain_index(
+                %L,%L,%L,%L,%L
+            );',
+            rec.indexname,
+            rec.queryable_idx,
+            dropindexes,
+            rebuildindexes,
+            idxconcurrently
+        );
+        RAISE NOTICE 'Q: %s', q;
+        RETURN NEXT q;
     END LOOP;
     RETURN;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION maintain_partitions(
     part text DEFAULT 'items',
@@ -342,7 +382,7 @@ CREATE OR REPLACE FUNCTION maintain_partitions(
     WITH t AS (
         SELECT run_or_queue(q) FROM maintain_partition_queries(part, dropindexes, rebuildindexes) q
     ) SELECT count(*) FROM t;
-$$ LANGUAGE SQL SECURITY DEFINER;
+$$ LANGUAGE SQL;
 
 
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$

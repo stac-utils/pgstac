@@ -17,7 +17,7 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
-SELECT plan(202);
+SELECT plan(218);
 --SELECT * FROM no_plan();
 
 -- Run the tests.
@@ -31,6 +31,7 @@ SELECT plan(202);
 \i tests/pgtap/002a_queryables.sql
 \i tests/pgtap/003_items.sql
 \i tests/pgtap/004_search.sql
+\i tests/pgtap/004a_collectionsearch.sql
 \i tests/pgtap/005_tileutils.sql
 \i tests/pgtap/006_tilesearch.sql
 \i tests/pgtap/999_version.sql

@@ -62,5 +62,4 @@ SELECT is_definer('repartition');
 SELECT is_definer('where_stats');
 SELECT is_definer('search_query');
 SELECT is_definer('format_item');
-SELECT is_definer('maintain_partitions');
-SELECT is_definer('maintain_partition_queries');
+SELECT is_definer('maintain_index');

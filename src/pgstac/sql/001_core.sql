@@ -162,7 +162,6 @@ DECLARE
     error text;
     cnt int := 0;
 BEGIN
-    SET ROLE pgstac_admin;
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
         DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
@@ -180,7 +179,6 @@ BEGIN
             VALUES (qitem.query, qitem.added, clock_timestamp(), error);
         COMMIT;
     END LOOP;
-    RESET ROLE;
 END;
 $$ LANGUAGE PLPGSQL;
 
