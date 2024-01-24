@@ -20,7 +20,7 @@ COPY docker/pgstac/dbinit/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.
 
 # Base postgres image with plrust installed that can be used for future development using plrust
 FROM pgstacbase as pgstacbase-plrust
-ENV PLRUSTVERSION=1.2.3
+ENV PLRUSTVERSION=1.2.7
 ENV RUSTVERSION=1.72.0
 ENV PLRUSTDOWNLOADURL=https://github.com/tcdi/plrust/releases/download/
 ENV PLRUSTFILE=plrust-trusted-${PLRUSTVERSION}_${RUSTVERSION}-debian-pg${PG_MAJOR}-amd64.deb
