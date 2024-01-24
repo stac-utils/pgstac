@@ -21,9 +21,9 @@ jobs:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           prerelease: false
 
-
+  # This builds a base postgres image that has everything installed to be able to run pgstac.
   buildpg:
-    name: Build and push base postgres
+    name: Build and push base postgres image (you will need to run pypgstac migrate to install pgstac)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -46,7 +46,7 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
           context: .
-          target: pgstacbase-plrust
+          target: pgstacbase
           file: docker/pgstac/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -54,8 +54,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
+  # This builds a postgres image that already has pgstac installed to the tagged version
   buildpgstac:
-    name: Build and push base postgres
+    name: Build and push base postgres with pgstac installed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -78,7 +79,7 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
           context: .
-          target: pgstac-plrust
+          target: pgstac
           file: docker/pgstac/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
