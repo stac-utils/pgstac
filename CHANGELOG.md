@@ -3,10 +3,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## [v0.8.3]
+
+### Added
+- Add support for arm64 to Docker images
+
+### Fixed
+- Fixes a critical bug when using the ingest_staging_upsert table or the upsert_item/upsert_items functions to update records with existing data where the existing row would get deleted, but the new row would not get added.
 
 ## [v0.8.2]
 
-## Added
+### Added
 - Add support functions and tests for Collection Search
 - Add configuration parameter for base_url to be able to generate absolute links
  - With this release, this is only used to create links for paging in collection_search
@@ -414,6 +421,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.8.3]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/stac-utils/pgstac/compare/v0.8.1...v0.8.2
 [v0.8.1]: https://github.com/stac-utils/pgstac/compare/v0.8.0...v0.8.1
 [v0.8.0]: https://github.com/stac-utils/pgstac/compare/v0.7.10...v0.8.0
