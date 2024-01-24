@@ -3,6 +3,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## [v0.8.4]
+
+### Fixed
+- Make release deployment use postgres images without plrust
+- Update versions of plrust in dockerfile (used for development, there is no plrust code yet)
+- Update incremental migration tests to start at v0.3.0 rather than v0.1.9 due to a breaking change in pg_partman at version 5 that has no ability to pin a version. Migrating from prior to v0.3.0 should still work fine as long as pg_partman has not been updated on the database.
+
 ## [v0.8.3]
 
 ### Added
