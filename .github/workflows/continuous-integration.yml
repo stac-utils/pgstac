@@ -47,7 +47,7 @@ jobs:
 
   # This builds a base postgres image that has everything installed to be able to run pgstac. This image does not have pgstac itself installed.
   buildpg:
-    name: Build and push base postgres image (you will need to run pypgstac migrate to install pgstac)
+    name: Build and push base postgres image
     if: ${{ needs.changes.outputs.buildpgdocker == 'true' }}
     runs-on: ubuntu-latest
     needs: [changes]
