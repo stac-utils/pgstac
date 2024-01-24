@@ -1,6 +1,7 @@
 ARG PG_MAJOR=15
 ARG POSTGIS_MAJOR=3
 
+# Base postgres image that pgstac can be installed onto
 FROM postgres:${PG_MAJOR}-bullseye as pgstacbase
 ARG POSTGIS_MAJOR
 RUN  \
@@ -17,6 +18,7 @@ RUN  \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/pgstac/dbinit/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
+# Base postgres image with plrust installed that can be used for future development using plrust
 FROM pgstacbase as pgstacbase-plrust
 ENV PLRUSTVERSION=1.2.3
 ENV RUSTVERSION=1.72.0
@@ -60,11 +62,13 @@ COPY docker/pgstac/dbinit/pgstac-rust.sh 991_plrust.sh
 USER root
 RUN apt-get install -y /${PLRUSTFILE}
 
+# The pgstacbase image with latest version of pgstac installed
 FROM pgstacbase as pgstac
 WORKDIR /docker-entrypoint-initdb.d
 COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
 COPY src/pgstac/pgstac.sql 999_pgstac.sql
 
+# The pgstacbase-plrust image with the latest version of pgstac installed
 FROM pgstacbase-plrust as pgstac-plrust
 WORKDIR /docker-entrypoint-initdb.d
 COPY docker/pgstac/dbinit/pgstac.sh 990_pgstac.sh
