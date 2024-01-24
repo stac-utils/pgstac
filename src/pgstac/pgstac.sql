@@ -1,1 +1,1 @@
-migrations/pgstac.0.8.3.sql
+migrations/pgstac.0.8.4.sql
