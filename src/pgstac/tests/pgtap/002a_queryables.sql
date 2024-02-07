@@ -98,6 +98,11 @@ SELECT lives_ok(
 );
 
 SELECT lives_ok(
+    $$ SELECT search('{"filter": {"s_intersects": [{"property": "geometry"}, {"type": "Point", "coordinates": [0, 0]}]}}'); $$,
+    'Make sure a term present in the list of queryables can be used in a filter'
+)
+
+SELECT lives_ok(
     $$ SELECT search('{"filter": {"and": [{"t_after": [{"property": "datetime"}, "2020-11-11T00:00:00"]}, {"t_before": [{"property": "datetime"}, "2022-11-11T00:00:00"]}]}}'); $$,
     'Make sure that only arguments that are properties are checked'
 );
