@@ -1,4 +1,4 @@
-"""Base library for database interaction with PgStac."""
+"""Base library for database interaction with PgSTAC."""
 import atexit
 import logging
 import time
@@ -53,7 +53,7 @@ settings = Settings()
 
 
 class PgstacDB:
-    """Base class for interacting with PgStac Database."""
+    """Base class for interacting with PgSTAC Database."""
 
     def __init__(
         self,
@@ -299,5 +299,5 @@ class PgstacDB:
         return self.query(base_query, cleaned_args)
 
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
-        """Search PgStac."""
+        """Search PgSTAC."""
         return dumps(next(self.func("search", query))[0])
