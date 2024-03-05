@@ -1,4 +1,4 @@
-"""Test Hydration in PGStac."""
+"""Test Hydration in PgSTAC."""
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, Generator
@@ -12,7 +12,7 @@ from .test_hydrate import TestHydrate as THydrate
 
 
 class TestHydratePG(THydrate):
-    """Test hydration using PGStac."""
+    """Test hydration using PgSTAC."""
 
     @contextmanager
     def db(self) -> Generator[PgstacDB, None, None]:

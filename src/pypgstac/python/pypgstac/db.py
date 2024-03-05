@@ -1,4 +1,4 @@
-"""Base library for database interaction with PgStac."""
+"""Base library for database interaction with PgSTAC."""
 import atexit
 import logging
 import time
@@ -53,7 +53,7 @@ settings = Settings()
 
 
 class PgstacDB:
-    """Base class for interacting with PgStac Database."""
+    """Base class for interacting with PgSTAC Database."""
 
     def __init__(
         self,
@@ -260,7 +260,7 @@ class PgstacDB:
             if isinstance(version, str):
                 return version
         except psycopg.errors.UndefinedTable:
-            logger.debug("PGStac is not installed.")
+            logger.debug("PgSTAC is not installed.")
             if self.connection is not None:
                 self.connection.rollback()
         return None
@@ -278,7 +278,7 @@ class PgstacDB:
             version = version.decode()
         if isinstance(version, str):
             if int(version.split(".")[0]) < 13:
-                raise Exception("PGStac requires PostgreSQL 13+")
+                raise Exception("PgSTAC requires PostgreSQL 13+")
             return version
         else:
             if self.connection is not None:
@@ -299,5 +299,5 @@ class PgstacDB:
         return self.query(base_query, cleaned_args)
 
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
-        """Search PgStac."""
+        """Search PgSTAC."""
         return dumps(next(self.func("search", query))[0])

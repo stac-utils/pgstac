@@ -1,3 +1,3 @@
 # pypgstac
 
-Python tools for working with PGStac
+Python tools for working with PgSTAC

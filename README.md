@@ -28,7 +28,7 @@
 
 PgSTAC provides functionality for STAC Filters, CQL2 search, and utilities to help manage the indexing and partitioning of STAC Collections and Items.
 
-PgSTAC is used in production to scale to hundreds of millions of STAC items. PgSTAC implements core data models and functions to provide a STAC API from a PostgreSQL database. PgSTAC is entirely within the database and does not provide an HTTP-facing API. The [Stac FastAPI](https://github.com/stac-utils/stac-fastapi) PgSTAC backend and [Franklin](https://github.com/azavea/franklin) can be used to expose a PgSTAC catalog. Integrating PgSTAC with any other language with PostgreSQL drivers is also possible.
+PgSTAC is used in production to scale to hundreds of millions of STAC items. PgSTAC implements core data models and functions to provide a STAC API from a PostgreSQL database. PgSTAC is entirely within the database and does not provide an HTTP-facing API. The [STAC FastAPI](https://github.com/stac-utils/stac-fastapi) PgSTAC backend and [Franklin](https://github.com/azavea/franklin) can be used to expose a PgSTAC catalog. Integrating PgSTAC with any other language with PostgreSQL drivers is also possible.
 
 PgSTAC Documentation: https://stac-utils.github.io/pgstac/pgstac
 

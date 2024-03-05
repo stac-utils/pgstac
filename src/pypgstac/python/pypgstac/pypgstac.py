@@ -13,7 +13,7 @@ from pypgstac.migrate import Migrate
 
 
 class PgstacCLI:
-    """CLI for PgStac."""
+    """CLI for PgSTAC."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class PgstacCLI:
         debug: bool = False,
         usequeue: bool = False,
     ):
-        """Initialize PgStac CLI."""
+        """Initialize PgSTAC CLI."""
         if version:
             sys.exit(0)
 
@@ -39,7 +39,7 @@ class PgstacCLI:
 
     @property
     def version(self) -> Optional[str]:
-        """Get PGStac version installed on database."""
+        """Get PgSTAC version installed on database."""
         return self._db.version
 
     @property
@@ -52,11 +52,11 @@ class PgstacCLI:
         self._db.wait()
 
     def search(self, query: str) -> str:
-        """Search PgStac."""
+        """Search PgSTAC."""
         return self._db.search(query)
 
     def migrate(self, toversion: Optional[str] = None) -> str:
-        """Migrate PgStac Database."""
+        """Migrate PgSTAC Database."""
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)
 
@@ -68,7 +68,7 @@ class PgstacCLI:
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
     ) -> None:
-        """Load collections or items into PGStac."""
+        """Load collections or items into PgSTAC."""
         loader = Loader(db=self._db)
         if table == "collections":
             loader.load_collections(file, method)

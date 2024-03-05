@@ -1,15 +1,15 @@
 
 PGDatabase Schema and Functions for Storing and Accessing STAC collections and items in PostgreSQL
 
-STAC Client that uses PGStac available in [STAC-FastAPI](https://github.com/stac-utils/stac-fastapi)
+STAC Client that uses PgSTAC available in [STAC-FastAPI](https://github.com/stac-utils/stac-fastapi)
 
-PGStac requires **Postgresql>=13** and **PostGIS>=3**. Best performance will be had using PostGIS>=3.1.
+PgSTAC requires **Postgresql>=13** and **PostGIS>=3**. Best performance will be had using PostGIS>=3.1.
 
-### PGStac Settings
-PGStac installs everything into the pgstac schema in the database. This schema must be in the search_path in the postgresql session while using pgstac.
+### PgSTAC Settings
+PgSTAC installs everything into the pgstac schema in the database. This schema must be in the search_path in the postgresql session while using pgstac.
 
 
-#### PGStac Users
+#### PgSTAC Users
 The pgstac_admin role is the owner of all the objects within pgstac and should be used when running things such as migrations.
 
 The pgstac_ingest role has read/write privileges on all tables and should be used for data ingest or if using the transactions extension with stac-fastapi-pgstac.
@@ -28,7 +28,7 @@ To grant pgstac permissions to a current postgresql user:
 GRANT pgstac_read TO <user>;
 ```
 
-#### PGStac Search Path
+#### PgSTAC Search Path
 The search_path can be set at the database level or role level or by setting within the current session. The search_path is already set if you are directly using one of the pgstac users. If you are not logging in directly as one of the pgstac users, you will need to set the search_path by adding it to the search_path of the user you are using:
 ```sql
 ALTER ROLE <user> SET SEARCH_PATH TO pgstac, public;
@@ -45,13 +45,13 @@ kwargs={
 }
 ```
 
-#### PGStac Settings Variables
+#### PgSTAC Settings Variables
 There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql-json2).
 The context is "off" by default, and the default filter language is set to "cql2-json".
 
 Variables can be set either by passing them in via the connection options using your connection library, setting them in the pgstac_settings table or by setting them on the Role that is used to log in to the database.
 
-Turning "context" on can be **very** expensive on larger databases. Much of what PGStac does is to optimize the search of items sorted by time where only fewer than 10,000 records are returned at a time. It does this by searching for the data in chunks and is able to "short circuit" and return as soon as it has the number of records requested. Calculating the context (the total count for a query) requires a scan of all records that match the query parameters and can take a very long time. Setting "context" to auto will use database statistics to estimate the number of rows much more quickly, but for some queries, the estimate may be quite a bit off.
+Turning "context" on can be **very** expensive on larger databases. Much of what PgSTAC does is to optimize the search of items sorted by time where only fewer than 10,000 records are returned at a time. It does this by searching for the data in chunks and is able to "short circuit" and return as soon as it has the number of records requested. Calculating the context (the total count for a query) requires a scan of all records that match the query parameters and can take a very long time. Setting "context" to auto will use database statistics to estimate the number of rows much more quickly, but for some queries, the estimate may be quite a bit off.
 
 Example for updating the pgstac_settings table with a new value:
 ```sql
@@ -92,19 +92,19 @@ The nohydrate conf item returns an unhydrated item bypassing the CPU intensive s
 SELECT search('{"conf":{"nohydrate"=true}}');
 ```
 
-#### PGStac Partitioning
-By default PGStac partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
+#### PgSTAC Partitioning
+By default PgSTAC partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
 ```sql
 UPDATE collections set partition_trunc='month' WHERE id='<collection id>';
 ```
 
 In general, you should aim to keep each partition less than a few hundred thousand rows. Further partitioning (ie setting everything to 'month' when not needed to keep the partitions below a few hundred thousand rows) can be detrimental.
 
-#### PGStac Indexes / Queryables
+#### PgSTAC Indexes / Queryables
 
-By default, PGStac includes indexes on the id, datetime, collection, and geometry. Further indexing can be added for additional properties globally or only on particular collections by modifications to the queryables table.
+By default, PgSTAC includes indexes on the id, datetime, collection, and geometry. Further indexing can be added for additional properties globally or only on particular collections by modifications to the queryables table.
 
-The `queryables` table controls the indexes that PGStac will build as well as the metadata that is returned from a [STAC Queryables endpoint](https://github.com/stac-api-extensions/filter#queryables).
+The `queryables` table controls the indexes that PgSTAC will build as well as the metadata that is returned from a [STAC Queryables endpoint](https://github.com/stac-api-extensions/filter#queryables).
 
 | Column                | Description                                                              | Type       | Example                                                                                                            |
 |-----------------------|--------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------|

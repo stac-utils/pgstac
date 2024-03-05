@@ -1,6 +1,6 @@
 # Development - Contributing
 
-PGStac uses a dockerized development environment. However,
+PgSTAC uses a dockerized development environment. However,
 it still needs a local install of pypgstac to allow an editable
 install inside the docker container. This is installed automatically
 if you have set up a virtual environment for the project. Otherwise
@@ -58,7 +58,7 @@ This will create a base migration for the new version and will create incrementa
 All changes to SQL should only be made in the `/src/pgstac/sql` directory. SQL Files will be run in alphabetical order.
 
 ### Adding Tests
-PGStac tests can be written using PGTap or basic SQL output comparisons. Additional testing is available using PyTest in the PyPgSTAC module. Tests can be run using the `scripts/test` command.
+PgSTAC tests can be written using PGTap or basic SQL output comparisons. Additional testing is available using PyTest in the PyPgSTAC module. Tests can be run using the `scripts/test` command.
 
 PGTap tests can be written using [PGTap](https://pgtap.org/) syntax. Tests should be added to the `/src/pgstac/tests/pgtap` directory. Any new sql files added to this directory must be added to `/src/pgstac/tests/pgtap.sql`.
 
