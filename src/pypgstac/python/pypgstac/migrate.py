@@ -123,7 +123,7 @@ class Migrate:
             toversion = "unreleased"
 
         pg_version = self.db.pg_version
-        logger.info(f"Migrating PGStac on PostgreSQL Version {pg_version}")
+        logger.info(f"Migrating PgSTAC on PostgreSQL Version {pg_version}")
         oldversion = self.db.version
         if oldversion == toversion:
             logger.info(f"Target database already at version: {toversion}")

@@ -260,7 +260,7 @@ class PgstacDB:
             if isinstance(version, str):
                 return version
         except psycopg.errors.UndefinedTable:
-            logger.debug("PGStac is not installed.")
+            logger.debug("PgSTAC is not installed.")
             if self.connection is not None:
                 self.connection.rollback()
         return None
@@ -278,7 +278,7 @@ class PgstacDB:
             version = version.decode()
         if isinstance(version, str):
             if int(version.split(".")[0]) < 13:
-                raise Exception("PGStac requires PostgreSQL 13+")
+                raise Exception("PgSTAC requires PostgreSQL 13+")
             return version
         else:
             if self.connection is not None:

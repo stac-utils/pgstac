@@ -39,7 +39,7 @@ class PgstacCLI:
 
     @property
     def version(self) -> Optional[str]:
-        """Get PGStac version installed on database."""
+        """Get PgSTAC version installed on database."""
         return self._db.version
 
     @property
@@ -68,7 +68,7 @@ class PgstacCLI:
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
     ) -> None:
-        """Load collections or items into PGStac."""
+        """Load collections or items into PgSTAC."""
         loader = Loader(db=self._db)
         if table == "collections":
             loader.load_collections(file, method)
