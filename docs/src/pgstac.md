@@ -176,7 +176,7 @@ VALUES (<property name>, <property wrapper>, <index type>);
 
 Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, or `to_text`. The index type should almost always be `BTREE`, but can be any PostgreSQL index type valid for the data type.
 
-**More indexes is note necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
+**More indexes is not necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
 
 Leave `property_index_type` set to NULL if you do not want an index set for a property.
 
