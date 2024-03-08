@@ -4,20 +4,20 @@ PgSTAC includes a Python utility for bulk data loading and managing migrations.
 
 pyPgSTAC is available on PyPI
 ```
-pip install pypgstac
+python -m pip install pypgstac
 ```
 
 By default, pyPgSTAC does not install the `psycopg` dependency. If you want the database driver installed, use:
 
 ```
-pip install pypgstac[psycopg]
+python -m pip install pypgstac[psycopg]
 ```
 
 Or can be built locally
 ```
 git clone https://github.com/stac-utils/pgstac
 cd pgstac/pypgstac
-pip install .
+python -m pip install .
 ```
 
 ```
@@ -53,6 +53,7 @@ It can also take a DSN database url "postgresql://..." via the **--dsn** flag.
 pyPgSTAC has a utility to help apply migrations to an existing PgSTAC instance to bring it up to date.
 
 There are two types of migrations:
+
  - **Base migrations** install PgSTAC into a database with no current PgSTAC installation. These migrations follow the file pattern `"pgstac.[version].sql"`
  - **Incremental migrations** are used to move PgSTAC from one version to the next. These migrations follow the file pattern `"pgstac.[version].[fromversion].sql"`
 

@@ -10,11 +10,11 @@ PgSTAC installs everything into the pgstac schema in the database. This schema m
 
 
 #### PgSTAC Users
-The pgstac_admin role is the owner of all the objects within pgstac and should be used when running things such as migrations.
+The `pgstac_admin` role is the owner of all the objects within pgstac and should be used when running things such as migrations.
 
-The pgstac_ingest role has read/write privileges on all tables and should be used for data ingest or if using the transactions extension with stac-fastapi-pgstac.
+The `pgstac_ingest` role has read/write privileges on all tables and should be used for data ingest or if using the transactions extension with stac-fastapi-pgstac.
 
-The pgstac_read role has read only access to the items and collections, but will still be able to write to the logging tables.
+The `pgstac_read` role has read only access to the items and collections, but will still be able to write to the logging tables.
 
 You can use the roles either directly and adding a password to them or by granting them to a role you are already using.
 
@@ -85,7 +85,7 @@ Note that when pgstac.readonly is set to TRUE that pgstac is unable to use a cac
 
 Runtime configuration of variables can be made with search by passing in configuration in the search json "conf" item.
 
-Runtime configuration is available for context, context_estimated_count, context_estimated_cost, context_stats_ttl, and nohydrate.
+Runtime configuration is available for **context**, **context_estimated_count**, **context_estimated_cost**, **context_stats_ttl**, and **nohydrate**.
 
 The nohydrate conf item returns an unhydrated item bypassing the CPU intensive step of rehydrating data with data from the collection metadata. When using the nohydrate conf, the only fields that are respected in the fields extension are geometry and bbox.
 ```sql
