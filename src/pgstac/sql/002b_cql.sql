@@ -273,7 +273,7 @@ BEGIN
         FOR prop IN
             SELECT DISTINCT p->>0
             FROM jsonb_path_query(j, 'strict $.**.property') p
-            WHERE p->>0 NOT IN ('id', 'datetime', 'end_datetime', 'collection')
+            WHERE p->>0 NOT IN ('id', 'datetime', 'geometry', 'end_datetime', 'collection')
         LOOP
             IF (queryable(prop)).nulled_wrapper IS NULL THEN
                 RAISE EXCEPTION 'Term % is not found in queryables.', prop;
