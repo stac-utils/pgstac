@@ -3,6 +3,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+## Unreleased
+
+### Fixed
+- Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.
+- Adds fixes/updates to documentation
+- Fixes issue when using geometry with the strict queryables setting set.
+
+
 ## [v0.8.4]
 
 ### Fixed
@@ -428,6 +436,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.8.4]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.4
 [v0.8.3]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/stac-utils/pgstac/compare/v0.8.1...v0.8.2
 [v0.8.1]: https://github.com/stac-utils/pgstac/compare/v0.8.0...v0.8.1
