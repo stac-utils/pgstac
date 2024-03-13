@@ -4390,4 +4390,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('unreleased');
+SELECT set_version('0.8.5');
