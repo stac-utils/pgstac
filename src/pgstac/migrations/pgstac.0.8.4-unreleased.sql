@@ -193,80 +193,192 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
 set check_function_bodies = off;
 
-CREATE OR REPLACE FUNCTION pgstac.items_staging_triggerfunc()
- RETURNS trigger
+CREATE OR REPLACE FUNCTION pgstac.cql2_query(j jsonb, wrapper text DEFAULT NULL::text)
+ RETURNS text
  LANGUAGE plpgsql
+ STABLE
 AS $function$
+#variable_conflict use_variable
 DECLARE
-    p record;
-    _partitions text[];
-    part text;
-    ts timestamptz := clock_timestamp();
-    nrows int;
+    args jsonb := j->'args';
+    arg jsonb;
+    op text := lower(j->>'op');
+    cql2op RECORD;
+    literal text;
+    _wrapper text;
+    leftarg text;
+    rightarg text;
+    prop text;
+    extra_props bool := pgstac.additional_properties();
 BEGIN
-    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+    IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
+        RETURN NULL;
+    END IF;
+    RAISE NOTICE 'CQL2_QUERY: %', j;
 
-    FOR part IN WITH t AS (
-        SELECT
-            n.content->>'collection' as collection,
-            stac_daterange(n.content->'properties') as dtr,
-            partition_trunc
-        FROM newdata n JOIN collections ON (n.content->>'collection'=collections.id)
-    ), p AS (
-        SELECT
-            collection,
-            COALESCE(date_trunc(partition_trunc::text, lower(dtr)),'-infinity') as d,
-            tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
-            tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
-        FROM t
-        GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
-        RAISE NOTICE 'Partition %', part;
-    END LOOP;
-
-    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
-    DROP TABLE IF EXISTS tmpdata;
-    CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
-    SELECT
-        (content_dehydrate(content)).*
-    FROM newdata;
-    GET DIAGNOSTICS nrows = ROW_COUNT;
-    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
-
-    RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
-    IF TG_TABLE_NAME = 'items_staging' THEN
-        INSERT INTO items
-        SELECT * FROM tmpdata;
-        GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
-    ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
-        INSERT INTO items
-        SELECT * FROM tmpdata
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
-    ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
-        DELETE FROM items i USING tmpdata s
-            WHERE
-                i.id = s.id
-                AND i.collection = s.collection
-                AND i IS DISTINCT FROM s
-        ;
-        GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
-        INSERT INTO items AS t
-        SELECT * FROM tmpdata
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+    -- check if all properties are represented in the queryables
+    IF NOT extra_props THEN
+        FOR prop IN
+            SELECT DISTINCT p->>0
+            FROM jsonb_path_query(j, 'strict $.**.property') p
+            WHERE p->>0 NOT IN ('id', 'datetime', 'geometry', 'end_datetime', 'collection')
+        LOOP
+            IF (queryable(prop)).nulled_wrapper IS NULL THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', prop;
+            END IF;
+        END LOOP;
     END IF;
 
-    RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
-    DELETE FROM items_staging;
-    RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+    IF j ? 'filter' THEN
+        RETURN cql2_query(j->'filter');
+    END IF;
 
-    RETURN NULL;
+    IF j ? 'upper' THEN
+        RETURN  cql2_query(jsonb_build_object('op', 'upper', 'args', j->'upper'));
+    END IF;
 
+    IF j ? 'lower' THEN
+        RETURN  cql2_query(jsonb_build_object('op', 'lower', 'args', j->'lower'));
+    END IF;
+
+    -- Temporal Query
+    IF op ilike 't_%' or op = 'anyinteracts' THEN
+        RETURN temporal_op_query(op, args);
+    END IF;
+
+    -- If property is a timestamp convert it to text to use with
+    -- general operators
+    IF j ? 'timestamp' THEN
+        RETURN format('%L::timestamptz', to_tstz(j->'timestamp'));
+    END IF;
+    IF j ? 'interval' THEN
+        RAISE EXCEPTION 'Please use temporal operators when using intervals.';
+        RETURN NONE;
+    END IF;
+
+    -- Spatial Query
+    IF op ilike 's_%' or op = 'intersects' THEN
+        RETURN spatial_op_query(op, args);
+    END IF;
+
+    IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
+        IF args->0 ? 'property' THEN
+            leftarg := format('to_text_array(%s)', (queryable(args->0->>'property')).path);
+        END IF;
+        IF args->1 ? 'property' THEN
+            rightarg := format('to_text_array(%s)', (queryable(args->1->>'property')).path);
+        END IF;
+        RETURN FORMAT(
+            '%s %s %s',
+            COALESCE(leftarg, quote_literal(to_text_array(args->0))),
+            CASE op
+                WHEN 'a_equals' THEN '='
+                WHEN 'a_contains' THEN '@>'
+                WHEN 'a_contained_by' THEN '<@'
+                WHEN 'a_overlaps' THEN '&&'
+            END,
+            COALESCE(rightarg, quote_literal(to_text_array(args->1)))
+        );
+    END IF;
+
+    IF op = 'in' THEN
+        RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
+        args := jsonb_build_array(args->0) || (args->1);
+        RAISE NOTICE 'IN2 : %', args;
+    END IF;
+
+
+
+    IF op = 'between' THEN
+        args = jsonb_build_array(
+            args->0,
+            args->1->0,
+            args->1->1
+        );
+    END IF;
+
+    -- Make sure that args is an array and run cql2_query on
+    -- each element of the array
+    RAISE NOTICE 'ARGS PRE: %', args;
+    IF j ? 'args' THEN
+        IF jsonb_typeof(args) != 'array' THEN
+            args := jsonb_build_array(args);
+        END IF;
+
+        IF jsonb_path_exists(args, '$[*] ? (@.property == "id" || @.property == "datetime" || @.property == "end_datetime" || @.property == "collection")') THEN
+            wrapper := NULL;
+        ELSE
+            -- if any of the arguments are a property, try to get the property_wrapper
+            FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
+                RAISE NOTICE 'Arg: %', arg;
+                wrapper := (queryable(arg->>'property')).nulled_wrapper;
+                RAISE NOTICE 'Property: %, Wrapper: %', arg, wrapper;
+                IF wrapper IS NOT NULL THEN
+                    EXIT;
+                END IF;
+            END LOOP;
+
+            -- if the property was not in queryables, see if any args were numbers
+            IF
+                wrapper IS NULL
+                AND jsonb_path_exists(args, '$[*] ? (@.type()=="number")')
+            THEN
+                wrapper := 'to_float';
+            END IF;
+            wrapper := coalesce(wrapper, 'to_text');
+        END IF;
+
+        SELECT jsonb_agg(cql2_query(a, wrapper))
+            INTO args
+        FROM jsonb_array_elements(args) a;
+    END IF;
+    RAISE NOTICE 'ARGS: %', args;
+
+    IF op IN ('and', 'or') THEN
+        RETURN
+            format(
+                '(%s)',
+                array_to_string(to_text_array(args), format(' %s ', upper(op)))
+            );
+    END IF;
+
+    IF op = 'in' THEN
+        RAISE NOTICE 'IN --  % %', args->0, to_text(args->0);
+        RETURN format(
+            '%s IN (%s)',
+            to_text(args->0),
+            array_to_string((to_text_array(args))[2:], ',')
+        );
+    END IF;
+
+    -- Look up template from cql2_ops
+    IF j ? 'op' THEN
+        SELECT * INTO cql2op FROM cql2_ops WHERE  cql2_ops.op ilike op;
+        IF FOUND THEN
+            -- If specific index set in queryables for a property cast other arguments to that type
+
+            RETURN format(
+                cql2op.template,
+                VARIADIC (to_text_array(args))
+            );
+        ELSE
+            RAISE EXCEPTION 'Operator % Not Supported.', op;
+        END IF;
+    END IF;
+
+
+    IF wrapper IS NOT NULL THEN
+        RAISE NOTICE 'Wrapping % with %', j, wrapper;
+        IF j ? 'property' THEN
+            RETURN format('%I(%s)', wrapper, (queryable(j->>'property')).path);
+        ELSE
+            RETURN format('%I(%L)', wrapper, j);
+        END IF;
+    ELSIF j ? 'property' THEN
+        RETURN quote_ident(j->>'property');
+    END IF;
+
+    RETURN quote_literal(to_text(j));
 END;
 $function$
 ;
@@ -362,4 +474,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('0.8.3');
+SELECT set_version('unreleased');

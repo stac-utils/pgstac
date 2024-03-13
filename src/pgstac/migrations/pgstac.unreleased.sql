@@ -1778,7 +1778,7 @@ BEGIN
         FOR prop IN
             SELECT DISTINCT p->>0
             FROM jsonb_path_query(j, 'strict $.**.property') p
-            WHERE p->>0 NOT IN ('id', 'datetime', 'end_datetime', 'collection')
+            WHERE p->>0 NOT IN ('id', 'datetime', 'geometry', 'end_datetime', 'collection')
         LOOP
             IF (queryable(prop)).nulled_wrapper IS NULL THEN
                 RAISE EXCEPTION 'Term % is not found in queryables.', prop;
@@ -2218,6 +2218,7 @@ DECLARE
     _partitions text[];
     part text;
     ts timestamptz := clock_timestamp();
+    nrows int;
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
@@ -2239,40 +2240,45 @@ BEGIN
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
+    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
+    DROP TABLE IF EXISTS tmpdata;
+    CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
+    SELECT
+        (content_dehydrate(content)).*
+    FROM newdata;
+    GET DIAGNOSTICS nrows = ROW_COUNT;
+    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
+
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
         INSERT INTO items
-        SELECT
-            (content_dehydrate(content)).*
-        FROM newdata;
-        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
-        DELETE FROM items_staging;
+        SELECT * FROM tmpdata;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
-        SELECT
-            (content_dehydrate(content)).*
-        FROM newdata
+        SELECT * FROM tmpdata
         ON CONFLICT DO NOTHING;
-        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
-        DELETE FROM items_staging_ignore;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
-        WITH staging_formatted AS (
-            SELECT (content_dehydrate(content)).* FROM newdata
-        ), deletes AS (
-            DELETE FROM items i USING staging_formatted s
-                WHERE
-                    i.id = s.id
-                    AND i.collection = s.collection
-                    AND i IS DISTINCT FROM s
-            RETURNING i.id, i.collection
-        )
-        INSERT INTO items
-        SELECT s.* FROM
-            staging_formatted s
-            ON CONFLICT DO NOTHING;
-        RAISE NOTICE 'Doing the delete. %', clock_timestamp() - ts;
-        DELETE FROM items_staging_upsert;
+        DELETE FROM items i USING tmpdata s
+            WHERE
+                i.id = s.id
+                AND i.collection = s.collection
+                AND i IS DISTINCT FROM s
+        ;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
+        INSERT INTO items AS t
+        SELECT * FROM tmpdata
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
+
+    RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
+    DELETE FROM items_staging;
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
@@ -4384,4 +4390,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('0.8.2');
+SELECT set_version('unreleased');
