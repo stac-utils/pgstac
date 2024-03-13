@@ -401,7 +401,7 @@ SELECT results_eq($$
             "op": "between",
             "args": [
             { "property": "eo:cloud_cover" },
-            [ 0, 50 ]
+            0, 50
             ]
         }
     }

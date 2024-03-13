@@ -344,8 +344,8 @@ BEGIN
     IF op = 'between' THEN
         args = jsonb_build_array(
             args->0,
-            args->1->0,
-            args->1->1
+            args->1,
+            args->2
         );
     END IF;
 
