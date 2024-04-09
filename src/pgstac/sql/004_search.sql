@@ -893,26 +893,23 @@ BEGIN
     RAISE NOTICE 'Time to get prev/next %', age_ms(timer);
     timer := clock_timestamp();
 
-    IF context(_search->'conf') != 'off' THEN
-        context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', _limit,
-            'matched', total_count,
-            'returned', coalesce(jsonb_array_length(out_records), 0)
-        ));
-    ELSE
-        context := jsonb_strip_nulls(jsonb_build_object(
-            'limit', _limit,
-            'returned', coalesce(jsonb_array_length(out_records), 0)
-        ));
-    END IF;
-
     collection := jsonb_build_object(
         'type', 'FeatureCollection',
         'features', coalesce(out_records, '[]'::jsonb),
         'next', next,
-        'prev', prev,
-        'context', context
+        'prev', prev
     );
+
+    IF context(_search->'conf') != 'off' THEN
+        collection := collection || jsonb_strip_nulls(jsonb_build_object(
+            'numberMatched', total_count,
+            'numberReturned', coalesce(jsonb_array_length(out_records), 0)
+        ));
+    ELSE
+        collection := collection || jsonb_strip_nulls(jsonb_build_object(
+            'numberReturned', coalesce(jsonb_array_length(out_records), 0)
+        ));
+    END IF;
 
     IF get_setting_bool('timing', _search->'conf') THEN
         collection = collection || jsonb_build_object('timing', age_ms(init_ts));
@@ -922,7 +919,7 @@ BEGIN
     timer := clock_timestamp();
 
     RAISE NOTICE 'Total Time: %', age_ms(current_timestamp);
-    RAISE NOTICE 'RETURNING % records. NEXT: %. PREV: %', collection->'context'->>'returned', collection->>'next', collection->>'prev';
+    RAISE NOTICE 'RETURNING % records. NEXT: %. PREV: %', collection->>'numberReturned', collection->>'next', collection->>'prev';
     RETURN collection;
 END;
 $$ LANGUAGE PLPGSQL;

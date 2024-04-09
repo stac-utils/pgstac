@@ -139,11 +139,8 @@ BEGIN
 
     ret := jsonb_build_object(
         'collections', out_records,
-        'context', jsonb_build_object(
-            'limit', _limit,
-            'matched', number_matched,
-            'returned', number_returned
-        ),
+        'numberMatched', number_matched,
+        'numberReturned', number_returned,
         'links', links
     );
     RETURN ret;
