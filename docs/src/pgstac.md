@@ -46,7 +46,7 @@ kwargs={
 ```
 
 #### PgSTAC Settings Variables
-There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql-json2).
+There are additional variables that control the settings used for calculating and displaying context (total row count) for a search, as well as a variable to set the filter language (cql-json or cql2-json).
 The context is "off" by default, and the default filter language is set to "cql2-json".
 
 Variables can be set either by passing them in via the connection options using your connection library, setting them in the pgstac_settings table or by setting them on the Role that is used to log in to the database.
