@@ -46,7 +46,7 @@ SELECT has_function('pgstac'::name, 'collection_search', ARRAY['jsonb']);
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "context": {"limit": 1, "matched": 2, "returned": 1}, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
     $$,
     'Test search passing in collection ids'
 );
@@ -55,7 +55,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"desc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "context": {"limit": 1, "matched": 2, "returned": 1}, "collections": [{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-170, -90, -160, -80]]}, "temporal": {"interval": [["2000-01-15 00:00:00+00", "2000-03-15 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-170, -90, -160, -80]]}, "temporal": {"interval": [["2000-01-15 00:00:00+00", "2000-03-15 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
     $$,
     'Test search passing in collection ids with descending sort'
 );
@@ -65,7 +65,7 @@ SET pgstac.base_url='https://test.com/';
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "https://test.com/collections", "type": "application/json", "merge": true, "method": "GET"}], "context": {"limit": 1, "matched": 2, "returned": 1}, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "https://test.com/collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
     $$,
     'Test search passing in collection ids with base_url set'
 );
