@@ -569,6 +569,7 @@ CREATE OR REPLACE FUNCTION search_query(
 ) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
+    cached_search searches%ROWTYPE;
     pexplain jsonb;
     t timestamptz;
     i interval;
@@ -606,9 +607,9 @@ BEGIN
         IF NOT doupdate THEN
             INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
             VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
-            ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
+            ON CONFLICT (hash) DO NOTHING RETURNING * INTO cached_search;
             IF FOUND THEN
-                RETURN search;
+                RETURN cached_search;
             END IF;
         END IF;
 
