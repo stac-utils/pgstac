@@ -242,7 +242,9 @@ INSERT INTO cql2_ops (op, template, types) VALUES
     ('between', '%s BETWEEN %s AND %s', NULL),
     ('isnull', '%s IS NULL', NULL),
     ('upper', 'upper(%s)', NULL),
-    ('lower', 'lower(%s)', NULL)
+    ('lower', 'lower(%s)', NULL),
+    ('casei', 'upper(%s)', NULL),
+    ('accenti', 'unaccent(%s)', NULL)
 ON CONFLICT (op) DO UPDATE
     SET
         template = EXCLUDED.template
