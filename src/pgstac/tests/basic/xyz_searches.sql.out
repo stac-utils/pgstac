@@ -3,6 +3,9 @@ SET
 SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
  2bbae9a0ef0bbb5ffaca06603ce621d7
 
+SELECT hash, search, metadata FROM search_fromhash('2bbae9a0ef0bbb5ffaca06603ce621d7');
+ 2bbae9a0ef0bbb5ffaca06603ce621d7 | {"collections": ["pgstac-test-collection"]} | {}
+
 SELECT xyzsearch(8615, 13418, 15, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb);
  {"type": "FeatureCollection", "features": [{"id": "pgstac-test-item-0003", "collection": "pgstac-test-collection"}]}
 

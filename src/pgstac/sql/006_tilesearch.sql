@@ -46,9 +46,9 @@ BEGIN
         exitwhenfull := TRUE;
     END IF;
 
-    SELECT * INTO search FROM searches WHERE hash=queryhash;
+    search := search_fromhash(queryhash);
 
-    IF NOT FOUND THEN
+    IF search IS NULL THEN
         RAISE EXCEPTION 'Search with Query Hash % Not Found', queryhash;
     END IF;
 
