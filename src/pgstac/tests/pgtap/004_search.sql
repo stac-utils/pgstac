@@ -474,6 +474,46 @@ SELECT results_eq($$
     $$, 'Test lower'
 );
 
+SELECT results_eq($$
+    SELECT BTRIM(stac_search_to_where($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "eq",
+            "args": [
+            {"op": "casei", "args":[{ "property": "mission" }]},
+            {"op": "casei", "args":["sentinel"]}
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    upper(to_text(content->'properties'->'mission')) = upper(to_text('"sentinel"'))
+    $r$,E' \n');
+    $$, 'Test casei'
+);
+
+SELECT results_eq($$
+    SELECT BTRIM(stac_search_to_where($q$
+    {
+        "filter-lang": "cql2-json",
+        "filter": {
+            "op": "eq",
+            "args": [
+            {"op": "accenti", "args":[{ "property": "mission" }]},
+            {"op": "accenti", "args":["sentinel"]}
+            ]
+        }
+    }
+    $q$),E' \n');
+    $$, $$
+    SELECT BTRIM($r$
+    unaccent(to_text(content->'properties'->'mission')) = unaccent(to_text('"sentinel"'))
+    $r$,E' \n');
+    $$, 'Test accenti'
+);
+
 
 
 /* template

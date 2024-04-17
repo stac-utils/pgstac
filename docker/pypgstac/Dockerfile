@@ -21,7 +21,7 @@ FROM pyrustbase as pypgstac
 COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
 WORKDIR /tmp
 RUN \
-    toml-to-req --include-optional \
+    toml-to-req --optional-lists test,build,dev,psycopg,migrations \
     && pip install -r /tmp/requirements.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
