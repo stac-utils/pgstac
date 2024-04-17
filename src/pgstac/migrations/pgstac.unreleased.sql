@@ -3548,9 +3548,6 @@ BEGIN
     search.lastused := now();
     search.usecount := 1;
 
-    -- Calculate statistics for the where statement
-    PERFORM where_stats(search._where, updatestats, _search->'conf');
-
     -- If we are in read only mode, directly return search
     IF ro THEN
         RETURN search;
