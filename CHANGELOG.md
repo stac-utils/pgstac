@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
+### UNRELEASED
+
+- Updated docs on automated updates of collection extents. (CLOSES #247)
+
 ### Fixed
 - Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.
 - Adds fixes/updates to documentation
