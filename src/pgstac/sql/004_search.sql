@@ -443,7 +443,11 @@ CREATE TABLE IF NOT EXISTS search_wheres(
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
 CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((md5(_where)));
 
-CREATE OR REPLACE FUNCTION where_stats(inwhere text, updatestats boolean default false, conf jsonb default null) RETURNS search_wheres AS $$
+CREATE OR REPLACE FUNCTION where_stats(
+    inwhere text,
+    updatestats boolean default false,
+    conf jsonb default null
+) RETURNS search_wheres AS $$
 DECLARE
     t timestamptz;
     i interval;
@@ -453,110 +457,153 @@ DECLARE
     inwhere_hash text := md5(inwhere);
     _context text := lower(context(conf));
     _stats_ttl interval := context_stats_ttl(conf);
-    _estimated_cost float := context_estimated_cost(conf);
-    _estimated_count int := context_estimated_count(conf);
+    _estimated_cost_threshold float := context_estimated_cost(conf);
+    _estimated_count_threshold int := context_estimated_count(conf);
     ro bool := pgstac.readonly(conf);
 BEGIN
-    IF ro THEN
-        updatestats := FALSE;
+    -- If updatestats is true then set ttl to 0
+    IF updatestats THEN
+        RAISE DEBUG 'Updatestats set to TRUE, setting TTL to 0';
+        _stats_ttl := '0'::interval;
     END IF;
 
+    -- If we don't need to calculate context, just return
     IF _context = 'off' THEN
-        sw._where := inwhere;
-        return sw;
-    END IF;
-
-    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
-
-    -- Update statistics if explicitly set, if statistics do not exist, or statistics ttl has expired
-    IF NOT updatestats THEN
-        RAISE NOTICE 'Checking if update is needed for: % .', inwhere;
-        RAISE NOTICE 'Stats Last Updated: %', sw.statslastupdated;
-        RAISE NOTICE 'TTL: %, Age: %', _stats_ttl, now() - sw.statslastupdated;
-        RAISE NOTICE 'Context: %, Existing Total: %', _context, sw.total_count;
-        IF
-            (
-                sw.statslastupdated IS NULL
-                OR (now() - sw.statslastupdated) > _stats_ttl
-                OR (context(conf) != 'off' AND sw.total_count IS NULL)
-            ) AND NOT ro
-        THEN
-            updatestats := TRUE;
-        END IF;
-    END IF;
-
-    sw._where := inwhere;
-    sw.lastused := now();
-    sw.usecount := coalesce(sw.usecount,0) + 1;
-
-    IF NOT updatestats THEN
-        UPDATE search_wheres SET
-            lastused = sw.lastused,
-            usecount = sw.usecount
-        WHERE md5(_where) = inwhere_hash
-        RETURNING * INTO sw
-        ;
+        sw._where = inwhere;
         RETURN sw;
     END IF;
 
-    -- Use explain to get estimated count/cost and a list of the partitions that would be hit by the query
-    t := clock_timestamp();
-    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
-    INTO explain_json;
-    RAISE NOTICE 'Time for just the explain: %', clock_timestamp() - t;
-    i := clock_timestamp() - t;
+    -- Get any stats that we have. If there is a lock where another process is
+    -- updating the stats, wait so that we don't end up calculating a bunch of times.
+    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
 
-    sw.statslastupdated := now();
-    sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
-    sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
-    sw.time_to_estimate := extract(epoch from i);
-
-    RAISE NOTICE 'ESTIMATED_COUNT: % < %', sw.estimated_count, _estimated_count;
-    RAISE NOTICE 'ESTIMATED_COST: % < %', sw.estimated_cost, _estimated_cost;
-
-    -- Do a full count of rows if context is set to on or if auto is set and estimates are low enough
+    -- If there is a cached row, figure out if we need to update
     IF
-        _context = 'on'
-        OR
-        ( _context = 'auto' AND
-            (
-                sw.estimated_count < _estimated_count
-                AND
-                sw.estimated_cost < _estimated_cost
-            )
-        )
+        sw IS NOT NULL
+        AND sw.statslastupdated IS NOT NULL
+        AND sw.total_count IS NOT NULL
+        AND now() - sw.statslastupdated <= _stats_ttl
     THEN
-        t := clock_timestamp();
-        RAISE NOTICE 'Calculating actual count...';
-        EXECUTE format(
-            'SELECT count(*) FROM items WHERE %s',
-            inwhere
-        ) INTO sw.total_count;
-        i := clock_timestamp() - t;
-        RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
-        sw.time_to_count := extract(epoch FROM i);
-    ELSE
-        sw.total_count := NULL;
-        sw.time_to_count := NULL;
+        -- we have a cached row with data that is within our ttl
+        RAISE DEBUG 'Stats present in table and lastupdated within ttl: %', sw;
+        IF NOT ro THEN
+            RAISE DEBUG 'Updating search_wheres only bumping lastused and usecount';
+            UPDATE search_wheres SET
+                lastused = now(),
+                usecount = search_wheres.usecount + 1
+            WHERE md5(_where) = inwhere_hash
+            RETURNING * INTO sw;
+        END IF;
+        RAISE DEBUG 'Returning cached counts. %', sw;
+        RETURN sw;
     END IF;
+
+    -- Calculate estimated cost and rows
+    -- Use explain to get estimated count/cost
+    IF sw.estimated_count IS NULL OR sw.estimated_cost IS NULL THEN
+        RAISE DEBUG 'Calculating estimated stats';
+        t := clock_timestamp();
+        EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+            INTO explain_json;
+        RAISE DEBUG 'Time for just the explain: %', clock_timestamp() - t;
+        i := clock_timestamp() - t;
+
+        sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
+        sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
+        sw.time_to_estimate := extract(epoch from i);
+    END IF;
+
+    RAISE DEBUG 'ESTIMATED_COUNT: %, THRESHOLD %', sw.estimated_count, _estimated_count_threshold;
+    RAISE DEBUG 'ESTIMATED_COST: %, THRESHOLD %', sw.estimated_cost, _estimated_cost_threshold;
+
+    -- If context is set to auto and the costs are within the threshold return the estimated costs
+    IF
+        _context = 'auto'
+        AND sw.estimated_count >= _estimated_count_threshold
+        AND sw.estimated_cost >= _estimated_cost_threshold
+    THEN
+        IF NOT ro THEN
+            INSERT INTO search_wheres (
+                _where,
+                lastused,
+                usecount,
+                statslastupdated,
+                estimated_count,
+                estimated_cost,
+                time_to_estimate,
+                total_count,
+                time_to_count
+            ) VALUES (
+                inwhere,
+                now(),
+                1,
+                now(),
+                sw.estimated_count,
+                sw.estimated_cost,
+                sw.time_to_estimate,
+                null,
+                null
+            ) ON CONFLICT ((md5(_where)))
+            DO UPDATE SET
+                lastused = EXCLUDED.lastused,
+                usecount = search_wheres.usecount + 1,
+                statslastupdated = EXCLUDED.statslastupdated,
+                estimated_count = EXCLUDED.estimated_count,
+                estimated_cost = EXCLUDED.estimated_cost,
+                time_to_estimate = EXCLUDED.time_to_estimate,
+                total_count = EXCLUDED.total_count,
+                time_to_count = EXCLUDED.time_to_count
+            RETURNING * INTO sw;
+        END IF;
+        RAISE DEBUG 'Estimates are within thresholds, returning estimates. %', sw;
+        RETURN sw;
+    END IF;
+
+    -- Calculate Actual Count
+    t := clock_timestamp();
+    RAISE NOTICE 'Calculating actual count...';
+    EXECUTE format(
+        'SELECT count(*) FROM items WHERE %s',
+        inwhere
+    ) INTO sw.total_count;
+    i := clock_timestamp() - t;
+    RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
+    sw.time_to_count := extract(epoch FROM i);
 
     IF NOT ro THEN
-        INSERT INTO search_wheres
-            (_where, lastused, usecount, statslastupdated, estimated_count, estimated_cost, time_to_estimate, partitions, total_count, time_to_count)
-        SELECT sw._where, sw.lastused, sw.usecount, sw.statslastupdated, sw.estimated_count, sw.estimated_cost, sw.time_to_estimate, sw.partitions, sw.total_count, sw.time_to_count
-        ON CONFLICT ((md5(_where)))
-        DO UPDATE
-            SET
-                lastused = sw.lastused,
-                usecount = sw.usecount,
-                statslastupdated = sw.statslastupdated,
-                estimated_count = sw.estimated_count,
-                estimated_cost = sw.estimated_cost,
-                time_to_estimate = sw.time_to_estimate,
-                total_count = sw.total_count,
-                time_to_count = sw.time_to_count
-        ;
+        INSERT INTO search_wheres (
+            _where,
+            lastused,
+            usecount,
+            statslastupdated,
+            estimated_count,
+            estimated_cost,
+            time_to_estimate,
+            total_count,
+            time_to_count
+        ) VALUES (
+            inwhere,
+            now(),
+            1,
+            now(),
+            sw.estimated_count,
+            sw.estimated_cost,
+            sw.time_to_estimate,
+            sw.total_count,
+            sw.time_to_count
+        ) ON CONFLICT ((md5(_where)))
+        DO UPDATE SET
+            lastused = EXCLUDED.lastused,
+            usecount = search_wheres.usecount + 1,
+            statslastupdated = EXCLUDED.statslastupdated,
+            estimated_count = EXCLUDED.estimated_count,
+            estimated_cost = EXCLUDED.estimated_cost,
+            time_to_estimate = EXCLUDED.time_to_estimate,
+            total_count = EXCLUDED.total_count,
+            time_to_count = EXCLUDED.time_to_count
+        RETURNING * INTO sw;
     END IF;
+    RAISE DEBUG 'Returning with actual count. %', sw;
     RETURN sw;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -569,67 +616,65 @@ CREATE OR REPLACE FUNCTION search_query(
 ) RETURNS searches AS $$
 DECLARE
     search searches%ROWTYPE;
+    cached_search searches%ROWTYPE;
     pexplain jsonb;
     t timestamptz;
     i interval;
-    _hash text := search_hash(_search, _metadata);
     doupdate boolean := FALSE;
     insertfound boolean := FALSE;
     ro boolean := pgstac.readonly();
+    found_search text;
 BEGIN
+    RAISE NOTICE 'SEARCH: %', _search;
+    -- Calculate hash, where clause, and order by statement
+    search.search := _search;
+    search.metadata := _metadata;
+    search.hash := search_hash(_search, _metadata);
+    search._where := stac_search_to_where(_search);
+    search.orderby := sort_sqlorderby(_search);
+    search.lastused := now();
+    search.usecount := 1;
+
+    -- If we are in read only mode, directly return search
     IF ro THEN
-        updatestats := FALSE;
+        RETURN search;
     END IF;
 
-    SELECT * INTO search FROM searches
-    WHERE hash=_hash;
+    RAISE NOTICE 'Updating Statistics for search: %s', search;
+    -- Update statistics for times used and and when last used
+    -- If the entry is locked, rather than waiting, skip updating the stats
+    INSERT INTO searches (search, lastused, usecount, metadata)
+        VALUES (search.search, now(), 1, search.metadata)
+        ON CONFLICT DO NOTHING
+        RETURNING * INTO cached_search
+    ;
 
-    search.hash := _hash;
-
-    -- Calculate the where clause if not already calculated
-    IF search._where IS NULL THEN
-        search._where := stac_search_to_where(_search);
-    ELSE
-        doupdate := TRUE;
+    IF NOT FOUND OR cached_search IS NULL THEN
+        UPDATE searches SET
+            lastused = now(),
+            usecount = searches.usecount + 1
+        WHERE hash = (
+            SELECT hash FROM searches WHERE hash=search.hash FOR UPDATE SKIP LOCKED
+        )
+        RETURNING * INTO cached_search
+        ;
     END IF;
 
-    -- Calculate the order by clause if not already calculated
-    IF search.orderby IS NULL THEN
-        search.orderby := sort_sqlorderby(_search);
-    ELSE
-        doupdate := TRUE;
+    IF cached_search IS NOT NULL THEN
+        cached_search._where = search._where;
+        cached_search.orderby = search.orderby;
+        RETURN cached_search;
     END IF;
-
-    PERFORM where_stats(search._where, updatestats, _search->'conf');
-
-    IF NOT ro THEN
-        IF NOT doupdate THEN
-            INSERT INTO searches (search, _where, orderby, lastused, usecount, metadata)
-            VALUES (_search, search._where, search.orderby, clock_timestamp(), 1, _metadata)
-            ON CONFLICT (hash) DO NOTHING RETURNING * INTO search;
-            IF FOUND THEN
-                RETURN search;
-            END IF;
-        END IF;
-
-        UPDATE searches
-            SET
-                lastused=clock_timestamp(),
-                usecount=usecount+1
-        WHERE hash=(
-            SELECT hash FROM searches
-            WHERE hash=_hash
-            FOR UPDATE SKIP LOCKED
-        );
-        IF NOT FOUND THEN
-            RAISE NOTICE 'Did not update stats for % due to lock. (This is generally OK)', _search;
-        END IF;
-    END IF;
-
     RETURN search;
 
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION search_fromhash(
+    _hash text
+) RETURNS searches AS $$
+    SELECT * FROM search_query((SELECT search FROM searches WHERE hash=_hash LIMIT 1));
+$$ LANGUAGE SQL STRICT;
 
 CREATE OR REPLACE FUNCTION search_rows(
     IN _where text DEFAULT 'TRUE',
@@ -672,7 +717,7 @@ IF _orderby ILIKE 'datetime d%' THEN
             _orderby,
             records_left
         );
-        RAISE LOG 'QUERY: %', query;
+        RAISE DEBUG 'QUERY: %', query;
         timer := clock_timestamp();
         RETURN QUERY EXECUTE query;
 
@@ -696,7 +741,7 @@ ELSIF _orderby ILIKE 'datetime a%' THEN
             _orderby,
             records_left
         );
-        RAISE LOG 'QUERY: %', query;
+        RAISE DEBUG 'QUERY: %', query;
         timer := clock_timestamp();
         RETURN QUERY EXECUTE query;
 
@@ -717,7 +762,7 @@ ELSE
         LIMIT %L
     $q$, _where, _orderby, _limit
     );
-    RAISE LOG 'QUERY: %', query;
+    RAISE DEBUG 'QUERY: %', query;
     timer := clock_timestamp();
     RETURN QUERY EXECUTE query;
     RAISE NOTICE 'FULL QUERY TOOK %ms', age_ms(timer);
@@ -812,18 +857,18 @@ BEGIN
         token_prev := token.prev;
         token_item := token.item;
         token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE);
-        RAISE LOG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
+        RAISE DEBUG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
         IF token_prev THEN -- if we are using a prev token, we know has_next is true
-            RAISE LOG 'There is a previous token, so automatically setting has_next to true';
+            RAISE DEBUG 'There is a previous token, so automatically setting has_next to true';
             has_next := TRUE;
             orderby := sort_sqlorderby(_search, TRUE);
         ELSE
-            RAISE LOG 'There is a next token, so automatically setting has_prev to true';
+            RAISE DEBUG 'There is a next token, so automatically setting has_prev to true';
             has_prev := TRUE;
 
         END IF;
     ELSE -- if there was no token, we know there is no prev
-        RAISE LOG 'There is no token, so we know there is no prev. setting has_prev to false';
+        RAISE DEBUG 'There is no token, so we know there is no prev. setting has_prev to false';
         has_prev := FALSE;
     END IF;
 
@@ -857,9 +902,9 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'Query returned % records.', jsonb_array_length(out_records);
-    RAISE LOG 'TOKEN:   % %', token_item.id, token_item.collection;
-    RAISE LOG 'RECORD_1: % %', out_records->0->>'id', out_records->0->>'collection';
-    RAISE LOG 'RECORD-1: % %', out_records->-1->>'id', out_records->-1->>'collection';
+    RAISE DEBUG 'TOKEN:   % %', token_item.id, token_item.collection;
+    RAISE DEBUG 'RECORD_1: % %', out_records->0->>'id', out_records->0->>'collection';
+    RAISE DEBUG 'RECORD-1: % %', out_records->-1->>'id', out_records->-1->>'collection';
 
     -- REMOVE records that were from our token
     IF out_records->0->>'id' = token_item.id AND out_records->0->>'collection' = token_item.collection THEN

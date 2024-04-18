@@ -2,6 +2,8 @@ SET pgstac."default_filter_lang" TO 'cql-json';
 
 SELECT hash from search_query('{"collections":["pgstac-test-collection"]}');
 
+SELECT hash, search, metadata FROM search_fromhash('2bbae9a0ef0bbb5ffaca06603ce621d7');
+
 SELECT xyzsearch(8615, 13418, 15, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb);
 
 SELECT xyzsearch(1048, 1682, 12, '2bbae9a0ef0bbb5ffaca06603ce621d7', '{"include":["id"]}'::jsonb);

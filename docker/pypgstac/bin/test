@@ -198,7 +198,7 @@ while [[ $# -gt 0 ]]
             ;;
 
             --vv)
-            MESSAGELOG=1
+            MESSAGEDEBUG=1
             shift
             ;;
 
@@ -255,8 +255,8 @@ while [[ $# -gt 0 ]]
 
 
 CLIENTMESSAGES='warning'
-[ $MESSAGENOTICE -eq 1 ] && CLIENTMESSAGES='notice'
-[ $MESSAGELOG -eq 1 ] && CLIENTMESSAGES='log'
+[[ $MESSAGENOTICE -eq 1 ]] && CLIENTMESSAGES='notice'
+[[ $MESSAGEDEBUG -eq 1 ]] && CLIENTMESSAGES='debug1'
 echo $CLIENTMESSAGES
 
 if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) ]]
