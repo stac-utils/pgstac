@@ -84,3 +84,9 @@ To upsert any records, adding anything new and replacing anything with the same 
 ```
 pypgstac load items --method upsert
 ```
+
+### Automated Collection Extent Updates
+
+By setting `pgstac.update_collection_extent` to `true`, a trigger is enabled to automatically adjust the spatial and temporal extents in collections when new items are ingested. This feature, while helpful, may increase overhead within data load transactions. To alleviate performance impact, combining this setting with `pgstac.use_queue` is beneficial. This approach necessitates a separate process, such as a scheduled task via the `pg_cron` extension, to periodically invoke `CALL run_queued_queries();`. Such asynchronous processing ensures efficient transactional performance and updated collection extents.
+
+*Note: The `pg_cron` extension must be properly installed and configured to manage the scheduling of the `run_queued_queries()` function.*
