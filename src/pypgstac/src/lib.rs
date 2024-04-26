@@ -38,12 +38,16 @@ fn hydrate_any<'a>(base: &PyAny, item: &'a PyAny) -> PyResult<&'a PyAny> {
     if let Ok(item) = item.downcast::<PyDict>() {
         if let Ok(base) = base.downcast::<PyDict>() {
             hydrate_dict(base, item).map(|item| item.into())
+        } else if base.is_none() {
+            Ok(item)
         } else {
             Err(anyhow!("type mismatch").into())
         }
     } else if let Ok(item) = item.downcast::<PyList>() {
         if let Ok(base) = base.downcast::<PyList>() {
             hydrate_list(base, item).map(|item| item.into())
+        } else if base.is_none() {
+            Ok(item)
         } else {
             Err(anyhow!("type mismatch").into())
         }
@@ -73,7 +77,7 @@ fn hydrate_dict<'a>(base: &PyDict, item: &'a PyDict) -> PyResult<&'a PyDict> {
                 .map(|s| s == MAGIC_MARKER)
                 .unwrap_or(false)
             {
-                item.del_item(&key)?;
+                item.del_item(key)?;
             } else {
                 item.set_item(key, hydrate(base_value, item_value)?)?;
             }
