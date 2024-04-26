@@ -11,4 +11,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1"
-pyo3 = { version = "0.19.1", features = ["abi3-py38", "extension-module", "anyhow"] }
+pyo3 = { version = "0.20", features = [
+    "abi3-py38",
+    "extension-module",
+    "anyhow",
+] }

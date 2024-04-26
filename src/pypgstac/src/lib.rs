@@ -65,7 +65,7 @@ fn hydrate_list<'a>(base: &PyList, item: &'a PyList) -> PyResult<&'a PyList> {
 
 fn hydrate_dict<'a>(base: &PyDict, item: &'a PyDict) -> PyResult<&'a PyDict> {
     for (key, base_value) in base {
-        if let Some(item_value) = item.get_item(key) {
+        if let Some(item_value) = item.get_item(key)? {
             if item_value
                 .downcast::<PyString>()
                 .ok()
@@ -73,7 +73,7 @@ fn hydrate_dict<'a>(base: &PyDict, item: &'a PyDict) -> PyResult<&'a PyDict> {
                 .map(|s| s == MAGIC_MARKER)
                 .unwrap_or(false)
             {
-                item.del_item(&key)?;
+                item.del_item(key)?;
             } else {
                 item.set_item(key, hydrate(base_value, item_value)?)?;
             }
