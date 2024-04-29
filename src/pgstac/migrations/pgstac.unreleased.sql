@@ -3871,7 +3871,7 @@ BEGIN
         prev := concat(out_records->0->>'collection', ':', out_records->0->>'id');
         RAISE NOTICE 'HAS PREV | %', prev;
         links := links || jsonb_build_object(
-            'rel', 'next',
+            'rel', 'prev',
             'type', 'application/geo+json',
             'method', 'GET',
             'href', concat(base_url, '/search?token=prev:', prev)

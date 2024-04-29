@@ -530,6 +530,18 @@ CREATE OR REPLACE FUNCTION pg_temp.isnull(j jsonb) RETURNS boolean AS $$
     SELECT nullif(j, 'null'::jsonb) IS NULL;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION pg_temp.isnull(t text) RETURNS boolean AS $$
+    SELECT t IS NULL;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pg_temp.prev(j jsonb) RETURNS text AS $$
+    SELECT split_part(jsonb_path_query_first(j, '$.links[*] ? (@.rel == "prev") .href')->>0, 'token=', 2);
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION pg_temp.next(j jsonb) RETURNS text AS $$
+    SELECT split_part(jsonb_path_query_first(j, '$.links[*] ? (@.rel == "next") .href')->>0, 'token=', 2);
+$$ LANGUAGE SQL IMMUTABLE STRICT;
+
 CREATE OR REPLACE FUNCTION pg_temp.testpaging(testsortdir text, iddir text) RETURNS SETOF TEXT LANGUAGE plpgsql AS $$
 DECLARE
     searchfilter jsonb;
@@ -577,7 +589,7 @@ BEGIN
 
     searchresult := search(searchfilter);
 
-    RETURN NEXT ok(pg_temp.isnull(searchresult->'prev'), 'first prev is null');
+    RETURN NEXT ok(pg_temp.isnull(pg_temp.prev(searchresult)), 'first prev is null');
 
     -- page up
     WHILE page <= 100 LOOP
@@ -617,18 +629,18 @@ BEGIN
             format('Going up %s/%s page:%s results match using offset', testsortdir, iddir, page)
         );
 
-        IF pg_temp.isnull(searchresult->'next') THEN
+        IF pg_temp.isnull(pg_temp.next(searchresult)) THEN
             EXIT;
         END IF;
-        searchfilter := searchfilter || jsonb_build_object('token', concat('next:',searchresult->>'next'));
+        searchfilter := searchfilter || jsonb_build_object('token', pg_temp.next(searchresult));
         RAISE NOTICE 'SEARCHFILTER: %', searchfilter;
         searchresult := search(searchfilter);
         RAISE NOTICE 'SEARCHRESULT: %', searchresult;
-        RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
+        RAISE NOTICE 'PAGE:% TOKEN:% LINKS:%', page, searchfilter->>'token', searchresult->'links';
         page := page + 10;
     END LOOP;
 
-    RETURN NEXT ok(pg_temp.isnull(searchresult->'next'), 'last next is null');
+    RETURN NEXT ok(pg_temp.isnull(pg_temp.next(searchresult)), 'last next is null');
     RETURN NEXT ok(page=90, 'last page going up is 90');
     -- page down
     WHILE page >= 0 LOOP
@@ -636,11 +648,11 @@ BEGIN
             EXIT;
         END IF;
         page := page - 10;
-        searchfilter := searchfilter || jsonb_build_object('token', concat('prev:',searchresult->>'prev'));
+        searchfilter := searchfilter || jsonb_build_object('token', pg_temp.prev(searchresult));
         RAISE NOTICE 'SEARCHFILTER: %', searchfilter;
         searchresult := search(searchfilter);
         RAISE NOTICE 'SEARCHRESULT: %', searchresult;
-        RAISE NOTICE 'PAGE:% TOKEN:% PREV:% NEXT:%', page, searchfilter->>'token', searchresult->>'prev', searchresult->>'next';
+        RAISE NOTICE 'PAGE:% TOKEN:% LINKS:%', page, searchfilter->>'token', searchresult->>'links';
         EXECUTE format($q$
                 WITH t AS (
                 SELECT id
@@ -677,11 +689,11 @@ BEGIN
             format('Going down %s/%s page:%s results match using offset', testsortdir, iddir, page)
         );
 
-        IF pg_temp.isnull(searchresult->'prev') THEN
+        IF pg_temp.isnull(pg_temp.prev(searchresult)) THEN
             EXIT;
         END IF;
     END LOOP;
-    RETURN NEXT ok(pg_temp.isnull(searchresult->'prev'), 'last prev is null');
+    RETURN NEXT ok(pg_temp.isnull(pg_temp.prev(searchresult)), 'last prev is null');
     RETURN NEXT ok(page=0, 'last page going down is 0');
 END;
 $$;
