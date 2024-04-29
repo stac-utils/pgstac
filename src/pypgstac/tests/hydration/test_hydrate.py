@@ -1,4 +1,5 @@
 """Test Hydration."""
+
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -35,7 +36,9 @@ LANDSAT_ITEM = (
 
 class TestHydrate:
     def hydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
         hpy = hydration.hydrate_py(deepcopy(base_item), deepcopy(item))
         hrs = hydration.hydrate(deepcopy(base_item), deepcopy(item))
@@ -234,3 +237,9 @@ class TestHydrate:
         hydrated = self.hydrate(base_item, dehydrated)
 
         assert hydrated == {"included": "value", "unique": "value"}
+
+    def test_base_none(self) -> None:
+        base_item = {"value": None}
+        dehydrated = {"value": {"a": "b"}}
+        hydrated = self.hydrate(base_item, dehydrated)
+        assert hydrated == {"value": {"a": "b"}}
