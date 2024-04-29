@@ -44,18 +44,17 @@ fn hydrate_any<'py>(
 ) -> PyResult<&'py Bound<'py, PyAny>> {
     if let Ok(item) = item.downcast::<PyDict>() {
         if let Ok(base) = base.downcast::<PyDict>() {
-            let result = hydrate_dict(base, item);
-            Ok(result?.as_any())
-            // todo!()
-            //  .map(|item| item.into())
+            Ok(hydrate_dict(base, item)?.as_any())
+        } else if base.is_none() {
+            Ok(item)
         } else {
             Err(anyhow!("type mismatch").into())
         }
     } else if let Ok(item) = item.downcast::<PyList>() {
         if let Ok(base) = base.downcast::<PyList>() {
-            let result = hydrate_list(base, item)?;
-            Ok(result.as_any())
-            // .map(|item| item.into())
+            Ok(hydrate_list(base, item)?.as_any())
+        } else if base.is_none() {
+            Ok(item)
         } else {
             Err(anyhow!("type mismatch").into())
         }
