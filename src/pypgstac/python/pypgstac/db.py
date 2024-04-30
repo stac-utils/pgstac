@@ -16,10 +16,15 @@ try:
 except ImportError:
     from pydantic import BaseSettings  # type:ignore
 
+import psycopg_infdate
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
+from version_parser import Version as V
+
+from .version import __version__ as pypgstac_version
+
+psycopg_infdate.register_inf_date_handler(psycopg)
 
 logger = logging.getLogger(__name__)
-
 
 def dumps(data: dict) -> str:
     """Dump dictionary as string."""
@@ -78,6 +83,25 @@ class PgstacDB:
         self.use_queue = use_queue
         if self.debug:
             logging.basicConfig(level=logging.DEBUG)
+
+    def check_version(self) -> None:
+        db_version = self.version
+        if db_version is None:
+            raise Exception("Failed to detect the target database version.")
+
+        if db_version != "unreleased":
+            v1 = V(db_version)
+            v2 = V(pypgstac_version)
+            if (v1.get_major_version(), v1.get_minor_version()) != (
+                v2.get_major_version(),
+                v2.get_minor_version(),
+            ):
+                raise Exception(
+                    f"pypgstac version {pypgstac_version}"
+                    " is not compatible with the target"
+                    f" database version {self.version}."
+                    f" database version {db_version}.",
+                )
 
     def get_pool(self) -> ConnectionPool:
         """Get Database Pool."""

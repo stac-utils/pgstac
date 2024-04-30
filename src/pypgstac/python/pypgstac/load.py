@@ -38,7 +38,7 @@ from version_parser import Version as V
 
 from .db import PgstacDB
 from .hydration import dehydrate
-from .version import __version__
+from .reader import Reader
 
 logger = logging.getLogger(__name__)
 
@@ -149,29 +149,85 @@ class Loader:
 
     db: PgstacDB
     _partition_cache: Dict[str, Partition]
+    _reader: Reader
 
     def __init__(self, db: PgstacDB):
         self.db = db
         self._partition_cache: Dict[str, Partition] = {}
 
-    def check_version(self) -> None:
-        db_version = self.db.version
-        if db_version is None:
-            raise Exception("Failed to detect the target database version.")
+    def get_reader(self, file = None):
+        if file is None and self._reader is None:
+            raise Exception('No file set')
+        elif file is not None:
+            self._reader = Reader(file)
+        assert(self._reader)
+        return self._reader
 
-        if db_version != "unreleased":
-            v1 = V(db_version)
-            v2 = V(__version__)
-            if (v1.get_major_version(), v1.get_minor_version()) != (
-                v2.get_major_version(),
-                v2.get_minor_version(),
-            ):
-                raise Exception(
-                    f"pypgstac version {__version__}"
-                    " is not compatible with the target"
-                    f" database version {self.db.version}."
-                    f" database version {db_version}.",
+    def check_partitions(self):
+        reader = self.get_reader()
+        stats = orjson.dumps(reader.stats.to_pylist()).decode()
+        query = """
+            WITH objs AS (
+                SELECT
+                    value
+                FROM jsonb_array_elements(%s::jsonb)
+            ), tocheck AS (
+                SELECT
+                    x.*
+                FROM objs, jsonb_to_record(
+                    value
+                ) AS x(
+                    collection text,
+                    start_month timestamptz,
+                    start_min timestamptz,
+                    start_max timestamptz,
+                    end_min timestamptz,
+                    end_max timestamptz,
+                    count_all int
                 )
+            ), agged AS (
+                SELECT
+                    partition,
+                    tocheck.collection,
+                    partition_dtrange,
+                    constraint_dtrange,
+                    constraint_edtrange,
+                    tstzrange(
+                        min(start_min),
+                        max(start_max),
+                        '[]') as in_dtrange,
+                    tstzrange(
+                        min(end_min),
+                        max(end_max),
+                        '[]') as in_edtrange,
+                    sum(count_all) as count
+                FROM tocheck LEFT JOIN partitions_view pv ON (
+                    tocheck.collection=pv.collection AND
+                    start_month <@ partition_dtrange
+                    )
+                GROUP BY 1,2,3,4,5
+            )
+            SELECT
+                partition,
+                collection,
+                partition_dtrange::text,
+                constraint_dtrange::text,
+                constraint_edtrange::text,
+                in_dtrange::text,
+                in_edtrange::text,
+                in_dtrange <@ partition_dtrange as partition_good,
+                in_dtrange <@ constraint_dtrange as constraint_dtrange_good,
+                in_edtrange <@ constraint_edtrange as constraint_edtrange_good
+            FROM agged
+        """
+        res = self.db.query(query, (stats,))
+        for r in res:
+            print(r)
+
+
+
+
+
 
     @lru_cache(maxsize=128)
     def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
@@ -197,7 +253,7 @@ class Loader:
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
-        self.check_version()
+        self.db.check_version()
 
         if file is None:
             file = "stdin"

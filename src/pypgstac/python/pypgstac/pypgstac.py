@@ -10,6 +10,7 @@ from smart_open import open
 from pypgstac.db import PgstacDB
 from pypgstac.load import Loader, Methods, Tables
 from pypgstac.migrate import Migrate
+from pypgstac.reader import Reader
 
 
 class PgstacCLI:
@@ -59,6 +60,10 @@ class PgstacCLI:
         """Migrate PgSTAC Database."""
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)
+
+    def check(self, file: str):
+        reader = Reader(file)
+        return reader.stats
 
     def load(
         self,
