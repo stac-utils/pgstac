@@ -817,6 +817,60 @@ END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
+CREATE OR REPLACE FUNCTION search_items(_search jsonb = '{}'::jsonb) RETURNS SETOF items AS $$
+DECLARE
+    searches searches%ROWTYPE;
+    _where text;
+    orderby text;
+    token record;
+    token_prev boolean;
+    token_item items%ROWTYPE;
+    token_where text;
+    full_where text;
+    _limit int := coalesce((_search->>'limit')::int, 10);
+    _querylimit int;
+    has_prev boolean := FALSE;
+    has_next boolean := FALSE;
+BEGIN
+    searches := search_query(_search);
+    _where := searches._where;
+    orderby := searches.orderby;
+    RAISE NOTICE 'SEARCH:TOKEN: %', _search->>'token';
+    token := get_token_record(_search->>'token');
+    RAISE NOTICE '***TOKEN: %', token;
+    _querylimit := _limit + 1;
+    IF token IS NOT NULL THEN
+        token_prev := token.prev;
+        token_item := token.item;
+        token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE);
+        RAISE DEBUG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
+        IF token_prev THEN -- if we are using a prev token, we know has_next is true
+            RAISE DEBUG 'There is a previous token, so automatically setting has_next to true';
+            has_next := TRUE;
+            orderby := sort_sqlorderby(_search, TRUE);
+        ELSE
+            RAISE DEBUG 'There is a next token, so automatically setting has_prev to true';
+            has_prev := TRUE;
+
+        END IF;
+    ELSE -- if there was no token, we know there is no prev
+        RAISE DEBUG 'There is no token, so we know there is no prev. setting has_prev to false';
+        has_prev := FALSE;
+    END IF;
+
+    full_where := concat_ws(' AND ', _where, token_where);
+
+    RETURN QUERY
+    SELECT *
+    FROM search_rows(
+        full_where,
+        orderby,
+        NULL,
+        _querylimit
+    ) as i;
+END;
+$$ LANGUAGE PLPGSQL;
+
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
     searches searches%ROWTYPE;

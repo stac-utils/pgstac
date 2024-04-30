@@ -32,13 +32,12 @@ except ImportError:
 import psycopg_infdate
 import pyarrow as pa
 import shapely
+from stac_geoparquet.to_arrow import _process_arrow_table as cleanarrow
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 from version_parser import Version as V
 
 from .hydration import hydrate
 from .version import __version__ as pypgstac_version
-import stac_geoparquet
-from stac_geoparquet.to_arrow import _process_arrow_table as cleanarrow
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +59,7 @@ def pg_notice_handler(notice: psycopg.errors.Diagnostic) -> None:
 
 
 def _chunks(
-    lst: Sequence[Dict[str, Any]], n: int
+    lst: Sequence[Dict[str, Any]], n: int,
 ) -> Generator[Sequence[Dict[str, Any]], None, None]:
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
@@ -351,11 +350,6 @@ class PgstacDB:
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
-    def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
-        """Search PgSTAC."""
-
-        return dumps(next(self.func("search", query))[0])
-
     @cachedmethod(lambda self: self.cache)
     def collection_baseitem(self, collection_id: str) -> dict:
         """Get collection."""
@@ -401,11 +395,27 @@ class PgstacDB:
                 content = func(content)
         return content
 
-    def get_table(self):
-        results = self.query("""
-            SELECT id, collection, st_asbinary(geometry), datetime::text, end_datetime::text, content FROM items LIMIT 10
-        """)
+    def get_table(self, results):
         pylist = [self.pgstac_row_reader(*r) for r in results]
         table = pa.Table.from_pylist(pylist)
         table = cleanarrow(table)
+
         return table
+
+    def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
+        """Search PgSTAC."""
+
+        results = self.query(
+            """
+            SELECT
+                id,
+                collection,
+                st_asbinary(geometry),
+                datetime::text,
+                end_datetime::text,
+                content
+            FROM search_items(%s);
+        """,
+            (query,),
+        )
+        return self.get_table(results)
