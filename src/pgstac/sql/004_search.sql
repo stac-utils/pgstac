@@ -843,6 +843,8 @@ DECLARE
     _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
     has_prev boolean := FALSE;
     has_next boolean := FALSE;
+    links jsonb := '[]'::jsonb;
+    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'));
 BEGIN
     searches := search_query(_search);
     _where := searches._where;
@@ -925,25 +927,50 @@ BEGIN
         END IF;
     END IF;
 
+
+    links := links || jsonb_build_object(
+        'rel', 'root',
+        'type', 'application/json',
+        'href', base_url
+    ) || jsonb_build_object(
+        'rel', 'self',
+        'type', 'application/json',
+        'href', concat(base_url, '/search')
+    );
+
     IF has_next THEN
         next := concat(out_records->-1->>'collection', ':', out_records->-1->>'id');
         RAISE NOTICE 'HAS NEXT | %', next;
+        links := links || jsonb_build_object(
+            'rel', 'next',
+            'type', 'application/geo+json',
+            'method', 'GET',
+            'href', concat(base_url, '/search?token=next:', next)
+        );
     END IF;
 
     IF has_prev THEN
         prev := concat(out_records->0->>'collection', ':', out_records->0->>'id');
         RAISE NOTICE 'HAS PREV | %', prev;
+        links := links || jsonb_build_object(
+            'rel', 'prev',
+            'type', 'application/geo+json',
+            'method', 'GET',
+            'href', concat(base_url, '/search?token=prev:', prev)
+        );
     END IF;
 
     RAISE NOTICE 'Time to get prev/next %', age_ms(timer);
     timer := clock_timestamp();
 
+
     collection := jsonb_build_object(
         'type', 'FeatureCollection',
         'features', coalesce(out_records, '[]'::jsonb),
-        'next', next,
-        'prev', prev
+        'links', links
     );
+
+
 
     IF context(_search->'conf') != 'off' THEN
         collection := collection || jsonb_strip_nulls(jsonb_build_object(
