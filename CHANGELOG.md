@@ -4,14 +4,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-### UNRELEASED
+### [v0.9.0]
 
+### Breaking Changes
+- Context Extension has been deprecated. Context is now reported using OGC Features compliant numberMatched and numberReturned
+- Paging return from search using prev/next properties has been deprecated. Paging is now available in the spec compliant Links
+
+### Added
+- Add support for Casei and Accenti (Fixes #237). (Also, requires the addition of the unaccent extension)
+- Add numberReturned and numberMatched fields for ItemCollection. BREAKING CHANGE: As the context extension is deprecated, this also removes the "context" item from results.
 - Updated docs on automated updates of collection extents. (CLOSES #247)
+- stac search now returns paging information using standards compliant links rather than prev/next properties (Fixes #265)
 
 ### Fixed
 - Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.
 - Adds fixes/updates to documentation
 - Fixes issue when using geometry with the strict queryables setting set.
+- Fixes issue when there is a None rather than an empty dictionary in hydration.
+- Use "debug" log level rather than "log" to prevent growth in log messages due to differences in how client_min_messages and log_min_messages treat log levels. (Fixes #242)
+- Refactor search_query and search_where functions to eliminate race condition when running identical queries. (Fixes #233)
+- Fixes CQL2 Parser for Between operator (Fixes #251)
+- Update PyO3 for rust hydration performance improvements.
+
+
 
 
 ## [v0.8.4]
@@ -438,7 +453,7 @@ _TODO_
 ### Fixed
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
-
+[v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.9.0
 [v0.8.4]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.4
 [v0.8.3]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/stac-utils/pgstac/compare/v0.8.1...v0.8.2

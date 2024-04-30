@@ -1,1 +1,1 @@
-migrations/pgstac.unreleased.sql
+migrations/pgstac.0.9.0.sql

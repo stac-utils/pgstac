@@ -10,7 +10,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='btree_gist') THEN
     CREATE EXTENSION IF NOT EXISTS btree_gist;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='btree_gist') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='unaccent') THEN
     CREATE EXTENSION IF NOT EXISTS unaccent;
   END IF;
 END;
@@ -1209,4 +1209,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('unreleased');
+SELECT set_version('0.9.0');
