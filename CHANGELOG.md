@@ -17,17 +17,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - stac search now returns paging information using standards compliant links rather than prev/next properties (Fixes #265)
 
 ### Fixed
-- Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.
-- Adds fixes/updates to documentation
-- Fixes issue when using geometry with the strict queryables setting set.
 - Fixes issue when there is a None rather than an empty dictionary in hydration.
 - Use "debug" log level rather than "log" to prevent growth in log messages due to differences in how client_min_messages and log_min_messages treat log levels. (Fixes #242)
 - Refactor search_query and search_where functions to eliminate race condition when running identical queries. (Fixes #233)
 - Fixes CQL2 Parser for Between operator (Fixes #251)
 - Update PyO3 for rust hydration performance improvements.
 
+## [v0.8.5]
 
-
+### Fixed
+- Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.
+- Adds fixes/updates to documentation
+- Fixes issue when using geometry with the strict queryables setting set.
 
 ## [v0.8.4]
 
@@ -453,8 +454,11 @@ _TODO_
 ### Fixed
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
-[v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.9.0
-[v0.8.4]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.4
+
+
+[v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.5...v0.9.0
+[v0.8.5]: https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.8.5
+[v0.8.4]: https://github.com/stac-utils/pgstac/compare/v0.8.3...v0.8.4
 [v0.8.3]: https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/stac-utils/pgstac/compare/v0.8.1...v0.8.2
 [v0.8.1]: https://github.com/stac-utils/pgstac/compare/v0.8.0...v0.8.1
