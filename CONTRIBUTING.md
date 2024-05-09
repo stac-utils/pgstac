@@ -99,3 +99,13 @@ Individual tests can be run with any combination of the following flags `--forma
 ### Get Involved
 
 Issues and pull requests are more than welcome: https://github.com/stac-utils/pgstac/issues
+
+### A Note on Hydration and Dehydration
+
+Dehydration refers to stripping redundant attributes of STAC items when storing them within the database. For many collections, dehydration saves a significant amount of memory.
+
+Rehydration is the process of adding the stripped attributes back to the STAC items, such as during the export of an STAC collection or the response to a search query.
+
+PgSTAC, a versatile tool, is designed to seamlessly integrate with PyPgSTAC or alternative backends. This flexibility allows for direct calls for both rehydration and dehydration, giving developers and technical users a sense of control over the process.
+
+Hydration and dehydration are de-facto settings that users can not opt out of. In the future, we may provide a configuration for use cases where the size benefits do not justify the added complexity.
