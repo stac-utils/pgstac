@@ -58,17 +58,20 @@ This will create a base migration for the new version and will create incrementa
 All changes to SQL should only be made in the `/src/pgstac/sql` directory. SQL Files will be run in alphabetical order.
 
 ### Adding Tests
+
+There are three different types of tests within the project: (1) pgTap tests, (2) basic SQL tests, and (3) PyPgSTAC tests.
+
 PgSTAC tests can be written using PGTap or basic SQL output comparisons. Additional testing is available using PyTest in the PyPgSTAC module. Tests can be run using the `scripts/test` command.
 
-PGTap tests can be written using [PGTap](https://pgtap.org/) syntax. Tests should be added to the `/src/pgstac/tests/pgtap` directory. Any new sql files added to this directory must be added to `/src/pgstac/tests/pgtap.sql`.
+PGTap tests can be written using [PGTap](https://pgtap.org/) syntax. Tests should be added to the `/src/pgstac/tests/pgtap` directory. Any new SQL files added to this directory must be added to `/src/pgstac/tests/pgtap.sql`.
 
 The Basic SQL tests will run any file ending in '.sql' in the `/src/pgstac/tests/basic` directory and will compare the exact results to the corresponding '.sql.out' file.
 
-PyPgSTAC tests are located in `/src/pypgstac/tests`.
+PyPgSTAC tests are pytest tests, and they are located in `/src/pypgstac/tests`
 
-All tests can be found in tests/pgtap.sql and are run using `scripts/test`
+All tests can be found in tests/pgtap.sql and are run using `scripts/test`.
 
-Individual tests can be run with any combination of the following flags "--formatting --basicsql --pgtap --migrations --pypgstac". If pre-commit is installed, tests will be run on commit based on which files have changed.
+Individual tests can be run with any combination of the following flags `--formatting --basicsql --pgtap --migrations --pypgstac`. If pre-commit is installed, tests will be run on commit based on which files have changed.
 
 
 ### To make a PR
