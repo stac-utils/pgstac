@@ -8,7 +8,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='btree_gist') THEN
     CREATE EXTENSION IF NOT EXISTS btree_gist;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='btree_gist') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='unaccent') THEN
     CREATE EXTENSION IF NOT EXISTS unaccent;
   END IF;
 END;

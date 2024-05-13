@@ -59,7 +59,8 @@ def pg_notice_handler(notice: psycopg.errors.Diagnostic) -> None:
 
 
 def _chunks(
-    lst: Sequence[Dict[str, Any]], n: int,
+    lst: Sequence[Dict[str, Any]],
+    n: int,
 ) -> Generator[Sequence[Dict[str, Any]], None, None]:
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
@@ -373,6 +374,7 @@ class PgstacDB:
         end_datetime,
         content,
     ):
+        """Read pgstac item, hydrate it, and convert to item stac json formatted dict."""
         base_item = self.collection_baseitem(collection)
         content["id"] = id
         content["collection"] = collection
@@ -396,6 +398,7 @@ class PgstacDB:
         return content
 
     def get_table(self, results):
+        """Convert pgstac item row results to arrow table."""
         pylist = [self.pgstac_row_reader(*r) for r in results]
         table = pa.Table.from_pylist(pylist)
         table = cleanarrow(table)
