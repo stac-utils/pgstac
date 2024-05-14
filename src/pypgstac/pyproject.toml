@@ -128,6 +128,7 @@ select = "D1"
 match = "(?!test).*.py"
 
 [tool.maturin]
+features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "pypgstac.pgstacrs"
 strip = true
