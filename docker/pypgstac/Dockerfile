@@ -12,7 +12,7 @@ RUN \
         postgresql-client \
         python3 python-is-python3 python3-pip python3-venv \
         build-essential clang clang-11 gcc git gnupg libssl-dev llvm-11 lsb-release make pkg-config \
-    && python3 -m pip install --upgrade pip toml-to-requirements wheel setuptools \
+    && python3 -m pip install --upgrade pip uv wheel setuptools \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
@@ -21,10 +21,10 @@ FROM pyrustbase as pypgstac
 COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
 WORKDIR /tmp
 RUN \
-    toml-to-req --optional-lists test,build,dev,psycopg,migrations \
-    && pip install -r /tmp/requirements.txt
+    uv pip compile --all-extras /tmp/pyproject.toml >/tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
 COPY src/pgstac/migrations /opt/src/pypgstac/pypgstac/migrations
 WORKDIR /opt/src/pypgstac
-RUN pip install -e . && rm -rf /usr/local/cargo/registry
+RUN uv pip install --system -e . && rm -rf /usr/local/cargo/registry
