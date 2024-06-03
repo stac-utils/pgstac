@@ -20,6 +20,8 @@ INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-cr
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
 SELECT * FROM items WHERE collection='pgstactest-crudtest';
 
+SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
+
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 SELECT * FROM items WHERE collection='pgstactest-crudtest';
