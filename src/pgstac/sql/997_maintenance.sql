@@ -73,14 +73,12 @@ BEGIN
 
     IF geom_extent IS NOT NULL AND mind IS NOT NULL AND maxd IS NOT NULL THEN
         extent := jsonb_build_object(
-            'extent', jsonb_build_object(
                 'spatial', jsonb_build_object(
                     'bbox', to_jsonb(array[array[st_xmin(geom_extent), st_ymin(geom_extent), st_xmax(geom_extent), st_ymax(geom_extent)]])
                 ),
                 'temporal', jsonb_build_object(
                     'interval', to_jsonb(array[array[mind, maxd]])
                 )
-            )
         );
         RETURN extent;
     END IF;

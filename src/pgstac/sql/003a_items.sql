@@ -341,17 +341,13 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections SET
-    content = content ||
-    jsonb_build_object(
-        'extent', jsonb_build_object(
-            'spatial', jsonb_build_object(
-                'bbox', collection_bbox(collections.id)
-            ),
-            'temporal', jsonb_build_object(
-                'interval', collection_temporal_extent(collections.id)
-            )
-        )
+UPDATE collections
+    SET content = jsonb_set_lax(
+        content,
+        '{extent}'::text[],
+        collection_extent(id, FALSE),
+        true,
+        'use_json_null'
     )
 ;
 $$ LANGUAGE SQL;

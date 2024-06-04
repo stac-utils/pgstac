@@ -20,9 +20,15 @@ INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-cr
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
 SELECT * FROM items WHERE collection='pgstactest-crudtest';
 
+-- Check to see if extent got updated
+SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
+
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 SELECT * FROM items WHERE collection='pgstactest-crudtest';
+
+-- Check to see if extent got updated
+SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- Update item with new datetime that is in a different partition
 SELECT upsert_item((SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
@@ -50,3 +56,10 @@ WITH c AS (SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
 SELECT * FROM items WHERE collection='pgstactest-crudtest';
+
+-- turn off update_collection_extent then add an item and verify that the extent did not get updated automatically
+SET pgstac.update_collection_extent=FALSE;
+SELECT get_setting_bool('update_collection_extent');
+SELECT update_item((SELECT content || '{"properties":{"datetime":"2024-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
+
+SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
