@@ -335,7 +335,7 @@ CREATE OR REPLACE FUNCTION collection_bbox(id text) RETURNS jsonb AS $$
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS $$
-    SELECT to_jsonb(array[array[min(datetime)::text, max(datetime)::text]])
+    SELECT to_jsonb(array[array[min(datetime), max(datetime)]])
     FROM items WHERE collection=$1;
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
