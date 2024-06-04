@@ -237,6 +237,18 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.collection_temporal_extent(id text)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+ SET search_path TO 'pgstac', 'public'
+AS $function$
+    SELECT to_jsonb(array[array[min(datetime), max(datetime)]])
+    FROM items WHERE collection=$1;
+;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.update_collection_extents()
  RETURNS void
  LANGUAGE sql

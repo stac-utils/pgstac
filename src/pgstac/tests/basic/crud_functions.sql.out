@@ -100,3 +100,7 @@ SELECT update_item((SELECT content || '{"properties":{"datetime":"2024-01-01 00:
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
  {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2023-02-01T00:00:00+00:00", "2023-02-01T00:00:00+00:00"]]}}
 
+-- check formatting of temporal extent
+SELECT collection_temporal_extent('pgstactest-crudtest');
+ [["2023-02-01T00:00:00+00:00", "2024-01-01T00:00:00+00:00"]]
+

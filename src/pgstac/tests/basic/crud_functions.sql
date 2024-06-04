@@ -63,3 +63,7 @@ SELECT get_setting_bool('update_collection_extent');
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2024-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
+
+-- check formatting of temporal extent
+SELECT collection_temporal_extent('pgstactest-crudtest');
+
