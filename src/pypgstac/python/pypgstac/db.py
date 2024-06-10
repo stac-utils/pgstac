@@ -1,12 +1,25 @@
 """Base library for database interaction with PgSTAC."""
+
 import atexit
 import logging
 import time
 from types import TracebackType
-from typing import Any, Generator, List, Optional, Tuple, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    Union,
+)
 
 import orjson
 import psycopg
+from cachetools import LRUCache, cachedmethod
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
@@ -16,7 +29,15 @@ try:
 except ImportError:
     from pydantic import BaseSettings  # type:ignore
 
+import psycopg_infdate
+import pyarrow as pa
+import shapely
+from stac_geoparquet.to_arrow import _process_arrow_table as cleanarrow
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
+from version_parser import Version as V
+
+from .hydration import hydrate
+from .version import __version__ as pypgstac_version
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +49,22 @@ def dumps(data: dict) -> str:
 
 set_json_dumps(dumps)
 set_json_loads(orjson.loads)
+psycopg_infdate.register_inf_date_handler(psycopg)
 
 
 def pg_notice_handler(notice: psycopg.errors.Diagnostic) -> None:
     """Add PG messages to logging."""
     msg = f"{notice.severity} - {notice.message_primary}"
     logger.info(msg)
+
+
+def _chunks(
+    lst: Sequence[Dict[str, Any]],
+    n: int,
+) -> Generator[Sequence[Dict[str, Any]], None, None]:
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i : i + n]
 
 
 class Settings(BaseSettings):
@@ -63,6 +94,7 @@ class PgstacDB:
         commit_on_exit: bool = True,
         debug: bool = False,
         use_queue: bool = False,
+        item_funcs: Optional[List[Callable]] = None,
     ) -> None:
         """Initialize Database."""
         self.dsn: str
@@ -76,8 +108,29 @@ class PgstacDB:
         self.initial_version = "0.1.9"
         self.debug = debug
         self.use_queue = use_queue
+        self.item_funcs = item_funcs
         if self.debug:
             logging.basicConfig(level=logging.DEBUG)
+        self.cache: LRUCache = LRUCache(maxsize=256)
+
+    def check_version(self) -> None:
+        db_version = self.version
+        if db_version is None:
+            raise Exception("Failed to detect the target database version.")
+
+        if db_version != "unreleased":
+            v1 = V(db_version)
+            v2 = V(pypgstac_version)
+            if (v1.get_major_version(), v1.get_minor_version()) != (
+                v2.get_major_version(),
+                v2.get_minor_version(),
+            ):
+                raise Exception(
+                    f"pypgstac version {pypgstac_version}"
+                    " is not compatible with the target"
+                    f" database version {self.version}."
+                    f" database version {db_version}.",
+                )
 
     def get_pool(self) -> ConnectionPool:
         """Get Database Pool."""
@@ -222,7 +275,7 @@ class PgstacDB:
                 conn.rollback()
             raise e
 
-    def query_one(self, *args: Any, **kwargs: Any) -> Union[Tuple, str, None]:
+    def query_one(self, *args: Any, **kwargs: Any) -> Union[Tuple, str, dict, None]:
         """Return results from a query that returns a single row."""
         try:
             r = next(self.query(*args, **kwargs))
@@ -298,6 +351,74 @@ class PgstacDB:
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
+    @cachedmethod(lambda self: self.cache)
+    def collection_baseitem(self, collection_id: str) -> dict:
+        """Get collection."""
+        base_item = self.query_one(
+            "SELECT base_item FROM collections WHERE id=%s",
+            (collection_id,),
+        )
+        if not isinstance(base_item, dict):
+            raise Exception(
+                f"Collection {collection_id} is not present in the database",
+            )
+        logger.debug(f"Found {collection_id} with base_item {base_item}")
+        return base_item
+
+    def pgstac_row_reader(
+        self,
+        id,
+        collection,
+        geometry,
+        datetime,
+        end_datetime,
+        content,
+    ):
+        """Read pgstac item, hydrate it, and convert to item stac json formatted dict."""
+        base_item = self.collection_baseitem(collection)
+        content["id"] = id
+        content["collection"] = collection
+        content["geometry"] = geometry
+        if datetime == end_datetime and "datetime" not in content["properties"]:
+            content["properties"]["datetime"] = datetime
+        elif datetime != end_datetime:
+            if "start_datetime" not in content["properties"]:
+                content["properties"]["start_datetime"] = datetime
+            if "end_datetime" not in content["properties"]:
+                content["properties"]["end_datetime"] = end_datetime
+        if "bbox" not in content:
+            geom = shapely.wkb.loads(geometry)
+            content["bbox"] = list(geom.bounds)
+        if "type" not in content:
+            content["type"] = "Feature"
+        content = hydrate(base_item, content)
+        if self.item_funcs is not None:
+            for func in self.item_funcs:
+                content = func(content)
+        return content
+
+    def get_table(self, results):
+        """Convert pgstac item row results to arrow table."""
+        pylist = [self.pgstac_row_reader(*r) for r in results]
+        table = pa.Table.from_pylist(pylist)
+        table = cleanarrow(table)
+
+        return table
+
     def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
         """Search PgSTAC."""
-        return dumps(next(self.func("search", query))[0])
+
+        results = self.query(
+            """
+            SELECT
+                id,
+                collection,
+                st_asbinary(geometry),
+                datetime::text,
+                end_datetime::text,
+                content
+            FROM search_items(%s);
+        """,
+            (query,),
+        )
+        return self.get_table(results)
