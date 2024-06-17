@@ -4,10 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-### Unreleased
+### [v0.9.1]
 
 ### Fixed
 - Fixed double nested extent when using trigger based update collection extent. (Fixes #274)
+- Fix time formatting (Fixes #275)
+- Relaxes smart-open dependency check (Fixes #273)
+- Switch to uv for docker image
+
 
 ### [v0.9.0]
 
