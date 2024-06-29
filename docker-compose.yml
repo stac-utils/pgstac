@@ -32,8 +32,6 @@ services:
       - PGUSER=username
       - PGPASSWORD=password
       - PGDATABASE=postgis
-    volumes:
-      - .:/opt
     depends_on:
       - pgstac
 volumes:
