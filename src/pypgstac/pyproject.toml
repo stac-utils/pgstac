@@ -1,6 +1,6 @@
 [project]
 name = "pypgstac"
-version = "0.9.1"
+version = "0.9.1-dev"
 description = "Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -46,7 +46,7 @@ dev = [
     "black>=21.7b0",
     "mypy>=0.910",
     "types-orjson==0.1.1",
-    "types-pkg-resources",
+    "types-setuptools",
     "ruff==0.0.231",
     "pre-commit",
 ]

@@ -127,6 +127,32 @@ CREATE OR REPLACE FUNCTION partition_query_view(
 $$ LANGUAGE SQL IMMUTABLE;
 
 
+CREATE OR REPLACE FUNCTION q_to_tsquery (input text)
+    RETURNS tsquery
+    AS $$
+DECLARE
+    processed_text text;
+BEGIN
+    -- replace commas outside quoted text with " | "
+    processed_text := regexp_replace(input, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+
+    -- replace the logical operators with tsquery equivalents
+    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'g');
+    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'g');
+
+    -- Handle inclusion (treated as AND)
+    processed_text := regexp_replace(processed_text, '\+([a-zA-Z0-9_]+)', '& \1', 'g');
+
+    -- Handle exclusion (treated as NOT)
+    processed_text := regexp_replace(processed_text, '\-([a-zA-Z0-9_]+)', '& ! \1', 'g');
+
+    -- surround quoted text contents with single quotes for to_tsquery syntax
+    processed_text := regexp_replace(processed_text, '"([^"]+)"', '''\1''', 'g');
+
+    RETURN to_tsquery(processed_text);
+END;
+$$
+LANGUAGE plpgsql;
 
 
 CREATE OR REPLACE FUNCTION stac_search_to_where(j jsonb) RETURNS text AS $$
@@ -139,8 +165,10 @@ DECLARE
     sdate timestamptz;
     edate timestamptz;
     filterlang text;
-    filter jsonb := j->'filter';
+    filter jsonb = j->'filter';
+    ft_query tsquery;
 BEGIN
+    RAISE DEBUG 'STAC SEARCH_TO_WHERE: %', j;
     IF j ? 'ids' THEN
         where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
     END IF;
@@ -158,6 +186,20 @@ BEGIN
         where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
             edate,
             sdate
+        );
+    END IF;
+
+    IF j ? 'q' THEN
+        ft_query := q_to_tsquery(j->>'q');
+        where_segments := where_segments || format(
+            $quote$
+            (
+                to_tsvector('english', content->'properties'->>'description') ||
+                to_tsvector('english', content->'properties'->>'title') ||
+                to_tsvector('english', content->'properties'->'keywords')
+            ) @@ %L
+            $quote$,
+            ft_query
         );
     END IF;
 
@@ -187,7 +229,7 @@ BEGIN
     ELSIF filterlang = 'cql-json' THEN
         filter := cql1_to_cql2(filter);
     END IF;
-    RAISE NOTICE 'FILTER: %', filter;
+    RAISE DEBUG 'FILTER: %', filter;
     where_segments := where_segments || cql2_query(filter);
     IF cardinality(where_segments) < 1 THEN
         RETURN ' TRUE ';
