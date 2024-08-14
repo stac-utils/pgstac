@@ -202,25 +202,49 @@ CREATE OR REPLACE FUNCTION pgstac.q_to_tsquery(input text)
 AS $function$
 DECLARE
     processed_text text;
+    temp_text text;
+    quote_array text[];
+    placeholder text := '@QUOTE@';
 BEGIN
-    -- replace commas outside quoted text with " | "
-    processed_text := regexp_replace(input, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+    -- Extract all quoted phrases and store in array
+    quote_array := regexp_matches(input, '"[^"]*"', 'g');
 
-    -- Replace non-quoted spaces with ' & '
-    -- processed_text := regexp_replace(processed_text, '\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', ' & ', 'g');
+    -- Replace each quoted part with a unique placeholder if there are any quoted phrases
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        processed_text := input;
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, quote_array[i], placeholder || i || placeholder);
+        END LOOP;
+    ELSE
+        processed_text := input;
+    END IF;
 
-    -- replace the logical operators with tsquery equivalents
-    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'g');
-    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'g');
+    -- Replace non-quoted text using regular expressions
 
-    -- Handle inclusion (treated as AND)
+    -- , -> |
+    processed_text := regexp_replace(processed_text, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+
+    -- and -> &
+    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'gi');
+
+    -- or -> |
+    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
+
+    -- +term -> & term
     processed_text := regexp_replace(processed_text, '\+([a-zA-Z0-9_]+)', '& \1', 'g');
 
-    -- Handle exclusion (treated as NOT)
+    -- -term -> ! term
     processed_text := regexp_replace(processed_text, '\-([a-zA-Z0-9_]+)', '& ! \1', 'g');
 
-    -- surround quoted text contents with single quotes for to_tsquery syntax
-    processed_text := regexp_replace(processed_text, '"([^"]+)"', '''\1''', 'g');
+    -- Replace placeholders back with quoted phrases if there were any
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, placeholder || i || placeholder, '''' || substring(quote_array[i] from 2 for length(quote_array[i]) - 2) || '''');
+        END LOOP;
+    END IF;
+
+    -- Print processed_text to the console for debugging purposes
+    RAISE NOTICE 'processed_text: %', processed_text;
 
     RETURN to_tsquery(processed_text);
 END;

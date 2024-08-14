@@ -77,3 +77,16 @@ select collection_search('{"q": "(scary AND revenge) OR (funny AND sad)"}');
 select collection_search('{"q": "\"great story\""}');
 
 select collection_search('{"q": "monster -school"}');
+
+select collection_search('{"q": "bear or stranger"}');
+
+select collection_search('{"q": "bear OR stranger"}');
+
+select collection_search('{"q": "bear, stranger"}');
+
+select collection_search('{"q": "bear AND stranger"}');
+
+select collection_search('{"q": "bear and stranger"}');
+
+select collection_search('{"q": "\"bear or stranger\""}');
+
