@@ -127,6 +127,59 @@ CREATE OR REPLACE FUNCTION partition_query_view(
 $$ LANGUAGE SQL IMMUTABLE;
 
 
+CREATE OR REPLACE FUNCTION q_to_tsquery (input text)
+    RETURNS tsquery
+    AS $$
+DECLARE
+    processed_text text;
+    temp_text text;
+    quote_array text[];
+    placeholder text := '@QUOTE@';
+BEGIN
+    -- Extract all quoted phrases and store in array
+    quote_array := regexp_matches(input, '"[^"]*"', 'g');
+
+    -- Replace each quoted part with a unique placeholder if there are any quoted phrases
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        processed_text := input;
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, quote_array[i], placeholder || i || placeholder);
+        END LOOP;
+    ELSE
+        processed_text := input;
+    END IF;
+
+    -- Replace non-quoted text using regular expressions
+
+    -- , -> |
+    processed_text := regexp_replace(processed_text, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+
+    -- and -> &
+    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'gi');
+
+    -- or -> |
+    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
+
+    -- +term -> & term
+    processed_text := regexp_replace(processed_text, '\+([a-zA-Z0-9_]+)', '& \1', 'g');
+
+    -- -term -> ! term
+    processed_text := regexp_replace(processed_text, '\-([a-zA-Z0-9_]+)', '& ! \1', 'g');
+
+    -- Replace placeholders back with quoted phrases if there were any
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, placeholder || i || placeholder, '''' || substring(quote_array[i] from 2 for length(quote_array[i]) - 2) || '''');
+        END LOOP;
+    END IF;
+
+    -- Print processed_text to the console for debugging purposes
+    RAISE NOTICE 'processed_text: %', processed_text;
+
+    RETURN to_tsquery(processed_text);
+END;
+$$
+LANGUAGE plpgsql;
 
 
 CREATE OR REPLACE FUNCTION stac_search_to_where(j jsonb) RETURNS text AS $$
@@ -140,6 +193,7 @@ DECLARE
     edate timestamptz;
     filterlang text;
     filter jsonb := j->'filter';
+    ft_query tsquery;
 BEGIN
     IF j ? 'ids' THEN
         where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
@@ -158,6 +212,20 @@ BEGIN
         where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
             edate,
             sdate
+        );
+    END IF;
+
+    IF j ? 'q' THEN
+        ft_query := q_to_tsquery(j->>'q');
+        where_segments := where_segments || format(
+            $quote$
+            (
+                to_tsvector('english', content->'properties'->>'description') ||
+                to_tsvector('english', content->'properties'->>'title') ||
+                to_tsvector('english', content->'properties'->'keywords')
+            ) @@ %L
+            $quote$,
+            ft_query
         );
     END IF;
 
