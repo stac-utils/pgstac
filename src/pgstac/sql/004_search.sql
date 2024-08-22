@@ -541,9 +541,14 @@ BEGIN
         RETURN sw;
     END IF;
 
-    -- Get any stats that we have. If there is a lock where another process is
-    -- updating the stats, wait so that we don't end up calculating a bunch of times.
-    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    -- Get any stats that we have.
+    IF NOT ro THEN
+        -- If there is a lock where another process is
+        -- updating the stats, wait so that we don't end up calculating a bunch of times.
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    ELSE
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
+    END IF;
 
     -- If there is a cached row, figure out if we need to update
     IF
