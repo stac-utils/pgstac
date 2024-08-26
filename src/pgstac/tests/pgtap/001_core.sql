@@ -51,8 +51,15 @@ SELECT lives_ok(
     $$ SELECT search('{}'); $$,
     'Search works with readonly mode set to on in readonly mode.'
 );
+
+SET pgstac.context TO 'on';
+SELECT lives_ok(
+    $$ SELECT search('{}'); $$,
+    'Search works with readonly mode set to on in readonly mode and the context extension enabled.'
+);
 RESET transaction_read_only;
 RESET pgstac.readonly;
+RESET pgstac.context;
 SELECT is_definer('update_partition_stats');
 SELECT is_definer('partition_after_triggerfunc');
 SELECT is_definer('drop_table_constraints');
