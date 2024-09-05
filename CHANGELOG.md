@@ -5,13 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## [Unreleased]
+
+### Added
 
 - Add limited support for free-text search in the search functions. (Fixes #293)
   - the `q` parameter is converted from the
     [OGC API - Features syntax](https://docs.ogc.org/DRAFTS/24-031.html) into a `tsquery`
     statement which is used to compare to the description, title, and keywords fields in items or collection_search
   - the text search is un-indexed and will be very slow for item-level searches!
+
+### Fixed
+
+- Add `open=True` in `psycopg.ConnectionPool` to avoid future behavior change
 
 ## [v0.9.1]
 
@@ -516,6 +522,8 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[Unreleased]: https://github.com/stac-utils/pgstac/compare/v0.9.1...main
+[v0.9.1]: https://github.com/stac-utils/pgstac/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.5...v0.9.0
 [v0.8.5]: https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.8.5
 [v0.8.4]: https://github.com/stac-utils/pgstac/compare/v0.8.3...v0.8.4

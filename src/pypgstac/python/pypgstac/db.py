@@ -89,6 +89,7 @@ class PgstacDB:
                 max_waiting=settings.db_max_queries,
                 max_idle=settings.db_max_idle,
                 num_workers=settings.db_num_workers,
+                open=True,
             )
         return self.pool
 
