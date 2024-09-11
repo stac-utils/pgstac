@@ -25,6 +25,6 @@ RUN \
     && uv pip install --system -r /tmp/requirements.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
-COPY src/pgstac/migrations /opt/src/pypgstac/pypgstac/migrations
+COPY src/pgstac/migrations /opt/src/pgstac/migrations
 WORKDIR /opt/src/pypgstac
 RUN uv pip install --system -e . && rm -rf /usr/local/cargo/registry
