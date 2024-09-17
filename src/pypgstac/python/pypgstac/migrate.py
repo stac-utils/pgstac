@@ -122,8 +122,16 @@ class Migrate:
             logger.info("using unreleased version")
             toversion = "unreleased"
 
-        pg_version = self.db.pg_version
-        logger.info(f"Migrating PgSTAC on PostgreSQL Version {pg_version}")
+        major, minor, patch = tuple(
+            map(
+                int,
+                [
+                    self.db.pg_version[i:i + 2]
+                    for i in range(0, len(self.db.pg_version), 2)
+                ],
+            ),
+        )
+        logger.info(f"Migrating PgSTAC on PostgreSQL Version {major}.{minor}.{patch}")
         oldversion = self.db.version
         if oldversion == toversion:
             logger.info(f"Target database already at version: {toversion}")
