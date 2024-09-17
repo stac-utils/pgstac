@@ -367,7 +367,7 @@ BEGIN
             rebuildindexes,
             idxconcurrently
         );
-        RAISE NOTICE 'Q: %s', q;
+        RAISE NOTICE 'Q: %', q;
         RETURN NEXT q;
     END LOOP;
     RETURN;
