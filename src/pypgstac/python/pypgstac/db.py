@@ -271,15 +271,18 @@ class PgstacDB:
         """Get the current pg version number from a pgstac database."""
         version = self.query_one(
             """
-            SHOW server_version;
+            SHOW server_version_num;
             """,
         )
         logger.debug(f"PG VERSION: {version}.")
         if isinstance(version, bytes):
             version = version.decode()
         if isinstance(version, str):
-            if int(version.split(".")[0]) < 13:
-                raise Exception("PgSTAC requires PostgreSQL 13+")
+            if int(version) < 130000:
+                major, minor, patch = tuple(
+                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                )
+                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
             return version
         else:
             if self.connection is not None:
