@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Fixed
 
 - Add `open=True` in `psycopg.ConnectionPool` to avoid future behavior change
+- Switch from postgres `server_version` to `server_version_num` to get PG version (Fixes #300)
+- Allow read-only replicas work even when the context extension is enabled (Fixes #300)
 
 ## [v0.9.1]
 
@@ -49,6 +51,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Refactor search_query and search_where functions to eliminate race condition when running identical queries. (Fixes #233)
 - Fixes CQL2 Parser for Between operator (Fixes #251)
 - Update PyO3 for rust hydration performance improvements.
+
+## [v0.8.6]
+
+### Fixed
+
+ - Relax version requirement for smart-open (Fixes #273)
+ - Use uv pip in docker build
 
 ## [v0.8.5]
 
