@@ -67,13 +67,16 @@ class PgstacCLI:
         method: Optional[Methods] = Methods.insert,
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
+        partition_update_enabled: Optional[bool] = True,
     ) -> None:
         """Load collections or items into PgSTAC."""
         loader = Loader(db=self._db)
         if table == "collections":
             loader.load_collections(file, method)
         if table == "items":
-            loader.load_items(file, method, dehydrated, chunksize)
+            loader.load_items(
+                file, method, dehydrated, chunksize, partition_update_enabled,
+            )
 
     def runqueue(self) -> str:
         return self._db.run_queued()
