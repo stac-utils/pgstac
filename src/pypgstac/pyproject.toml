@@ -29,6 +29,7 @@ dependencies = [
     "tenacity==8.1.*",
     "cachetools==5.3.*",
     "version-parser>= 1.0.1",
+    "psycopg-infdate>=1.0.3",
 ]
 
 [project.optional-dependencies]
