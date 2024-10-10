@@ -51,7 +51,6 @@ SELECT results_eq($$
     'Test search passing in collection ids'
 );
 
-
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"desc"}]}');
     $$,$$
@@ -60,8 +59,39 @@ SELECT results_eq($$
     'Test search passing in collection ids with descending sort'
 );
 
-SET pgstac.base_url='https://test.com/';
+SELECT results_eq($$
+    select collection_search('{"limit":1}');
+    $$,$$
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    $$,
+    'Test search limit 1 - next link'
+);
 
+SELECT results_eq($$
+    select collection_search('{"limit":1, "offset":1}');
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    $$,
+    'Test search limit 1, offset 1 - no next link'
+);
+
+SELECT results_eq($$
+    select collection_search('{"limit":1, "offset":4}');
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 3}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 0, "collections": []}'::jsonb
+    $$,
+    'Test search limit 1, offset 4 - no next link'
+);
+
+SELECT results_eq($$
+    select collection_search('{"limit":2}');
+    $$,$$
+    SELECT '{"links": [], "numberMatched": 2, "numberReturned": 2, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}, {"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    $$,
+    'Test search limit 2 - no prev/next links'
+);
+
+SET pgstac.base_url='https://test.com/';
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$
