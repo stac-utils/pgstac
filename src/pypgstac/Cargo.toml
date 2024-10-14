@@ -11,8 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1"
-pyo3 = { version = "0.21", features = [
-    "abi3-py38",
-    "extension-module",
-    "anyhow",
-] }
+arrow = { version = "51", features = ["ffi"] }
+arrow-schema = { version = "51", features = ["serde"] }
+serde_json = "1"
+pyo3 = { version = "0.21", features = ["abi3-py38", "anyhow"] }
