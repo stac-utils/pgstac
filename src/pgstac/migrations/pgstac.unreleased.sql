@@ -1311,7 +1311,7 @@ BEGIN
             rebuildindexes,
             idxconcurrently
         );
-        RAISE NOTICE 'Q: %s', q;
+        RAISE NOTICE 'Q: %', q;
         RETURN NEXT q;
     END LOOP;
     RETURN;
@@ -3106,10 +3106,9 @@ DECLARE
     sdate timestamptz;
     edate timestamptz;
     filterlang text;
-    filter jsonb = j->'filter';
+    filter jsonb := j->'filter';
     ft_query tsquery;
 BEGIN
-    RAISE DEBUG 'STAC SEARCH_TO_WHERE: %', j;
     IF j ? 'ids' THEN
         where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
     END IF;
@@ -3170,7 +3169,7 @@ BEGIN
     ELSIF filterlang = 'cql-json' THEN
         filter := cql1_to_cql2(filter);
     END IF;
-    RAISE DEBUG 'FILTER: %', filter;
+    RAISE NOTICE 'FILTER: %', filter;
     where_segments := where_segments || cql2_query(filter);
     IF cardinality(where_segments) < 1 THEN
         RETURN ' TRUE ';
@@ -3456,9 +3455,14 @@ BEGIN
         RETURN sw;
     END IF;
 
-    -- Get any stats that we have. If there is a lock where another process is
-    -- updating the stats, wait so that we don't end up calculating a bunch of times.
-    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    -- Get any stats that we have.
+    IF NOT ro THEN
+        -- If there is a lock where another process is
+        -- updating the stats, wait so that we don't end up calculating a bunch of times.
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    ELSE
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
+    END IF;
 
     -- If there is a cached row, figure out if we need to update
     IF
@@ -4118,41 +4122,34 @@ BEGIN
 
     number_returned := jsonb_array_length(out_records);
 
-    IF _limit <= number_matched THEN --need to have paging links
+
+
+    IF _limit <= number_matched AND number_matched > 0 THEN --need to have paging links
         nextoffset := least(_offset + _limit, number_matched - 1);
         prevoffset := greatest(_offset - _limit, 0);
-        IF _offset = 0 THEN -- no previous paging
 
-            links := jsonb_build_array(
-                jsonb_build_object(
-                    'rel', 'next',
-                    'type', 'application/json',
-                    'method', 'GET' ,
-                    'href', base_url,
-                    'body', jsonb_build_object('offset', nextoffset),
-                    'merge', TRUE
-                )
-            );
-        ELSE
-            links := jsonb_build_array(
-                jsonb_build_object(
+        IF _offset > 0 THEN
+            links := links || jsonb_build_object(
                     'rel', 'prev',
                     'type', 'application/json',
                     'method', 'GET' ,
                     'href', base_url,
                     'body', jsonb_build_object('offset', prevoffset),
                     'merge', TRUE
-                ),
-                jsonb_build_object(
+                );
+        END IF;
+
+        IF (_offset + _limit < number_matched)  THEN
+            links := links || jsonb_build_object(
                     'rel', 'next',
                     'type', 'application/json',
                     'method', 'GET' ,
                     'href', base_url,
                     'body', jsonb_build_object('offset', nextoffset),
                     'merge', TRUE
-                )
-            );
+                );
         END IF;
+
     END IF;
 
     ret := jsonb_build_object(

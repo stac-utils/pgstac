@@ -51,7 +51,6 @@ SELECT results_eq($$
     'Test search passing in collection ids'
 );
 
-
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"desc"}]}');
     $$,$$
@@ -60,8 +59,31 @@ SELECT results_eq($$
     'Test search passing in collection ids with descending sort'
 );
 
-SET pgstac.base_url='https://test.com/';
+SELECT results_eq($$
+    select collection_search('{"limit":1}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
+    $$,
+    'Test search limit 1 - next link'
+);
 
+SELECT results_eq($$
+    select collection_search('{"limit":1, "offset":649}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 648}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
+    $$,
+    'Test search limit 1, offset 649 - no next link'
+);
+
+SELECT results_eq($$
+    select collection_search('{"limit": 700}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [], "numberMatched": 650, "numberReturned": 650}'::jsonb
+    $$,
+    'Test search limit 2 - no prev/next links'
+);
+
+SET pgstac.base_url='https://test.com/';
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$

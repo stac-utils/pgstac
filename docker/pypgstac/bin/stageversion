@@ -40,7 +40,7 @@ cd $BASEDIR/pgstac
 
 # make the base pgstac.sql a symbolic link to the most recent version
 rm pgstac.sql
-ln -s migrations/pgstac.${VERSION}.sql pgstac.sql
+cp migrations/pgstac.${VERSION}.sql pgstac.sql
 
 # Update the version number in the appropriate places
 [[ $VERSION == 'unreleased' ]] && PYVERSION="${OLDVERSION}-dev" || PYVERSION="$VERSION"

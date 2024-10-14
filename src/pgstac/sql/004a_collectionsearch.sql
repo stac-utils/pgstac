@@ -100,41 +100,34 @@ BEGIN
 
     number_returned := jsonb_array_length(out_records);
 
-    IF _limit <= number_matched THEN --need to have paging links
+
+
+    IF _limit <= number_matched AND number_matched = 0 THEN --need to have paging links
         nextoffset := least(_offset + _limit, number_matched - 1);
         prevoffset := greatest(_offset - _limit, 0);
-        IF _offset = 0 THEN -- no previous paging
 
-            links := jsonb_build_array(
-                jsonb_build_object(
-                    'rel', 'next',
-                    'type', 'application/json',
-                    'method', 'GET' ,
-                    'href', base_url,
-                    'body', jsonb_build_object('offset', nextoffset),
-                    'merge', TRUE
-                )
-            );
-        ELSE
-            links := jsonb_build_array(
-                jsonb_build_object(
+        IF _offset > 0 THEN
+            links := links || jsonb_build_object(
                     'rel', 'prev',
                     'type', 'application/json',
                     'method', 'GET' ,
                     'href', base_url,
                     'body', jsonb_build_object('offset', prevoffset),
                     'merge', TRUE
-                ),
-                jsonb_build_object(
+                );
+        END IF;
+
+        IF (_offset + _limit < number_matched)  THEN
+            links := links || jsonb_build_object(
                     'rel', 'next',
                     'type', 'application/json',
                     'method', 'GET' ,
                     'href', base_url,
                     'body', jsonb_build_object('offset', nextoffset),
                     'merge', TRUE
-                )
-            );
+                );
         END IF;
+
     END IF;
 
     ret := jsonb_build_object(

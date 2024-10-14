@@ -10,6 +10,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   DOCKER_BUILDKIT: 1
+  PIP_BREAK_SYSTEM_PACKAGES: 1
 
 jobs:
   changes:
@@ -35,12 +36,11 @@ jobs:
     - id: check
       run: |
         buildpg=false;
-        ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
+        ref=$(echo ${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}} | tr / _);
         [[ "${{ steps.filter.outputs.pgstac }}" == "true" ]] && buildpg=true || ref=main;
         echo "pgtag=${{ env.REGISTRY }}/stac-utils/pgstac-postgres:$ref" >>$GITHUB_OUTPUT;
         echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
         buildy=false;
-        ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
         [[ "${{ steps.filter.outputs.pypgstac }}" == "true" ]] && buildpy=true || ref=main;
         echo "pytag=${{ env.REGISTRY }}/stac-utils/pgstac-pyrust:$ref" >>$GITHUB_OUTPUT;
         echo "buildpy=$buildpg" >>$GITHUB_OUTPUT;

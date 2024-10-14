@@ -1,4 +1,4 @@
-FROM rust:1-slim-bullseye as pyrustbase
+FROM rust:1-slim-bullseye AS pyrustbase
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
 ENV PIP_ROOT_USER_ACTION=ignore
@@ -17,7 +17,7 @@ RUN \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
 
-FROM pyrustbase as pypgstac
+FROM pyrustbase AS pypgstac
 COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
 WORKDIR /tmp
 RUN \
@@ -25,6 +25,6 @@ RUN \
     && uv pip install --system -r /tmp/requirements.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
-COPY src/pgstac/migrations /opt/src/pgstac/migrations
+COPY src/pgstac /opt/src/pgstac
 WORKDIR /opt/src/pypgstac
 RUN uv pip install --system -e . && rm -rf /usr/local/cargo/registry

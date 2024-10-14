@@ -251,6 +251,101 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.collection_search(_search jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    out_records jsonb;
+    number_matched bigint := collection_search_matched(_search);
+    number_returned bigint;
+    _limit int := coalesce((_search->>'limit')::float::int, 10);
+    _offset int := coalesce((_search->>'offset')::float::int, 0);
+    links jsonb := '[]';
+    ret jsonb;
+    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
+    prevoffset int;
+    nextoffset int;
+BEGIN
+    SELECT
+        coalesce(jsonb_agg(c), '[]')
+    INTO out_records
+    FROM collection_search_rows(_search) c;
+
+    number_returned := jsonb_array_length(out_records);
+
+
+
+    IF _limit <= number_matched AND number_matched > 0 THEN --need to have paging links
+        nextoffset := least(_offset + _limit, number_matched - 1);
+        prevoffset := greatest(_offset - _limit, 0);
+
+        IF _offset > 0 THEN
+            links := links || jsonb_build_object(
+                    'rel', 'prev',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', prevoffset),
+                    'merge', TRUE
+                );
+        END IF;
+
+        IF (_offset + _limit < number_matched)  THEN
+            links := links || jsonb_build_object(
+                    'rel', 'next',
+                    'type', 'application/json',
+                    'method', 'GET' ,
+                    'href', base_url,
+                    'body', jsonb_build_object('offset', nextoffset),
+                    'merge', TRUE
+                );
+        END IF;
+
+    END IF;
+
+    ret := jsonb_build_object(
+        'collections', out_records,
+        'numberMatched', number_matched,
+        'numberReturned', number_returned,
+        'links', links
+    );
+    RETURN ret;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.maintain_partition_queries(part text DEFAULT 'items'::text, dropindexes boolean DEFAULT false, rebuildindexes boolean DEFAULT false, idxconcurrently boolean DEFAULT false)
+ RETURNS SETOF text
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+   rec record;
+   q text;
+BEGIN
+    FOR rec IN (
+        SELECT * FROM queryable_indexes(part,true)
+    ) LOOP
+        q := format(
+            'SELECT maintain_index(
+                %L,%L,%L,%L,%L
+            );',
+            rec.indexname,
+            rec.queryable_idx,
+            dropindexes,
+            rebuildindexes,
+            idxconcurrently
+        );
+        RAISE NOTICE 'Q: %', q;
+        RETURN NEXT q;
+    END LOOP;
+    RETURN;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.stac_search_to_where(j jsonb)
  RETURNS text
  LANGUAGE plpgsql
@@ -265,10 +360,9 @@ DECLARE
     sdate timestamptz;
     edate timestamptz;
     filterlang text;
-    filter jsonb = j->'filter';
+    filter jsonb := j->'filter';
     ft_query tsquery;
 BEGIN
-    RAISE DEBUG 'STAC SEARCH_TO_WHERE: %', j;
     IF j ? 'ids' THEN
         where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
     END IF;
@@ -329,7 +423,7 @@ BEGIN
     ELSIF filterlang = 'cql-json' THEN
         filter := cql1_to_cql2(filter);
     END IF;
-    RAISE DEBUG 'FILTER: %', filter;
+    RAISE NOTICE 'FILTER: %', filter;
     where_segments := where_segments || cql2_query(filter);
     IF cardinality(where_segments) < 1 THEN
         RETURN ' TRUE ';
@@ -342,6 +436,177 @@ BEGIN
     END IF;
     RETURN _where;
 
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.where_stats(inwhere text, updatestats boolean DEFAULT false, conf jsonb DEFAULT NULL::jsonb)
+ RETURNS search_wheres
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    t timestamptz;
+    i interval;
+    explain_json jsonb;
+    partitions text[];
+    sw search_wheres%ROWTYPE;
+    inwhere_hash text := md5(inwhere);
+    _context text := lower(context(conf));
+    _stats_ttl interval := context_stats_ttl(conf);
+    _estimated_cost_threshold float := context_estimated_cost(conf);
+    _estimated_count_threshold int := context_estimated_count(conf);
+    ro bool := pgstac.readonly(conf);
+BEGIN
+    -- If updatestats is true then set ttl to 0
+    IF updatestats THEN
+        RAISE DEBUG 'Updatestats set to TRUE, setting TTL to 0';
+        _stats_ttl := '0'::interval;
+    END IF;
+
+    -- If we don't need to calculate context, just return
+    IF _context = 'off' THEN
+        sw._where = inwhere;
+        RETURN sw;
+    END IF;
+
+    -- Get any stats that we have.
+    IF NOT ro THEN
+        -- If there is a lock where another process is
+        -- updating the stats, wait so that we don't end up calculating a bunch of times.
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    ELSE
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
+    END IF;
+
+    -- If there is a cached row, figure out if we need to update
+    IF
+        sw IS NOT NULL
+        AND sw.statslastupdated IS NOT NULL
+        AND sw.total_count IS NOT NULL
+        AND now() - sw.statslastupdated <= _stats_ttl
+    THEN
+        -- we have a cached row with data that is within our ttl
+        RAISE DEBUG 'Stats present in table and lastupdated within ttl: %', sw;
+        IF NOT ro THEN
+            RAISE DEBUG 'Updating search_wheres only bumping lastused and usecount';
+            UPDATE search_wheres SET
+                lastused = now(),
+                usecount = search_wheres.usecount + 1
+            WHERE md5(_where) = inwhere_hash
+            RETURNING * INTO sw;
+        END IF;
+        RAISE DEBUG 'Returning cached counts. %', sw;
+        RETURN sw;
+    END IF;
+
+    -- Calculate estimated cost and rows
+    -- Use explain to get estimated count/cost
+    IF sw.estimated_count IS NULL OR sw.estimated_cost IS NULL THEN
+        RAISE DEBUG 'Calculating estimated stats';
+        t := clock_timestamp();
+        EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+            INTO explain_json;
+        RAISE DEBUG 'Time for just the explain: %', clock_timestamp() - t;
+        i := clock_timestamp() - t;
+
+        sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
+        sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
+        sw.time_to_estimate := extract(epoch from i);
+    END IF;
+
+    RAISE DEBUG 'ESTIMATED_COUNT: %, THRESHOLD %', sw.estimated_count, _estimated_count_threshold;
+    RAISE DEBUG 'ESTIMATED_COST: %, THRESHOLD %', sw.estimated_cost, _estimated_cost_threshold;
+
+    -- If context is set to auto and the costs are within the threshold return the estimated costs
+    IF
+        _context = 'auto'
+        AND sw.estimated_count >= _estimated_count_threshold
+        AND sw.estimated_cost >= _estimated_cost_threshold
+    THEN
+        IF NOT ro THEN
+            INSERT INTO search_wheres (
+                _where,
+                lastused,
+                usecount,
+                statslastupdated,
+                estimated_count,
+                estimated_cost,
+                time_to_estimate,
+                total_count,
+                time_to_count
+            ) VALUES (
+                inwhere,
+                now(),
+                1,
+                now(),
+                sw.estimated_count,
+                sw.estimated_cost,
+                sw.time_to_estimate,
+                null,
+                null
+            ) ON CONFLICT ((md5(_where)))
+            DO UPDATE SET
+                lastused = EXCLUDED.lastused,
+                usecount = search_wheres.usecount + 1,
+                statslastupdated = EXCLUDED.statslastupdated,
+                estimated_count = EXCLUDED.estimated_count,
+                estimated_cost = EXCLUDED.estimated_cost,
+                time_to_estimate = EXCLUDED.time_to_estimate,
+                total_count = EXCLUDED.total_count,
+                time_to_count = EXCLUDED.time_to_count
+            RETURNING * INTO sw;
+        END IF;
+        RAISE DEBUG 'Estimates are within thresholds, returning estimates. %', sw;
+        RETURN sw;
+    END IF;
+
+    -- Calculate Actual Count
+    t := clock_timestamp();
+    RAISE NOTICE 'Calculating actual count...';
+    EXECUTE format(
+        'SELECT count(*) FROM items WHERE %s',
+        inwhere
+    ) INTO sw.total_count;
+    i := clock_timestamp() - t;
+    RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
+    sw.time_to_count := extract(epoch FROM i);
+
+    IF NOT ro THEN
+        INSERT INTO search_wheres (
+            _where,
+            lastused,
+            usecount,
+            statslastupdated,
+            estimated_count,
+            estimated_cost,
+            time_to_estimate,
+            total_count,
+            time_to_count
+        ) VALUES (
+            inwhere,
+            now(),
+            1,
+            now(),
+            sw.estimated_count,
+            sw.estimated_cost,
+            sw.time_to_estimate,
+            sw.total_count,
+            sw.time_to_count
+        ) ON CONFLICT ((md5(_where)))
+        DO UPDATE SET
+            lastused = EXCLUDED.lastused,
+            usecount = search_wheres.usecount + 1,
+            statslastupdated = EXCLUDED.statslastupdated,
+            estimated_count = EXCLUDED.estimated_count,
+            estimated_cost = EXCLUDED.estimated_cost,
+            time_to_estimate = EXCLUDED.time_to_estimate,
+            total_count = EXCLUDED.total_count,
+            time_to_count = EXCLUDED.time_to_count
+        RETURNING * INTO sw;
+    END IF;
+    RAISE DEBUG 'Returning with actual count. %', sw;
+    RETURN sw;
 END;
 $function$
 ;
