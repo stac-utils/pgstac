@@ -36,7 +36,7 @@ jobs:
     - id: check
       run: |
         buildpg=false;
-        ref=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}};
+        ref=$(${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}} | tr / _);
         [[ "${{ steps.filter.outputs.pgstac }}" == "true" ]] && buildpg=true || ref=main;
         echo "pgtag=${{ env.REGISTRY }}/stac-utils/pgstac-postgres:$ref" >>$GITHUB_OUTPUT;
         echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
