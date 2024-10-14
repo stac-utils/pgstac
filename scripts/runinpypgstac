@@ -25,16 +25,30 @@ do
         NOCACHE="--no-cache"
     elif [[ $ARG == "--build" ]]; then
         BUILD=1
+    elif [[ $ARG == "--cpfiles" ]]; then
+        CPFILES=1
     else
         CONTAINER_ARGS+=($ARG)
     fi
 done
 if [[ $BUILD == 1 ]]; then
     echo "Building docker images..."
+    docker compose down -v --remove-orphans
     docker compose build $NOCACHE
+    docker compose up -d pgstac
+    sleep 4
 fi
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
-docker compose run -T --rm -u $(id -u):$(id -g) pypgstac "${CONTAINER_ARGS[@]}"
+if [[ $CPFILES == 1 ]]; then
+    docker ps | grep pypgstacworker
+    [[ $? == 0 ]] && echo "Killing pypgstacworker" && docker kill pypgstacworker
+    docker compose run -d --rm --name pypgstacworker pypgstac /bin/bash
+    docker compose exec pypgstac "${CONTAINER_ARGS[@]}"
+    docker cp pypgstacworker:/opt/src $SCRIPT_DIR/..
+    docker kill pypgstacworker
+else
+    docker compose run -T --rm pypgstac "${CONTAINER_ARGS[@]}"
+fi
 JOBEXITCODE=$?
 [[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac
 exit $JOBEXITCODE

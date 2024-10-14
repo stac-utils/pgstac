@@ -4,6 +4,7 @@ services:
     image: pgstac
     build:
       context: .
+      network: host
       dockerfile: docker/pgstac/Dockerfile
       target: pgstac
     platform: linux/amd64
@@ -24,6 +25,7 @@ services:
     image: pypgstac
     build:
       context: .
+      network: host
       dockerfile: docker/pypgstac/Dockerfile
       target: pypgstac
     platform: linux/amd64

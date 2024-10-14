@@ -4,6 +4,10 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 export SRCDIR=$SCRIPT_DIR/../../../src
 export PGSTACDIR=$SRCDIR/pgstac
 
+echo $SCRIPT_DIR
+echo $SRCDIR
+echo $PGSTACDIR
+
 if [[ "${CI}" ]]; then
     set -x
 fi
@@ -42,7 +46,7 @@ function test_formatting(){
     cd $SRCDIR/pypgstac
 
     echo "Running ruff"
-    ruff python tests
+    ruff -n python tests
 
     echo "Running mypy"
     mypy python

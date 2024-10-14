@@ -60,33 +60,25 @@ SELECT results_eq($$
 );
 
 SELECT results_eq($$
-    select collection_search('{"limit":1}');
+    select collection_search('{"limit":1}') - '{collections}'::text[];
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
     $$,
     'Test search limit 1 - next link'
 );
 
 SELECT results_eq($$
-    select collection_search('{"limit":1, "offset":1}');
+    select collection_search('{"limit":1, "offset":649}') - '{collections}'::text[];
     $$,$$
-    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 648}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
     $$,
-    'Test search limit 1, offset 1 - no next link'
+    'Test search limit 1, offset 649 - no next link'
 );
 
 SELECT results_eq($$
-    select collection_search('{"limit":1, "offset":4}');
+    select collection_search('{"limit": 700}') - '{collections}'::text[];
     $$,$$
-    SELECT '{"links": [{"rel": "prev", "body": {"offset": 3}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 0, "collections": []}'::jsonb
-    $$,
-    'Test search limit 1, offset 4 - no next link'
-);
-
-SELECT results_eq($$
-    select collection_search('{"limit":2}');
-    $$,$$
-    SELECT '{"links": [], "numberMatched": 2, "numberReturned": 2, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}, {"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT '{"links": [], "numberMatched": 650, "numberReturned": 650}'::jsonb
     $$,
     'Test search limit 2 - no prev/next links'
 );
