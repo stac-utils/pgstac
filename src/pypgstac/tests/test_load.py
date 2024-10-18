@@ -449,3 +449,20 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
         """,
     )
     assert cdtmin == "2011-07-31 00:00:00+00"
+
+
+def test_load_items_when_partition_creation_disabled(loader: Loader) -> None:
+    """
+    Test pypgstac items loader raises an exception when partition
+    does not exist and partition creation is disabled.
+    """
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode=Methods.insert,
+    )
+    with pytest.raises(ValueError):
+        loader.load_items(
+            str(TEST_ITEMS),
+            insert_mode=Methods.insert,
+            partition_update_enabled=False,
+        )

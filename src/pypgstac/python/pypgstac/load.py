@@ -270,6 +270,7 @@ class Loader:
         partition: Partition,
         items: Iterable[Dict[str, Any]],
         insert_mode: Optional[Methods] = Methods.insert,
+        partition_update_enabled: Optional[bool] = True,
     ) -> None:
         """Load items data for a single partition."""
         conn = self.db.connect()
@@ -441,15 +442,20 @@ class Loader:
                         "Available modes are insert, ignore, upsert, and delsert."
                         f"You entered {insert_mode}.",
                     )
-                logger.debug("Updating Partition Stats")
-                cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
-                logger.debug(cur.statusmessage)
-                logger.debug(f"Rows affected: {cur.rowcount}")
+                if partition_update_enabled:
+                    logger.debug("Updating Partition Stats")
+                    cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
+                    logger.debug(cur.statusmessage)
+                    logger.debug(f"Rows affected: {cur.rowcount}")
         logger.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds",
         )
 
-    def _partition_update(self, item: Dict[str, Any]) -> str:
+    def _partition_update(
+        self,
+        item: Dict[str, Any],
+        update_enabled: Optional[bool] = True,
+    ) -> str:
         """Update the cached partition with the item information and return the name.
 
         This method will mark the partition as dirty if the bounds of the partition
@@ -515,20 +521,24 @@ class Loader:
             partition = self._partition_cache[partition_name]
 
         if partition:
-            # Only update the partition if the item is outside the current bounds
-            if item["datetime"] < partition.datetime_range_min:
-                partition.datetime_range_min = item["datetime"]
-                partition.requires_update = True
-            if item["datetime"] > partition.datetime_range_max:
-                partition.datetime_range_max = item["datetime"]
-                partition.requires_update = True
-            if item["end_datetime"] < partition.end_datetime_range_min:
-                partition.end_datetime_range_min = item["end_datetime"]
-                partition.requires_update = True
-            if item["end_datetime"] > partition.end_datetime_range_max:
-                partition.end_datetime_range_max = item["end_datetime"]
-                partition.requires_update = True
+            if update_enabled:
+                # Only update the partition if the item is outside the current bounds
+                if item["datetime"] < partition.datetime_range_min:
+                    partition.datetime_range_min = item["datetime"]
+                    partition.requires_update = True
+                if item["datetime"] > partition.datetime_range_max:
+                    partition.datetime_range_max = item["datetime"]
+                    partition.requires_update = True
+                if item["end_datetime"] < partition.end_datetime_range_min:
+                    partition.end_datetime_range_min = item["end_datetime"]
+                    partition.requires_update = True
+                if item["end_datetime"] > partition.end_datetime_range_max:
+                    partition.end_datetime_range_max = item["end_datetime"]
+                    partition.requires_update = True
         else:
+            if not update_enabled:
+                raise Exception(f"Partition {partition_name} does not exist.")
+
             # No partition exists yet; create a new one from item
             partition = Partition(
                 name=partition_name,
@@ -544,7 +554,11 @@ class Loader:
 
         return partition_name
 
-    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+    def read_dehydrated(
+        self,
+        file: Union[Path, str] = "stdin",
+        partition_update_enabled: Optional[bool] = True,
+    ) -> Generator:
         if file is None:
             file = "stdin"
         if isinstance(file, str):
@@ -575,15 +589,21 @@ class Loader:
                             item[field] = content_value
                         else:
                             item[field] = tab_split[i]
-                    item["partition"] = self._partition_update(item)
+                    item["partition"] = self._partition_update(
+                        item,
+                        partition_update_enabled,
+                    )
                     yield item
 
     def read_hydrated(
-        self, file: Union[Path, str, Iterator[Any]] = "stdin",
+        self,
+        file: Union[Path, str,
+        Iterator[Any]] = "stdin",
+        partition_update_enabled: Optional[bool] = True,
     ) -> Generator:
         for line in read_json(file):
             item = self.format_item(line)
-            item["partition"] = self._partition_update(item)
+            item["partition"] = self._partition_update(item, partition_update_enabled)
             yield item
 
     def load_items(
@@ -592,6 +612,7 @@ class Loader:
         insert_mode: Optional[Methods] = Methods.insert,
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
+        partition_update_enabled: Optional[bool] = True,
     ) -> None:
         """Load items json records."""
         self.check_version()
@@ -602,15 +623,17 @@ class Loader:
         self._partition_cache = {}
 
         if dehydrated and isinstance(file, str):
-            items = self.read_dehydrated(file)
+            items = self.read_dehydrated(file, partition_update_enabled)
         else:
-            items = self.read_hydrated(file)
+            items = self.read_hydrated(file, partition_update_enabled)
 
         for chunkin in chunked_iterable(items, chunksize):
             chunk = list(chunkin)
             chunk.sort(key=lambda x: x["partition"])
             for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
-                self.load_partition(self._partition_cache[k], g, insert_mode)
+                self.load_partition(
+                    self._partition_cache[k], g, insert_mode, partition_update_enabled,
+                )
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
