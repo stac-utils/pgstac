@@ -20,6 +20,11 @@ env:
   PGDATABASE: postgres
   PGUSER: postgres
   POSTGRES_PASSWORD: postgres
+  UV_LINK_MODE: copy
+  UV_COMPILE_BYTECODE: 1
+  UV_PROJECT_ENVIRONMENT: /venv
+  UV_PYTHON_INSTALL_DIR: /venv/bin
+  VIRTUAL_ENVIRONMENT: /venv
 
 jobs:
   # This builds a base postgres image that has everything installed to be able to run pgstac.
@@ -162,17 +167,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
       - name: Get Wheel
         uses: actions/download-artifact@v4
         with:
             name: wheels-x86_64
             path: /tmp/wheels
       - name: Install pypgstac
-        working-directory: /__w/pgstac/pgstac/src/pypgstac
         run:  |
           for i in /tmp/wheels/pypgstac*x86_64.whl; do uv pip install pypgstac @ $i; done
 
       - name: Run tests
-        working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
         run:  |
-          ./test
+          ./home/runner/work/pgstac/pgstac/docker/bin/test
