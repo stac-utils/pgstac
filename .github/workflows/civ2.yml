@@ -182,7 +182,7 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          for i in /tmp/wheels/pypgstac*x86_64.whl; do uv pip install pypgstac @ $i; done
+          for i in /tmp/wheels/pypgstac*x86_64.whl; do echo $i; uv pip install pypgstac@$i; done
 
       - name: Run tests
         run:  |
