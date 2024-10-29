@@ -20,6 +20,11 @@ env:
   PGDATABASE: postgres
   PGUSER: postgres
   POSTGRES_PASSWORD: postgres
+  SCRIPTS: /home/runner/work/pgstac/pgstac/docker/pypgstac/bin
+  PGSTACDIR: /home/runner/work/pgstac/pgstac/src/pgstac
+  PYPGSTACDIR: /home/runner/work/pgstac/pgstac/src/pypgstac
+  MIGRATIONSDIR: /home/runner/work/pgstac/pgstac/src/pgstac/migrations
+  TESTS: /home/runner/work/pgstac/pgstac/src/pypgstac/tests
 
 
 jobs:
@@ -210,7 +215,7 @@ jobs:
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
           . .venv/bin/activate
-          ls -altrh /home/runner/work/pgstac/pgstac
-          ls -altrh /home/runner/work/pgstac/pgstac/docker
-          ls -altrh /home/runner/work/pgstac/pgstac/docker/pypgstac/bin
-          bash /home/runner/work/pgstac/pgstac/docker/pypgstac/bin/test
+          export PATH=$SCRIPTS:$PWD/.venv/bin:$PATH
+          echo $PATH
+          which test
+          test
