@@ -201,6 +201,7 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
+          cd /home/runner/work/pgstac/pgstac/src/pypgstac
           uv venv
           . .venv/bin/activate
           uv pip install psycopg[binary] psycopg-pool
