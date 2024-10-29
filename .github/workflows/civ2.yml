@@ -22,9 +22,9 @@ env:
   POSTGRES_PASSWORD: postgres
   UV_LINK_MODE: copy
   UV_COMPILE_BYTECODE: 1
-  UV_PROJECT_ENVIRONMENT: /venv
-  UV_PYTHON_INSTALL_DIR: /venv/bin
-  VIRTUAL_ENVIRONMENT: /venv
+  UV_PROJECT_ENVIRONMENT: /tmp/venv
+  UV_PYTHON_INSTALL_DIR: /tmp/venv/bin
+  VIRTUAL_ENVIRONMENT: /tmp/venv
 
 jobs:
   # This builds a base postgres image that has everything installed to be able to run pgstac.
@@ -99,6 +99,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
+          python-version: '3.10'
           architecture: ${{ matrix.target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -182,7 +183,10 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          for i in /tmp/wheels/pypgstac*x86_64.whl; do echo $i; uv pip install pypgstac@$i; done
+          uv venv --allow-existing --relocatable /tmp/venv
+          uv pip install psycopg[binary] psycopg-pool
+          uv sync --frozen --no-install-project --extra test --extra dev
+          for i in /tmp/wheels/pypgstac*x86_64.whl; do echo "Installing $i"; uv pip install pypgstac@$i; done
 
       - name: Run tests
         run:  |
