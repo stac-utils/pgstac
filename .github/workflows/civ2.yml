@@ -213,4 +213,7 @@ jobs:
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
           . .venv/bin/activate
+          ls -altrh /home/runner/work/pgstac/pgstac
+          ls -altrh /home/runner/work/pgstac/pgstac/docker
+          ls -altrh /home/runner/work/pgstac/pgstac/docker/pypgstac/bin
           ./home/runner/work/pgstac/pgstac/docker/pypgstac/bin/test
