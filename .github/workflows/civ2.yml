@@ -160,6 +160,10 @@ jobs:
     services:
       postgres:
         image: ghcr.io/stac-utils/pgstac-postgres:latest
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DATABASE: postgres
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
