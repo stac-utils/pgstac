@@ -211,4 +211,6 @@ jobs:
 
       - name: Run tests
         run:  |
-          ./home/runner/work/pgstac/pgstac/docker/bin/test
+          cd /home/runner/work/pgstac/pgstac/src/pypgstac
+          . .venv/bin/activate
+          ./home/runner/work/pgstac/pgstac/docker/pypgstac/bin/test
