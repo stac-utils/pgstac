@@ -202,7 +202,7 @@ jobs:
       - name: Install pypgstac
         run:  |
           uv venv
-          .venv/bin/activate
+          . .venv/bin/activate
           uv pip install psycopg[binary] psycopg-pool
           uv sync --frozen --no-install-project --extra test --extra dev
           uv pip install --offline --find-links /tmp/wheels pypgstac
