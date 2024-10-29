@@ -1,4 +1,5 @@
 """Tests for pypgstac."""
+
 import json
 import re
 from pathlib import Path
@@ -32,7 +33,8 @@ S1_GRD_ITEM = (
 
 
 def version_increment(source_version: str) -> str:
-    source_version = re.sub("-dev$","",source_version)
+    """Test incrementing version."""
+    source_version = re.sub("-dev$", "", source_version)
     version = V(source_version)
     return ".".join(
         map(
@@ -267,11 +269,15 @@ def test_load_items_dehydrated_ignore_succeeds(loader: Loader) -> None:
     )
 
     loader.load_items(
-        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.insert, dehydrated=True,
+        str(TEST_DEHYDRATED_ITEMS),
+        insert_mode=Methods.insert,
+        dehydrated=True,
     )
 
     loader.load_items(
-        str(TEST_DEHYDRATED_ITEMS), insert_mode=Methods.ignore, dehydrated=True,
+        str(TEST_DEHYDRATED_ITEMS),
+        insert_mode=Methods.ignore,
+        dehydrated=True,
     )
 
 
@@ -324,7 +330,7 @@ def test_s1_grd_load_and_query(loader: Loader) -> None:
                     "op": "=",
                     "args": [
                         {"property": "id"},
-                        "S1A_IW_GRDH_1SDV_20220428T034417_20220428T034442_042968_05213C",  # noqa: E501
+                        "S1A_IW_GRDH_1SDV_20220428T034417_20220428T034442_042968_05213C",
                     ],
                 },
             ],
@@ -355,17 +361,20 @@ def test_load_dehydrated(loader: Loader) -> None:
     dehydrated_items = HERE / "data-files" / "load" / "dehydrated.txt"
 
     loader.load_items(
-        str(dehydrated_items), insert_mode=Methods.insert, dehydrated=True,
+        str(dehydrated_items),
+        insert_mode=Methods.insert,
+        dehydrated=True,
     )
 
 
 def test_load_collections_incompatible_version(loader: Loader) -> None:
     """Test pypgstac collections loader raises an exception for incompatible version."""
     with mock.patch(
-        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
+        "pypgstac.db.PgstacDB.version",
+        new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Could not parse dummy"):
             loader.load_collections(
                 str(TEST_COLLECTIONS_JSON),
                 insert_mode=Methods.insert,
@@ -379,10 +388,11 @@ def test_load_items_incompatible_version(loader: Loader) -> None:
         insert_mode=Methods.insert,
     )
     with mock.patch(
-        "pypgstac.db.PgstacDB.version", new_callable=mock.PropertyMock,
+        "pypgstac.db.PgstacDB.version",
+        new_callable=mock.PropertyMock,
     ) as mock_version:
         mock_version.return_value = "dummy"
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Could not parse dummy"):
             loader.load_items(
                 str(TEST_ITEMS),
                 insert_mode=Methods.insert,
@@ -392,7 +402,8 @@ def test_load_items_incompatible_version(loader: Loader) -> None:
 def test_load_compatible_major_minor_version(loader: Loader) -> None:
     """Test pypgstac loader doesn't raise an exception."""
     with mock.patch(
-        "pypgstac.load.__version__", version_increment(__version__),
+        "pypgstac.load.__version__",
+        version_increment(__version__),
     ) as mock_version:
         loader.load_collections(
             str(TEST_COLLECTIONS_JSON),

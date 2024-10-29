@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-export SRCDIR=$SCRIPT_DIR/../../../src
-export PGSTACDIR=$SRCDIR/pgstac
+# SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+# export SRCDIR=$SCRIPT_DIR/../../../src
+# export PGSTACDIR=$SRCDIR/pgstac
 
-echo $SCRIPT_DIR
-echo $SRCDIR
-echo $PGSTACDIR
+# echo $SCRIPT_DIR
+# echo $SRCDIR
+# echo $PGSTACDIR
 
 if [[ "${CI}" ]]; then
     set -x
@@ -43,26 +43,27 @@ EOSQL
 }
 
 function test_formatting(){
-    cd $SRCDIR/pypgstac
+    cd $PYPGSTACDIR
 
     echo "Running ruff"
-    ruff -n python tests
+    ruff format python tests
+    ruff check python tests
 
     echo "Running mypy"
     mypy python
 
-    echo "Checking if there are any staged migrations."
-    find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
+    echo "Checking if there are any staged migrations in $MIGRATIONSDIR."
+    find "$MIGRATIONSDIR" | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
 
 
     VERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
-    echo $VERSION
+    echo "VERSION: $VERSION"
     if echo $VERSION | grep "dev"; then
         VERSION="unreleased"
     fi
 
-    echo "Checking whether base sql migration exists for pypgstac version."
-    [ -f $SRCDIR/pgstac/migrations/pgstac."${VERSION}".sql ] || { echo "****FAIL No Migration exists pypgstac/migrations/pgstac.${VERSION}.sql"; exit 1; }
+    echo "Checking $MIGRATIONSDIR to see whether base sql migration exists for pypgstac version."
+    [ -f $MIGRATIONSDIR/pgstac."${VERSION}".sql ] || { echo "****FAIL No Migration exists $MIGRATIONSDIR/pgstac."${VERSION}".sql"; exit 1; }
 
     echo "Congratulations! All formatting tests pass."
 }
@@ -133,11 +134,11 @@ psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";
 function test_pypgstac(){
 [[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
 TEMPLATEDB=${1:-pgstac_test_db_template}
-    cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e . --no-deps
+    cd $PYPGSTACDIR
+    # python -m venv venv
+    # source venv/bin/activate
+    # pip install --cache /tmp/.pipcache --upgrade pip
+    # pip install --cache /tmp/.pipcache -e . --no-deps
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
@@ -156,12 +157,7 @@ ALTER DATABASE pgstac_test_migration SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
-    cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e .[dev,test,psycopg]
-
+    cd $PYPGSTACDIR
     pypgstac migrate --toversion 0.3.0
     pypgstac --version
 

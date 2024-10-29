@@ -1,30 +1,159 @@
-FROM rust:1-slim-bullseye AS pyrustbase
-ENV PYTHONWRITEBYTECODE=1
-ENV PYTHONBUFFERED=1
-ENV PIP_ROOT_USER_ACTION=ignore
-ENV PYTHONPATH="/opt/src/pypgstac:$PYTHONPATH"
-ENV PATH="/opt/docker/pypgstac/bin:$PATH"
+ARG UV_VERSION=latest
+ARG PY_VERSION=3.12
+
+FROM ghcr.io/pyo3/maturin AS pypgstacbuilder
+WORKDIR /io
+RUN --mount=type=bind,source=./src/pypgstac,target=/io \
+    --mount=type=bind,source=./src/pgstac/migrations,target=/io/python/pypgstac/migrations \
+    --mount=type=cache,target=/target,sharing=locked \
+    maturin build --release --out /wheels --target-dir /target
+ENTRYPOINT []
+CMD []
+
+FROM ghcr.io/astral-sh/uv:python3.9-bookworm-slim AS pypgstac-slim
+ENV \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/venv \
+    UV_PYTHON_INSTALL_DIR=/venv/bin \
+    VIRTUAL_ENVIRONMENT=/venv \
+    PATH=/venv/bin:$PATH
+WORKDIR /opt/src/pypgstac
 RUN \
+    --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
+    --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
+    uv venv --allow-existing --relocatable /venv \
+    && uv sync --frozen --no-install-project \
+    && uv pip install psycopg[binary] psycopg-pool
+
+RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/wheels \
+    for i in /wheels/pypgstac*x86_64.whl; do uv pip install pypgstac@$i; done
+
+ENTRYPOINT []
+CMD ["/bin/true"]
+
+FROM ghcr.io/astral-sh/uv:python3.9-bookworm-slim AS pypgstac
+ENV \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/venv \
+    UV_PYTHON_INSTALL_DIR=/venv/bin \
+    VIRTUAL_ENVIRONMENT=/venv \
+    PATH=/scripts:/venv/bin:$PATH \
+    SCRIPTS=/scripts \
+    PGSTACDIR=/src/pgstac \
+    PYPGSTACDIR=/src/pypgstac \
+    MIGRATIONSDIR=/src/pgstac/migrations \
+    TESTS=/src/pypgstac/tests
+WORKDIR /opt/src/pypgstac
+RUN \
+    --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
+    --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
     apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        postgresql-client \
-        python3 python-is-python3 python3-pip python3-venv \
-        build-essential clang clang-11 gcc git gnupg libssl-dev llvm-11 lsb-release make pkg-config \
-    && python3 -m pip install --upgrade pip uv wheel setuptools \
+        postgresql-client libpq-dev python3-dev \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
-    && rm -rf /var/lib/apt/lists/*
+    && uv venv --allow-existing --relocatable /venv \
+    && uv sync --frozen --no-install-project --extra test --extra dev --extra migrations \
+    && uv pip install psycopg[binary] psycopg-pool setuptools
 
-FROM pyrustbase AS pypgstac
-COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
-WORKDIR /tmp
-RUN \
-    uv pip compile --all-extras /tmp/pyproject.toml >/tmp/requirements.txt \
-    && uv pip install --system -r /tmp/requirements.txt
-COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
-COPY src/pypgstac /opt/src/pypgstac
-COPY src/pgstac /opt/src/pgstac
-WORKDIR /opt/src/pypgstac
-RUN uv pip install --system -e . && rm -rf /usr/local/cargo/registry
+COPY ./docker/pypgstac/bin/ /scripts/
+COPY ./src /src
+
+RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/wheels \
+    for i in /wheels/pypgstac*x86_64.whl; do echo $i; uv pip install pypgstac@$i; done
+
+ENTRYPOINT []
+CMD ["/bin/true"]
+
+
+
+
+# # Image with tooling for compiling rust hydration code
+# FROM rust:1-slim-bullseye AS pypgstacbuilder
+# COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# ENV \
+#     UV_LINK_MODE=copy \
+#     UV_COMPILE_BYTECODE=1 \
+#     UV_PROJECT_ENVIRONMENT=/venv \
+#     UV_PYTHON_INSTALL_DIR=/venv/bin \
+#     VIRTUAL_ENVIRONMENT=/venv \
+#     PATH=/venv/bin:$PATH
+# RUN --mount=type=cache,target=/root/.cache/uv \
+#     --mount=type=cache,target=/var/cache/apt,sharing=locked \
+#     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+#     uv python install 3.12 \
+#     && uv venv --allow-existing --relocatable /venv \
+#     && apt-get update \
+#     && apt-get upgrade -y \
+#     && apt-get install -y --no-install-recommends \
+#         ca-certificates \
+#         postgresql-client \
+#         build-essential clang clang-11 gcc git gnupg libssl-dev llvm-11 lsb-release make pkg-config \
+#     && apt-get remove -y apt-transport-https \
+#     && apt-get clean && apt-get -y autoremove
+
+# WORKDIR /opt/src/pypgstac
+
+# RUN \
+#     --mount=type=cache,target=/root/.cache/uv \
+#     --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
+#     --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
+#     uv sync --frozen --no-install-project
+
+# ADD ./src /opt/src
+# WORKDIR /opt/src/pypgstac
+
+# RUN \
+#     --mount=type=cache,target=/root/.cache/uv \
+#     uv pip install .[psycopg]
+
+
+# # Image to use to run tests and migrations
+# FROM debian:bullseye-slim AS pypgstac-dev
+# COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# ENV \
+#     UV_LINK_MODE=copy \
+#     UV_COMPILE_BYTECODE=1 \
+#     UV_PROJECT_ENVIRONMENT=/venv \
+#     UV_PYTHON_INSTALL_DIR=/venv/bin \
+#     VIRTUAL_ENVIRONMENT=/venv \
+#     PATH=/venv/bin:$PATH
+# RUN --mount=type=cache,target=/root/.cache/uv \
+#     --mount=type=cache,target=/var/cache/apt,sharing=locked \
+#     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+#     uv python install 3.12 \
+#     && uv venv --allow-existing --relocatable /venv \
+#     && apt-get update \
+#     && apt-get upgrade -y \
+#     && apt-get install -y --no-install-recommends postgresql-client \
+#     && apt-get remove -y apt-transport-https \
+#     && apt-get clean && apt-get -y autoremove
+
+# WORKDIR /opt/src/pypgstac
+
+# RUN \
+#     --mount=type=cache,target=/root/.cache/uv \
+#     --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
+#     --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
+#     uv sync --frozen --no-install-project
+
+# ADD ./src /opt/src
+# WORKDIR /opt/src/pypgstac
+
+# RUN \
+#     --mount=type=cache,target=/root/.cache/uv \
+#     uv pip install .[psycopg]
+
+# COPY --from=pypgstacbuilder /venv /venv
+
+# # Slimmed down image with pypgstac installed
+# FROM debian:bullseye-slim AS pypgstac
+# ENV \
+#     VIRTUAL_ENVIRONMENT=/venv \
+#     PATH=/venv/bin:$PATH
+# COPY --from=pypgstacbuilder /venv /venv

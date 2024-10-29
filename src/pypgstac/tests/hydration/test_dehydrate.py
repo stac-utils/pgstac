@@ -1,3 +1,5 @@
+"""Test dehydration."""
+
 import json
 from pathlib import Path
 from typing import Any, Dict, cast
@@ -22,13 +24,19 @@ LANDSAT_ITEM = (
 
 
 class TestDehydrate:
+    """Class for testing Dehydration."""
+
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """Test dehydrate."""
         return hydration.dehydrate(base_item, item)
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
-        """
+        """Test landsat dehydration.
+
         Test that a dehydrated item is created properly from a raw item against a
         base item from a collection.
         """
@@ -42,11 +50,12 @@ class TestDehydrate:
         base_item = cast(
             Dict[str, Any],
             loader.db.query_one(
-                "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],),
+                "SELECT base_item FROM collections WHERE id=%s;",
+                (collection["id"],),
             ),
         )
 
-        assert type(base_item) == dict
+        assert type(base_item) is dict
 
         dehydrated = self.dehydrate(base_item, item)
 
@@ -88,19 +97,22 @@ class TestDehydrate:
         assert nir09["raster:bands"] == [{"unit": DO_NOT_MERGE_MARKER}]
 
     def test_single_depth_equals(self) -> None:
+        """Test single depth equals."""
         base_item = {"a": "first", "b": "second", "c": "third"}
         item = {"a": "first", "b": "second", "c": "third"}
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {}
 
     def test_nested_equals(self) -> None:
+        """Test nested equals."""
         base_item = {"a": "first", "b": "second", "c": {"d": "third"}}
         item = {"a": "first", "b": "second", "c": {"d": "third"}}
         dehydrated = self.dehydrate(base_item, item)
         assert dehydrated == {}
 
     def test_nested_extra_keys(self) -> None:
-        """
+        """Test nested extra keys.
+
         Test that items having nested dicts with keys not in base item preserve
         the additional keys in the dehydrated item.
         """
@@ -123,7 +135,8 @@ class TestDehydrate:
         assert dehydrated["a"] == [{"b3": 3}, {"c3": 3}]
 
     def test_equal_len_list_of_mixed_types(self) -> None:
-        """
+        """Test equal length list of mixed types.
+
         Test that a list of equal length containing matched
         types at each index dehydrates
         dicts and preserves item-values of other types.
@@ -152,6 +165,7 @@ class TestDehydrate:
         assert dehydrated["a"] == item["a"]
 
     def test_marked_non_merged_fields(self) -> None:
+        """Test marked non merged fields."""
         base_item = {"a": "first", "b": "second", "c": {"d": "third", "e": "fourth"}}
         item = {
             "a": "first",
@@ -162,6 +176,7 @@ class TestDehydrate:
         assert dehydrated == {"c": {"e": DO_NOT_MERGE_MARKER, "f": "fifth"}}
 
     def test_marked_non_merged_fields_in_list(self) -> None:
+        """Test marked non merged fields in list."""
         base_item = {
             "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}],
         }
@@ -176,6 +191,7 @@ class TestDehydrate:
         }
 
     def test_deeply_nested_dict(self) -> None:
+        """Test deeply nested dict."""
         base_item = {"a": {"b": {"c": {"d": "first", "d1": "second"}}}}
         item = {"a": {"b": {"c": {"d": "first", "d1": "second", "d2": "third"}}}}
 
@@ -193,7 +209,8 @@ class TestDehydrate:
         assert dehydrated == {"assets": {"thumbnail": {"href": "http://foo.com"}}}
 
     def test_invalid_assets_marked(self) -> None:
-        """
+        """Test invalid assets are marked.
+
         Assets can be included on item-assets that are not uniformly included on
         individual items. Ensure that base item asset keys without a matching item
         key are marked do-no-merge after dehydration.
@@ -220,7 +237,8 @@ class TestDehydrate:
         }
 
     def test_top_level_base_keys_marked(self) -> None:
-        """
+        """Test top level base keys are marked.
+
         Top level keys on the base item not present on the incoming item should
         be marked as do not merge, no matter the nesting level.
         """

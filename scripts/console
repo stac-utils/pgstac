@@ -17,9 +17,15 @@ Start a console in the dev container
 }
 
 while [[ "$#" > 0 ]]; do case $1 in
+    --psql)
+        docker compose up -d
+        docker compose exec pgstac psql
+        exit
+        ;;
     --db)
-        DB_CONSOLE=1
-        shift
+        docker compose up -d
+        docker compose exec pgstac /bin/bash
+        exit
         ;;
     *)
         usage "Unknown parameter passed: $1"
@@ -28,17 +34,4 @@ while [[ "$#" > 0 ]]; do case $1 in
         ;;
     esac; done
 
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-
-    docker compose up -d
-
-    if [[ "${DB_CONSOLE}" ]]; then
-
-        docker compose exec pgstac psql
-
-        exit 0
-    fi
-
-    docker compose exec pgstac /bin/bash
-
-fi
+docker compose run --rm pypgstac /bin/bash

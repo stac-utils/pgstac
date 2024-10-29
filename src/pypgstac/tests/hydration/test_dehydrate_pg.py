@@ -1,5 +1,7 @@
+"""Test dehydration in the database."""
+
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, Dict, Generator
 
 import psycopg
@@ -17,11 +19,10 @@ class TestDehydratePG(TDehydrate):
     def db(self) -> Generator:
         """Set up database connection."""
         origdb: str = os.getenv("PGDATABASE", "")
-        with psycopg.connect(autocommit=True) as conn:
-            try:
-                conn.execute("CREATE DATABASE pgstactestdb;")
-            except psycopg.errors.DuplicateDatabase:
-                pass
+        with psycopg.connect(autocommit=True) as conn, suppress(
+            psycopg.errors.DuplicateDatabase
+        ):
+            conn.execute("CREATE DATABASE pgstactestdb;")
 
         os.environ["PGDATABASE"] = "pgstactestdb"
 
@@ -36,7 +37,9 @@ class TestDehydratePG(TDehydrate):
         os.environ["PGDATABASE"] = origdb
 
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Dehydrate item using pgstac."""
         with self.db() as db:

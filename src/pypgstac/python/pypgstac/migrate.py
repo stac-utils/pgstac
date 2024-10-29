@@ -1,4 +1,5 @@
 """Utilities to help migrate pgstac schema."""
+
 import glob
 import logging
 import os
@@ -36,7 +37,8 @@ class MigrationPath:
     def parse_filename(self, filename: str) -> List[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", "",
+            "pgstac.",
+            "",
         )
         return filename.split("-")
 
@@ -96,7 +98,7 @@ class MigrationPath:
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
-    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -118,7 +120,7 @@ class Migrate:
         if toversion is None:
             toversion = __version__
         files = []
-        if re.search(r"-dev$",toversion):
+        if re.search(r"-dev$", toversion):
             logger.info("using unreleased version")
             toversion = "unreleased"
 
@@ -126,7 +128,7 @@ class Migrate:
             map(
                 int,
                 [
-                    self.db.pg_version[i:i + 2]
+                    self.db.pg_version[i : i + 2]
                     for i in range(0, len(self.db.pg_version), 2)
                 ],
             ),

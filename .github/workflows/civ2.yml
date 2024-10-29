@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - release*
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRYPATH: ghcr.io/stac-utils/
+  PGSTACIMAGE: ghcr.io/stac-utils/pgstac-postgres
+  PGSTACLATEST: ghcr.io/stac-utils/pgstac-postgres:latest
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKER_BUILDKIT: 1
+  PIP_BREAK_SYSTEM_PACKAGES: 1
+  PGPASSWORD: postgres
+  PGHOST: postgres
+  PGDATABASE: postgres
+  PGUSER: postgres
+  POSTGRES_PASSWORD: postgres
+
+jobs:
+  # This builds a base postgres image that has everything installed to be able to run pgstac.
+  buildpg:
+    name: Build and push base postgres image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Docker Meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+            images: |
+                pgstac/pgstac-postgres
+                ${{ env.PGSTACIMAGE }}
+            tags: |
+                type=ref,event=branch
+                type=ref,event=pr
+                type=semver,pattern={{version}}
+                type=semver,pattern={{major}}.{{minor}}
+                type=semver,pattern={{major}}
+                type=sha
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and Push Base Postgres
+        uses: docker/build-push-action@v5
+        with:
+          platforms: linux/amd64,linux/arm64
+          context: .
+          target: pgstac
+          file: docker/pgstac/Dockerfile
+          tags: ${{ steps.meta.outputs.tags }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha, mode=max
+
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: src/pypgstac
+          target: ${{ matrix.target }}
+          args: --release --out /tmp/dist
+          sccache: 'true'
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: /tmp/dist/*
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x64, x86]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: src/pypgstac
+          target: ${{ matrix.target }}
+          args: --release --out /tmp/dist
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: /tmp/dist/*
+
+  macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: src/pypgstac
+          target: ${{ matrix.target }}
+          args: --release --out /tmp/dist
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: /tmp/dist/*
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: src/pypgstac
+          command: sdist
+          args: --out /tmp/dist
+      - name: Upload sdist
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: /tmp/dist/*
+
+  test:
+    name: test
+    needs: [buildpg, linux]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ghcr.io/stac-utils/pgstac-postgres:latest
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Get Wheel
+        uses: actions/download-artifact@v4
+        with:
+            name: wheels
+            path: /tmp/wheels
+      - name: Install pypgstac
+        working-directory: /__w/pgstac/pgstac/src/pypgstac
+        run:  |
+          for i in /tmp/wheels/pypgstac*x86_64.whl; do uv pip install pypgstac@$i; done
+
+      - name: Run tests
+        working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
+        run:  |
+          ./test

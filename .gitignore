@@ -11,3 +11,6 @@ src/pypgstac/target
 src/pypgstac/python/pypgstac/*.so
 .vscode
 .ipynb_checkpoints
+src/pypgstac/.mypy_cache
+src/pypgstac/.pytest_cache
+src/pypgstac/.mypy_cache

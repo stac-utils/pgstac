@@ -1,6 +1,6 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-SRCDIR=$SCRIPT_DIR/../../../src
+SRCDIR=/src
 cd $SRCDIR
 
 SHORT=f:,t:,o,d,h
@@ -44,12 +44,7 @@ done
 
 # make sure that from and to exist
 
-
-
-BASEDIR=$SRCDIR
-PYPGSTACDIR=$BASEDIR/pypgstac
-MIGRATIONSDIR=$BASEDIR/pgstac/migrations
-SQLDIR=$BASEDIR/pgstac/sql
+SQLDIR=$PGSTACDIR/sql
 
 # Check if from SQL file exists
 FROMSQL=$MIGRATIONSDIR/pgstac.$FROM.sql
@@ -72,7 +67,7 @@ fi
 MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM-$TO.sql
 if [[ -f "$MIGRATIONSQL" ]]; then
   if [[ "$OVERWRITE" != 1 ]]; then
-    echo "$MIGRATIONSQL Already exists."
+    echo "$MIGRATIONSQL Already exists. Overwrite?"
     select yn in "Yes" "No"; do
       case $yn in
         Yes ) break;;

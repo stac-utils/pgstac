@@ -102,7 +102,7 @@ BEGIN
 
 
 
-    IF _limit <= number_matched AND number_matched = 0 THEN --need to have paging links
+    IF _limit <= number_matched AND number_matched > 0 THEN --need to have paging links
         nextoffset := least(_offset + _limit, number_matched - 1);
         prevoffset := greatest(_offset - _limit, 0);
 

@@ -1,4 +1,5 @@
 """Utilities to bulk load data into pgstac from json/ndjson."""
+
 import contextlib
 import itertools
 import logging
@@ -45,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Partition:
+    """Pgstac Partition."""
+
     name: str
     collection: str
     datetime_range_min: str
@@ -83,16 +86,14 @@ class Methods(str, Enum):
 
 @contextlib.contextmanager
 def open_std(
-    filename: str, mode: str = "r", *args: Any, **kwargs: Any,
+    filename: str,
+    mode: str = "r",
+    *args: Any,
+    **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
     fh: Union[TextIO, BinaryIO]
-    if (
-        filename is None
-        or filename == "-"
-        or filename == "stdin"
-        or filename == "stdout"
-    ):
+    if filename is None or filename in ("-", "stdin", "stdout"):
         stream = sys.stdin if "r" in mode else sys.stdout
         fh = stream.buffer if "b" in mode else stream
         close = False
@@ -104,10 +105,8 @@ def open_std(
         yield fh
     finally:
         if close:
-            try:
+            with contextlib.suppress(AttributeError):
                 fh.close()
-            except AttributeError:
-                pass
 
 
 def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
@@ -151,10 +150,12 @@ class Loader:
     _partition_cache: Dict[str, Partition]
 
     def __init__(self, db: PgstacDB):
+        """Initialize Loader."""
         self.db = db
         self._partition_cache: Dict[str, Partition] = {}
 
     def check_version(self) -> None:
+        """Check pgstac version."""
         db_version = self.db.version
         if db_version is None:
             raise Exception("Failed to detect the target database version.")
@@ -202,59 +203,58 @@ class Loader:
         if file is None:
             file = "stdin"
         conn = self.db.connect()
-        with conn.cursor() as cur:
-            with conn.transaction():
-                cur.execute(
-                    """
+        with conn.cursor() as cur, conn.transaction():
+            cur.execute(
+                """
                     DROP TABLE IF EXISTS tmp_collections;
                     CREATE TEMP TABLE tmp_collections
                     (content jsonb) ON COMMIT DROP;
                     """,
-                )
-                with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
-                    for collection in read_json(file):
-                        copy.write_row((orjson.dumps(collection).decode(),))
-                if insert_mode in (
-                    None,
-                    Methods.insert,
-                ):
-                    cur.execute(
-                        """
+            )
+            with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
+                for collection in read_json(file):
+                    copy.write_row((orjson.dumps(collection).decode(),))
+            if insert_mode in (
+                None,
+                Methods.insert,
+            ):
+                cur.execute(
+                    """
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections;
                         """,
-                    )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode in (
-                    Methods.insert_ignore,
-                    Methods.ignore,
-                ):
-                    cur.execute(
-                        """
+                )
+                logger.debug(cur.statusmessage)
+                logger.debug(f"Rows affected: {cur.rowcount}")
+            elif insert_mode in (
+                Methods.insert_ignore,
+                Methods.ignore,
+            ):
+                cur.execute(
+                    """
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections
                         ON CONFLICT DO NOTHING;
                         """,
-                    )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode == Methods.upsert:
-                    cur.execute(
-                        """
+                )
+                logger.debug(cur.statusmessage)
+                logger.debug(f"Rows affected: {cur.rowcount}")
+            elif insert_mode == Methods.upsert:
+                cur.execute(
+                    """
                         INSERT INTO collections (content)
                         SELECT content FROM tmp_collections
                         ON CONFLICT (id) DO
                         UPDATE SET content=EXCLUDED.content;
                         """,
-                    )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                else:
-                    raise Exception(
-                        "Available modes are insert, ignore, and upsert."
-                        f"You entered {insert_mode}.",
-                    )
+                )
+                logger.debug(cur.statusmessage)
+                logger.debug(f"Rows affected: {cur.rowcount}")
+            else:
+                raise Exception(
+                    "Available modes are insert, ignore, and upsert."
+                    f"You entered {insert_mode}.",
+                )
 
     @retry(
         stop=stop_after_attempt(5),
@@ -305,7 +305,6 @@ class Loader:
                 logger.debug(f"Partition {partition.name} does not require an update.")
 
             with conn.transaction():
-
                 t = time.perf_counter()
                 if insert_mode in (
                     None,
@@ -432,7 +431,6 @@ class Loader:
                                 ;
                                 """,
                             ).format(sql.Identifier(partition.name)),
-
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
@@ -442,7 +440,7 @@ class Loader:
                         f"You entered {insert_mode}.",
                     )
                 logger.debug("Updating Partition Stats")
-                cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
+                cur.execute("SELECT update_partition_stats_q(%s);", (partition.name,))
                 logger.debug(cur.statusmessage)
                 logger.debug(f"Rows affected: {cur.rowcount}")
         logger.debug(
@@ -455,7 +453,7 @@ class Loader:
         This method will mark the partition as dirty if the bounds of the partition
         need to be updated based on this item.
         """
-        p = item.get("partition", None)
+        p = item.get("partition")
         if p is None:
             _, key, partition_trunc = self.collection_json(item["collection"])
             if partition_trunc == "year":
@@ -545,6 +543,7 @@ class Loader:
         return partition_name
 
     def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+        """Read dehydrated item."""
         if file is None:
             file = "stdin"
         if isinstance(file, str):
@@ -579,8 +578,10 @@ class Loader:
                     yield item
 
     def read_hydrated(
-        self, file: Union[Path, str, Iterator[Any]] = "stdin",
+        self,
+        file: Union[Path, str, Iterator[Any]] = "stdin",
     ) -> Generator:
+        """Read hydrated item."""
         for line in read_json(file):
             item = self.format_item(line)
             item["partition"] = self._partition_update(item)

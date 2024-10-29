@@ -17,9 +17,20 @@ services:
       - PGDATABASE=postgis
     ports:
       - "5439:5432"
+    develop:
+      watch:
+        - action: rebuild
+          path: ./src/pgstac
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 1s
+      retries: 15
+      start_period: 30s
+      timeout: 10s
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
     command: postgres
+
   pypgstac:
     container_name: pypgstac
     image: pypgstac
@@ -35,6 +46,13 @@ services:
       - PGPASSWORD=password
       - PGDATABASE=postgis
     depends_on:
-      - pgstac
+      pgstac:
+        condition: service_healthy
+        restart: true
+    develop:
+      watch:
+        - action: rebuild
+          path: ./src/pypgstac
+
 volumes:
   pgstac-pgdata:

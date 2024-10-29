@@ -1,7 +1,8 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
-set -e
+
+# set -e
 
 if [[ "${CI}" ]]; then
     set -x
@@ -18,37 +19,49 @@ exit 1
 
 ARGS=($@)
 CONTAINER_ARGS=()
+VOLUMES=""
 for ARG in "${ARGS[@]}"
 do
     if [[ $ARG == "--no-cache" ]]; then
-        BUILD=1
+        NOBUILD=0
         NOCACHE="--no-cache"
-    elif [[ $ARG == "--build" ]]; then
-        BUILD=1
-    elif [[ $ARG == "--cpfiles" ]]; then
-        CPFILES=1
+    elif [[ $ARG == "--nobuild" ]]; then
+        NOBUILD=1
+    elif [[ $ARG == "--nuke" ]]; then
+        NUKE=1
+    elif [[ $ARG == "--mountmigrations" ]]; then
+        VOLUMES="$VOLUMES \
+        -v $PWD/src/pgstac/migrations:/src/pgstac/migrations \
+        -v $PWD/src/pgstac/sql/999_version.sql:/src/pgstac/sql/999_version.sql \
+        -v $PWD/src/pgstac/pgstac.sql:/src/pgstac/pgstac.sql \
+        -v $PWD/src/pypgstac/python/pypgstac/version.py:/src/pypgstac/python/pypgstac/version.py \
+        -v $PWD/src/pypgstac/pyproject.toml:/src/pypgstac/pyproject.toml"
+    elif [[ $ARG == "--mountpy" ]]; then
+        VOLUMES="$VOLUMES \
+        -v $PWD/src/pypgstac/python/pypgstac:/src/pypgstac/python/pypgstac \
+        -v $PWD/src/pypgstac/tests:/src/pypgstac/tests"
+    elif [[ $ARG == "--localuser" ]]; then
+        USER="--user $(id -u):$(id -g)"
     else
         CONTAINER_ARGS+=($ARG)
     fi
 done
-if [[ $BUILD == 1 ]]; then
-    echo "Building docker images..."
+
+if [[ $NUKE == 1 ]]; then
+    echo "Stopping Docker and Removing Volumes and Orphans..."
     docker compose down -v --remove-orphans
+fi
+
+if [[ $NOBUILD != 1 ]]; then
+    echo "Building docker images..."
     docker compose build $NOCACHE
-    docker compose up -d pgstac
-    sleep 4
 fi
+
+# Check if pgstac is already running
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
-if [[ $CPFILES == 1 ]]; then
-    docker ps | grep pypgstacworker
-    [[ $? == 0 ]] && echo "Killing pypgstacworker" && docker kill pypgstacworker
-    docker compose run -d --rm --name pypgstacworker pypgstac /bin/bash
-    docker compose exec pypgstac "${CONTAINER_ARGS[@]}"
-    docker cp pypgstacworker:/opt/src $SCRIPT_DIR/..
-    docker kill pypgstacworker
-else
-    docker compose run -T --rm pypgstac "${CONTAINER_ARGS[@]}"
-fi
+
+docker compose run --rm  $VOLUMES $USER pypgstac "${CONTAINER_ARGS[@]}"
+
 JOBEXITCODE=$?
-[[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac
+[[ $PGSTAC_RUNNING == "" ]] && docker compose down --remove-orphans
 exit $JOBEXITCODE

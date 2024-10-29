@@ -10,8 +10,8 @@ name = "pypgstac"
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1"
-pyo3 = { version = "0.21", features = [
+anyhow = "1.0.91"
+pyo3 = { version = "0.22.5", features = [
     "abi3-py38",
     "extension-module",
     "anyhow",

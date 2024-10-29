@@ -1,4 +1,5 @@
 """Hydrate data in pypgstac rather than on the database."""
+
 from copy import deepcopy
 from typing import Any, Dict
 
@@ -7,12 +8,14 @@ from pypgstac.pgstacrs import hydrate  # noqa # pylint: disable=unused-import
 # Marker value to indicate that a key should not be rehydrated
 DO_NOT_MERGE_MARKER = "𒍟※"
 
+
 def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
     """Hydrate item in-place with base_item properties.
 
     This will not perform a deep copy; values of the original item will be referenced
     in the return item.
     """
+
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
@@ -32,14 +35,13 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
                     else:
                         # If item has a different length, then just use the item value
                         continue
+                # Key exists on item but isn't a dict or list, keep item value
+                elif i[key] == DO_NOT_MERGE_MARKER:
+                    # Key was marked as do-not-merge, drop it from the item
+                    del i[key]
                 else:
-                    # Key exists on item but isn't a dict or list, keep item value
-                    if i[key] == DO_NOT_MERGE_MARKER:
-                        # Key was marked as do-not-merge, drop it from the item
-                        del i[key]
-                    else:
-                        # Keep the item value
-                        continue
+                    # Keep the item value
+                    continue
 
             else:
                 # Keys in base item that are not in item are simply copied over
@@ -50,8 +52,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
 
 
 def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Get a recursive difference between a base item and an incoming item to dehydrate.
+    """Get a recursive difference between a base item and an incoming item to dehydrate.
 
     For keys of dicts within items, if the base item contains a key not present
     in the incoming item, then a do-no-merge value is added indicating that the
@@ -127,7 +128,7 @@ def apply_marked_keys(
     This modifies the dehydrated item in-place.
     """
     try:
-        marked_keys = [key for key in base_item if key not in full_item.keys()]
+        marked_keys = [key for key in base_item if key not in full_item]
         marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
         dehydrated.update(marked_dict)
     except TypeError:

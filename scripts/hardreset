@@ -1,0 +1,32 @@
+#!/bin/bash
+# nukes any docker resources
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+set -e
+
+if [[ "${CI}" ]]; then
+    set -x
+fi
+
+function usage() {
+    echo -n \
+        "Usage: $(basename "$0")
+Nukes all docker containers and volumes for this project, rebuilds with no cache, and restarts pgstac.
+"
+}
+
+# Parse args
+NO_CACHE="";
+while [[ "$#" > 0 ]]; do case $1 in
+    --help) usage; exit 0; shift;;
+  *) usage "Unknown parameter passed: $1"; shift; shift;;
+esac; done
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+
+    echo "==Nuking docker images/volumes, rebuilds with no cache, and restarts pgstac"
+
+    docker compose down -v --remove-orphans
+    docker compose build --no-cache
+    docker compose up -d pgstac
+fi

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [Unreleased]
+## [v0.9.2]
 
 ### Added
 
@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   - the text search is un-indexed and will be very slow for item-level searches!
 
 ### Fixed
-
+- Fix paging links and add tests for collections_search
+- Fix issues with scripts and docker
 - Add `open=True` in `psycopg.ConnectionPool` to avoid future behavior change
 - Switch from postgres `server_version` to `server_version_num` to get PG version (Fixes #300)
 - Allow read-only replicas work even when the context extension is enabled (Fixes #300)
@@ -531,7 +532,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
-[Unreleased]: https://github.com/stac-utils/pgstac/compare/v0.9.1...main
+[v0.9.2]: https://github.com/stac-utils/pgstac/compare/v0.9.1...v0.9.2
 [v0.9.1]: https://github.com/stac-utils/pgstac/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.5...v0.9.0
 [v0.8.5]: https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.8.5

@@ -1,4 +1,5 @@
 """Base library for database interaction with PgSTAC."""
+
 import atexit
 import logging
 import time
@@ -237,6 +238,7 @@ class PgstacDB:
         return r
 
     def run_queued(self) -> str:
+        """Run Queued Queries."""
         try:
             self.connect().execute("""
                 CALL run_queued_queries();
@@ -280,9 +282,12 @@ class PgstacDB:
         if isinstance(version, str):
             if int(version) < 130000:
                 major, minor, patch = tuple(
-                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                    map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
-                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
+                raise Exception(
+                    "PgSTAC requires PostgreSQL 13+, ",
+                    f"current version is: {major}.{minor}.{patch}",
+                )
             return version
         else:
             if self.connection is not None:

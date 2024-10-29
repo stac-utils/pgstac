@@ -35,18 +35,23 @@ LANDSAT_ITEM = (
 
 
 class TestHydrate:
+    """Test Hydration."""
+
     def hydrate(
         self,
         base_item: Dict[str, Any],
         item: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """Test Hydrate."""
         hpy = hydration.hydrate_py(deepcopy(base_item), deepcopy(item))
         hrs = hydration.hydrate(deepcopy(base_item), deepcopy(item))
         assert hpy == hrs
         return hrs
 
     def test_landsat_c2_l1(self, loader: Loader) -> None:
-        """Test that a dehydrated item is is equal to the raw item it was dehydrated
+        """Test with Landsat.
+
+        Test that a dehydrated item is is equal to the raw item it was dehydrated
         from, against the base item of the collection
         .
         """
@@ -68,12 +73,13 @@ class TestHydrate:
             ),
         )
 
-        assert type(base_item) == dict
+        assert type(base_item) is dict
 
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == raw_item
 
     def test_full_hydrate(self) -> None:
+        """Test full hydration."""
         base_item = {"a": "first", "b": "second", "c": "third"}
         dehydrated: Dict[str, Any] = {}
 
@@ -81,6 +87,7 @@ class TestHydrate:
         assert rehydrated == base_item
 
     def test_full_nested(self) -> None:
+        """Test full hydration with nesting."""
         base_item = {"a": "first", "b": "second", "c": {"d": "third"}}
         dehydrated: Dict[str, Any] = {}
 
@@ -88,7 +95,8 @@ class TestHydrate:
         assert rehydrated == base_item
 
     def test_nested_extra_keys(self) -> None:
-        """
+        """Test Extra Keys.
+
         Test that items having nested dicts with keys not in base item preserve
         the additional keys in the dehydrated item.
         """
@@ -113,7 +121,8 @@ class TestHydrate:
         }
 
     def test_equal_len_list_of_mixed_types(self) -> None:
-        """
+        """Test lists with mixed types.
+
         Test that a list of equal length containing matched types at
         each index dehydrates
         dicts and preserves item-values of other types.
@@ -140,6 +149,7 @@ class TestHydrate:
         assert hydrated == dehydrated
 
     def test_marked_non_merged_fields(self) -> None:
+        """Test marked non merged fields."""
         base_item = {
             "a": "first",
             "b": "second",
@@ -155,6 +165,7 @@ class TestHydrate:
         }
 
     def test_marked_non_merged_fields_in_list(self) -> None:
+        """Test marked non merged fields in list."""
         base_item = {
             "a": [{"b": "first", "d": "third"}, {"c": "second", "e": "fourth"}],
         }
@@ -169,6 +180,7 @@ class TestHydrate:
         assert hydrated == {"a": [{"b": "first"}, {"c": "second", "f": "fifth"}]}
 
     def test_deeply_nested_dict(self) -> None:
+        """Test deeply nested dicts."""
         base_item = {"a": {"b": {"c": {"d": "first", "d1": "second"}}}}
         dehydrated = {"a": {"b": {"c": {"d2": "third"}}}}
 
@@ -188,9 +200,10 @@ class TestHydrate:
         }
 
     def test_invalid_assets_removed(self) -> None:
-        """
-        Assets can be included on item-assets that are not uniformly included on
-        individual items. Ensure that item asset keys from base_item aren't included
+        """Test invalid assets removed.
+
+        Test that Assets can be included on item-assets that are not uniformly included
+        on individual items. Ensure that item asset keys from base_item aren't included
         after hydration.
         """
         base_item = {
@@ -216,7 +229,8 @@ class TestHydrate:
         }
 
     def test_top_level_base_keys_marked(self) -> None:
-        """
+        """Test top level base keys are marked.
+
         Top level keys on the base item not present on the incoming item should
         be marked as do not merge, no matter the nesting level.
         """
@@ -239,6 +253,7 @@ class TestHydrate:
         assert hydrated == {"included": "value", "unique": "value"}
 
     def test_base_none(self) -> None:
+        """Test base none."""
         base_item = {"value": None}
         dehydrated = {"value": {"a": "b"}}
         hydrated = self.hydrate(base_item, dehydrated)

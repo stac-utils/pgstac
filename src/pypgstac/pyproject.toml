@@ -23,7 +23,7 @@ dependencies = [
     "smart-open>=4.2",
     "orjson>=3.5.2",
     "python-dateutil==2.8.*",
-    "fire==0.4.*",
+    "fire==0.7.*",
     "plpygis==0.2.*",
     "pydantic>=1.7",
     "tenacity==8.1.*",
@@ -42,17 +42,15 @@ build = [
     "maturin>=1,<2",
 ]
 dev = [
-    "flake8==3.9.*",
-    "black>=21.7b0",
-    "mypy>=0.910",
+    "mypy>=1.12",
     "types-orjson==0.1.1",
     "types-setuptools",
-    "ruff==0.0.231",
+    "ruff==0.7.*",
     "pre-commit",
 ]
 psycopg = [
-    "psycopg[binary]==3.1.*",
-    "psycopg-pool==3.1.*",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.1",
 ]
 migrations = [
     "psycopg2-binary",
@@ -86,6 +84,10 @@ exclude_lines = [
 ]
 
 [tool.ruff]
+line-length = 88
+indent-width = 4
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -93,12 +95,12 @@ select = [
     "I",  # isort
     "C",  # flake8-comprehensions
     "B",  # flake8-bugbear
-    # "D",  # pydocstyle
+    "D",  # pydocstyle
     "C4", # flake8-comprehensions
     "T20", # flake8-print
-    # "PT", # flake8-pytest-style
+    "PT", # flake8-pytest-style
     "Q", # flake8-quotes
-    # "SIM", # flake8-simplify
+    "SIM", # flake8-simplify
     "DTZ", # flake8-datetimez
     "ERA", # eradicate
     "PLC",
@@ -106,22 +108,34 @@ select = [
     # "PLR",
     "PLW",
     "COM", # flake8-commas
+    "RUF",
 ]
 ignore = [
-    # "E501",  # line too long, handled by black
-    "B008",  # do not perform function calls in argument defaults
+    # "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
-    "B905",
+    # "B905",
+    "D203",
+    "D213",
+    "D211",
+    "COM812",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint.isort]
 known-first-party = ["pypgstac"]
 
 [tool.mypy]
-no_strict_optional = "True"
-ignore_missing_imports = "True"
-disallow_untyped_defs = "True"
-namespace_packages = "True"
+no_strict_optional = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+namespace_packages = true
 
 [tool.pydocstyle]
 select = "D1"

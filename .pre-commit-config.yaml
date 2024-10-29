@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v5.0.0
     hooks:
     -   id: trailing-whitespace
     -   id: check-yaml
@@ -13,17 +13,20 @@ repos:
     -   id: detect-private-key
     -   id: check-json
     -   id: mixed-line-ending
+        args: [--fix=auto]
     -   id: check-merge-conflict
     -   id: check-executables-have-shebangs
     -   id: check-symlinks
 
 
 -   repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: 'v0.0.284'
+    rev: 'v0.7.1'
     hooks:
     -   id: ruff
         files: pypgstac\/.*\.py$
         args: [--fix, --exit-non-zero-on-fix]
+    -   id: ruff-format
+        files: pypgstac\/.*\.py$
 
 -   repo: local
     hooks:

@@ -1,4 +1,6 @@
 """Fixtures for pypgstac tests."""
+
+import contextlib
 import os
 from typing import Generator
 
@@ -10,7 +12,7 @@ from pypgstac.load import Loader
 from pypgstac.migrate import Migrate
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def db() -> Generator:
     """Fixture to get a fresh database."""
     origdb: str = os.getenv("PGDATABASE", "")
@@ -40,11 +42,11 @@ def db() -> Generator:
                 try:
                     conn.execute("DROP DATABASE pypgstactestdb;")
                     conn.execute(
-                    """
+                        """
                     CREATE DATABASE pypgstactestdb
                     TEMPLATE pgstac_test_db_template;
                     """,
-                )
+                    )
                 except Exception:
                     pass
 
@@ -61,13 +63,11 @@ def db() -> Generator:
         try:
             conn.execute("DROP DATABASE pypgstactestdb WITH (FORCE);")
         except psycopg.errors.InsufficientPrivilege:
-            try:
+            with contextlib.suppress(Exception):
                 conn.execute("DROP DATABASE pypgstactestdb;")
-            except Exception:
-                pass
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def loader(db: PgstacDB) -> Generator:
     """Fixture to get a loader and an empty pgstac."""
     if False:

@@ -76,9 +76,11 @@ class PgstacCLI:
             loader.load_items(file, method, dehydrated, chunksize)
 
     def runqueue(self) -> str:
+        """Run queued queries."""
         return self._db.run_queued()
 
     def loadextensions(self) -> None:
+        """Load Stac Extension JSON into stac_extensions table."""
         conn = self._db.connect()
 
         with conn.cursor() as cur:
