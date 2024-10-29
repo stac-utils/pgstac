@@ -58,7 +58,7 @@ jobs:
           target: pgstac
           file: docker/pgstac/Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
-          push: true
+          push: false
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
@@ -83,7 +83,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-${{ matrix.target }}
           path: /home/runner/work/pgstac/pgstac/dist/*
           if-no-files-found: error
 
@@ -108,7 +108,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: win-wheels
+          name: win-wheels-${{ matrix.target }}
           path: /home/runner/work/pgstac/pgstac/dist/*
           if-no-files-found: error
 
@@ -127,13 +127,13 @@ jobs:
         with:
           working-directory: src/pypgstac
           target: ${{ matrix.target }}
-          args: --release --out /home/runner/work/pgstac/pgstac/dist
+          args: --release --out /tmp/dist
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: mac-wheels
-          path: /home/runner/work/pgstac/pgstac/dist/*
+          name: mac-wheels-${{ matrix.target }}
+          path: /tmp/dist/*
           if-no-files-found: error
 
   sdist:
@@ -171,7 +171,7 @@ jobs:
       - name: Get Wheel
         uses: actions/download-artifact@v4
         with:
-            name: wheels
+            name: wheels-x86_64
             path: /tmp/wheels
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
