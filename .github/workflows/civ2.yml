@@ -85,6 +85,7 @@ jobs:
         with:
           name: wheels
           path: /home/runner/work/pgstac/pgstac/dist/*
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -107,8 +108,9 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: win-wheels
           path: /home/runner/work/pgstac/pgstac/dist/*
+          if-no-files-found: error
 
   macos:
     runs-on: macos-latest
@@ -130,8 +132,9 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: mac-wheels
           path: /home/runner/work/pgstac/pgstac/dist/*
+          if-no-files-found: error
 
   sdist:
     runs-on: ubuntu-latest
@@ -146,8 +149,9 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: source-wheels
           path: /home/runner/work/pgstac/pgstac/dist/*
+          if-no-files-found: error
 
   test:
     name: test
