@@ -20,11 +20,7 @@ env:
   PGDATABASE: postgres
   PGUSER: postgres
   POSTGRES_PASSWORD: postgres
-  UV_LINK_MODE: copy
-  UV_COMPILE_BYTECODE: 1
-  UV_PROJECT_ENVIRONMENT: /tmp/venv
-  UV_PYTHON_INSTALL_DIR: /tmp/venv/bin
-  VIRTUAL_ENVIRONMENT: /tmp/venv
+
 
 jobs:
   # This builds a base postgres image that has everything installed to be able to run pgstac.
@@ -205,11 +201,12 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          uv venv --allow-existing --relocatable /tmp/venv
-          /tmp/venv/bin/activate
+          uv venv
+          venv/bin/activate
           uv pip install psycopg[binary] psycopg-pool
           uv sync --frozen --no-install-project --extra test --extra dev
-          for i in /tmp/wheels/pypgstac*x86_64.whl; do echo "Installing $i"; uv pip install pypgstac@$i; done
+          uv pip install --offline --find-links /tmp/wheels pypgstac
+
 
       - name: Run tests
         run:  |
