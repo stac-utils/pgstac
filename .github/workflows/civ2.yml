@@ -65,23 +65,20 @@ jobs:
 
   linux_x86_64:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           working-directory: src/pypgstac
-          target: ${{ matrix.target }}
+          target: x86_64
           args: --release --out /home/runner/work/pgstac/pgstac/dist
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.target }}
+          name: wheels-x86_64
           path: /home/runner/work/pgstac/pgstac/dist/*
           if-no-files-found: error
 
@@ -216,4 +213,4 @@ jobs:
           ls -altrh /home/runner/work/pgstac/pgstac
           ls -altrh /home/runner/work/pgstac/pgstac/docker
           ls -altrh /home/runner/work/pgstac/pgstac/docker/pypgstac/bin
-          ./home/runner/work/pgstac/pgstac/docker/pypgstac/bin/test
+          . ./home/runner/work/pgstac/pgstac/docker/pypgstac/bin/test
