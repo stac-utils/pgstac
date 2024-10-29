@@ -188,6 +188,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DATABASE: postgres
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -220,5 +222,6 @@ jobs:
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
           . .venv/bin/activate
           export PATH=$SCRIPTS:$PWD/.venv/bin:$PATH
+          export PGHOST=localhost
           echo $PATH
           $SCRIPTS/test
