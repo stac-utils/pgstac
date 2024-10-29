@@ -27,6 +27,7 @@ jobs:
     name: Build and push base postgres image
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
       - name: Docker Meta
         id: meta
         uses: docker/metadata-action@v5
