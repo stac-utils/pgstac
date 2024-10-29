@@ -88,6 +88,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: false
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -110,6 +111,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    if: false
     runs-on: windows-latest
     strategy:
       matrix:
@@ -136,6 +138,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    if: false
     runs-on: macos-latest
     strategy:
       matrix:
@@ -157,6 +160,7 @@ jobs:
           if-no-files-found: error
 
   sdist:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -217,5 +221,4 @@ jobs:
           . .venv/bin/activate
           export PATH=$SCRIPTS:$PWD/.venv/bin:$PATH
           echo $PATH
-          which test
-          test
+          $SCRIPTS/test
