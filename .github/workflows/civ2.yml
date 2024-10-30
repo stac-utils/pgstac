@@ -185,7 +185,6 @@ jobs:
       PGHOST: localhost
       UV_FROZEN: true
       UV_FIND_LINKS: /tmp/wheels
-      UV_SYSTEM_PYTHON: true
       UV_PROJECT_ENVIRONMENT: /home/runner/work/pgstac/pgstac/src/pypgstac/.venv
       VIRTUAL_ENVIRONMENT: /home/runner/work/pgstac/pgstac/src/pypgstac/.venv
 
