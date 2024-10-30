@@ -28,25 +28,24 @@ env:
 
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    container:
+      image: docker/compose
     steps:
       - uses: actions/checkout@v4
       - name: Run docker-compose
-        uses: hoverkraft-tech/compose-action@v2.0.1
-        with:
-          compose-file: "docker-compose.yml"
-          services:
-            pgstac
-          up-flags:
-            --build
-          down-flags:
-            -v
-            --remove-orphans
+        run: |
+          docker compose build
+          docker compose up -d pgstac
 
       - name: Execute tests in the running services
         run: |
           scripts/test
+
+      - name: Stop Docker
+        run: |
+          scripts/nuke
 # jobs:
 #   # This builds a base postgres image that has everything installed to be able to run pgstac.
 #   buildpg:
