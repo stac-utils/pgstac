@@ -215,7 +215,7 @@ jobs:
           uv python install 3.10
           uv pip install psycopg[binary] psycopg-pool
           uv pip compile pyproject.toml -o /tmp/requirements.txt --extra test --extra dev
-          uv pip install requirements.txt
+          uv pip install /tmp/requirements.txt
           uv pip install --offline --find-links /tmp/wheels pypgstac
 
 
