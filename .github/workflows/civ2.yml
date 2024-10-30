@@ -41,6 +41,8 @@ jobs:
         with:
           push: false
           load: true
+          allow:
+            network.host
           files: |-
             docker-compose.yml
             docker-compose-cache.json
