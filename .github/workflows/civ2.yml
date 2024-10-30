@@ -182,7 +182,13 @@ jobs:
     needs: [buildpg, linux_x86_64]
     runs-on: ubuntu-latest
     env:
-      UV_SYSTEM_PYTHON: 1
+      PGHOST: localhost
+      UV_FROZEN: true
+      UV_FIND_LINKS: /tmp/wheels
+      UV_SYSTEM_PYTHON: true
+      UV_PROJECT_ENVIRONMENT: /home/runner/work/pgstac/pgstac/src/pypgstac/.venv
+      VIRTUAL_ENVIRONMENT: /home/runner/work/pgstac/pgstac/src/pypgstac/.venv
+
     services:
       postgres:
         image: ghcr.io/stac-utils/pgstac-postgres:latest
@@ -190,8 +196,6 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DATABASE: postgres
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -212,15 +216,15 @@ jobs:
       - name: Install pypgstac
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
-          uv python install 3.10
+          uv venv
+          source $UV_PROJECT_ENVIRONMENT/bin/activate
           uv pip install psycopg[binary] psycopg-pool
-          uv pip compile pyproject.toml -o /tmp/requirements.txt --extra test --extra dev
-          uv pip install /tmp/requirements.txt
+          uv sync --frozen --no-install-project --extra test --extra dev
           uv pip install --offline --find-links /tmp/wheels pypgstac
 
 
       - name: Run tests
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
-          export PGHOST=localhost
+          source $UV_PROJECT_ENVIRONMENT/bin/activate
           $SCRIPTS/test
