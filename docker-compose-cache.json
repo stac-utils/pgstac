@@ -1,0 +1,26 @@
+{
+    "target": {
+      "pgstac": {
+        "cache-from": [
+          "type=gha"
+        ],
+        "cache-to": [
+          "type=gha,mode=max"
+        ],
+        "output": [
+          "type=docker"
+        ]
+      },
+      "pypgstac": {
+        "cache-from": [
+          "type=gha"
+        ],
+        "cache-to": [
+          "type=gha,mode=max"
+        ],
+        "output": [
+          "type=docker"
+        ]
+      }
+   }
+}
