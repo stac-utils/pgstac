@@ -29,4 +29,3 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     docker compose down -v --remove-orphans
 
 fi
-fi

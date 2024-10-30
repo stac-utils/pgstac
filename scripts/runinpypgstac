@@ -2,7 +2,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
 
-# set -e
+set -e
 
 if [[ "${CI}" ]]; then
     set -x
@@ -16,7 +16,7 @@ exit 1
 }
 
 [ "$#" -eq 0 ] && usage
-
+echo "ARGS: $@"
 ARGS=($@)
 CONTAINER_ARGS=()
 VOLUMES=""
@@ -30,19 +30,13 @@ do
     elif [[ $ARG == "--nuke" ]]; then
         NUKE=1
     elif [[ $ARG == "--mountmigrations" ]]; then
-        VOLUMES="$VOLUMES \
-        -v $PWD/src/pgstac/migrations:/src/pgstac/migrations \
-        -v $PWD/src/pgstac/sql/999_version.sql:/src/pgstac/sql/999_version.sql \
-        -v $PWD/src/pgstac/pgstac.sql:/src/pgstac/pgstac.sql \
-        -v $PWD/src/pypgstac/python/pypgstac/version.py:/src/pypgstac/python/pypgstac/version.py \
-        -v $PWD/src/pypgstac/pyproject.toml:/src/pypgstac/pyproject.toml"
+        VOLUMES="$VOLUMES -v $PWD/src/pgstac/migrations:/src/pgstac/migrations -v $PWD/src/pgstac/sql/999_version.sql:/src/pgstac/sql/999_version.sql -v $PWD/src/pgstac/pgstac.sql:/src/pgstac/pgstac.sql -v $PWD/src/pypgstac/python/pypgstac/version.py:/src/pypgstac/python/pypgstac/version.py -v $PWD/src/pypgstac/pyproject.toml:/src/pypgstac/pyproject.toml"
     elif [[ $ARG == "--mountpy" ]]; then
-        VOLUMES="$VOLUMES \
-        -v $PWD/src/pypgstac/python/pypgstac:/src/pypgstac/python/pypgstac \
-        -v $PWD/src/pypgstac/tests:/src/pypgstac/tests"
+        VOLUMES="$VOLUMES -v $PWD/src/pypgstac/python/pypgstac:/src/pypgstac/python/pypgstac -v $PWD/src/pypgstac/tests:/src/pypgstac/tests"
     elif [[ $ARG == "--localuser" ]]; then
-        USER="--user $(id -u):$(id -g)"
+        USERID="--user $(id -u):$(id -g)"
     else
+        echo "Adding $ARG to args"
         CONTAINER_ARGS+=($ARG)
     fi
 done
@@ -60,7 +54,12 @@ fi
 # Check if pgstac is already running
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
 
-docker compose run --rm  $VOLUMES $USER pypgstac "${CONTAINER_ARGS[@]}"
+echo "Running pypgstac"
+echo "VOLUMES: $VOLUMES"
+echo "USER: $USERID"
+echo "CARGS: ${CONTAINER_ARGS[@]}"
+
+docker compose run --rm  $VOLUMES $USERID pypgstac "${CONTAINER_ARGS[@]}"
 
 JOBEXITCODE=$?
 [[ $PGSTAC_RUNNING == "" ]] && docker compose down --remove-orphans

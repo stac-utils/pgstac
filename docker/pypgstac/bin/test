@@ -269,6 +269,7 @@ then
     MIGRATIONS=1
 fi
 
+
 [ $FORMATTING -eq 1 ] && test_formatting
 [ $SETUPDB -eq 1 ] && setuptestdb
 [ $PGTAP -eq 1 ] && test_pgtap

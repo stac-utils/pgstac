@@ -210,18 +210,14 @@ jobs:
       - name: Install pypgstac
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
-          uv venv
-          . .venv/bin/activate
-          uv pip install psycopg[binary] psycopg-pool
-          uv sync --frozen --no-install-project --extra test --extra dev
+          uv pip install --system psycopg[binary] psycopg-pool
+          uv pip compile pyproject.toml -o /tmp/requirements.txt --extra test --extra dev
+          uv pip install requirements.txt
           uv pip install --offline --find-links /tmp/wheels pypgstac
 
 
       - name: Run tests
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
-          . .venv/bin/activate
-          export PATH=$SCRIPTS:$PWD/.venv/bin:$PATH
           export PGHOST=localhost
-          echo $PATH
           $SCRIPTS/test
