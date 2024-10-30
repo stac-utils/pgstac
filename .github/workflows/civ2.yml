@@ -181,6 +181,8 @@ jobs:
     name: test
     needs: [buildpg, linux_x86_64]
     runs-on: ubuntu-latest
+    env:
+      UV_SYSTEM_PYTHON: 1
     services:
       postgres:
         image: ghcr.io/stac-utils/pgstac-postgres:latest
@@ -210,7 +212,8 @@ jobs:
       - name: Install pypgstac
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
-          uv pip install --system psycopg[binary] psycopg-pool
+          uv python install 3.10
+          uv pip install psycopg[binary] psycopg-pool
           uv pip compile pyproject.toml -o /tmp/requirements.txt --extra test --extra dev
           uv pip install requirements.txt
           uv pip install --offline --find-links /tmp/wheels pypgstac
