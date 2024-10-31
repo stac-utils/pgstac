@@ -51,6 +51,7 @@ RUN \
     && apt-get clean && apt-get -y autoremove \
     && uv sync --frozen --no-install-project --extra test --extra dev --extra migrations --extra psycopg \
     && uv pip install setuptools
+COPY ./docker/pypgstac/bin /scripts
 
 
 # slim image for running pypgstac

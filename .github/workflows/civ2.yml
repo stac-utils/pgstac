@@ -145,12 +145,15 @@ jobs:
     needs: [check-pgstac-base, check-pypgstac-base, buildpg, buildpypgstacbase, wheels]
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
-    container: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
-    env:
-      PGHOST: localhost
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: postgres
+    container:
+      image: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
+      env:
+        PGHOST: localhost
+        PGUSER: postgres
+        PGPASSWORD: postgres
+        PGDATABASE: postgres
+      volumes:
+        - $GITHUB_WORKSPACE:/opt/src/
     services:
       pg:
         image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
@@ -171,24 +174,17 @@ jobs:
         with:
             name: wheels
             path: /tmp/wheels
-      - name: Check paths
-        run: |
-          ls $GITHUB_WORKSPACE
       - name: Install pypgstac
         run:  |
           cd $GITHUB_WORKSPACE/src/pypgstac
           pwd
           ls
-          source $UV_PROJECT_ENVIRONMENT/bin/activate
+          source /venv/bin/activate
           uv pip install --offline --find-links /tmp/wheels pypgstac
       - name: Run tests
         run:  |
-          cd $GITHUB_WORKSPACE
-          pwd
-          ls
-          echo $UV_PROJECT_ENVIRONMENT
-          source $UV_PROJECT_ENVIRONMENT/bin/activate
-          ./scripts/test
+          source /venv/bin/activate
+          /scripts/test
 
   # linux_x86_64:
   #   runs-on: ubuntu-latest
