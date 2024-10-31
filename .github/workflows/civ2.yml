@@ -44,7 +44,7 @@ jobs:
           set -e
           IMAGE=stac-utils/pgstac-base
           HASH=$(git log -1 --pretty="format:%h" -- docker/pgstac)
-          TAG="\"sha-$HASH\""
+          TAG="\"$HASH\""
           TOKEN=$(curl -s https://ghcr.io/token\?scope\="repository:$IMAGE:pull" | jq -r .token)
           EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/$IMAGE/tags/list | jq "try(any(.tags[]; . == $TAG))")
           echo "pgstac-image-exists=$EXISTS" >>$GITHUB_OUTPUT
@@ -57,14 +57,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Docker Meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-            images: |
-                ghcr.io/stac-utils/pgstac-base
-            tags: |
-                type=sha
       - uses: docker/setup-buildx-action@v3
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -79,7 +71,7 @@ jobs:
           context: .
           target: pgstacbase
           file: docker/pgstac/Dockerfile
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
           push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
