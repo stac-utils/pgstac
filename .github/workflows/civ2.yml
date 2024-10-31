@@ -153,7 +153,7 @@ jobs:
         PGPASSWORD: postgres
         PGDATABASE: postgres
       volumes:
-        - $GITHUB_WORKSPACE:/opt/src/
+        - ${{ github.workspace }}:/opt/src/
     services:
       pg:
         image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
@@ -176,7 +176,7 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          cd $GITHUB_WORKSPACE/src/pypgstac
+          cd /opt/src/pypgstac
           pwd
           ls
           source /venv/bin/activate
