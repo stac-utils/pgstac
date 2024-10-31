@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - release*
   pull_request:
 
 env:
@@ -49,6 +48,8 @@ jobs:
           EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/$IMAGE/tags/list | jq "try(any(.tags[]; . == $TAG))")
           echo "pgstac-image-exists=$EXISTS" >>$GITHUB_OUTPUT
           echo "pgstac-image-hash=$HASH" >>$GITHUB_OUTPUT
+          echo "pgstac-image-exists: $EXISTS"
+          echo "pgstac-image-hash: $HASH"
 
   buildpg:
     name: Build and push base postgres image
@@ -56,6 +57,11 @@ jobs:
     if: ${{ needs.check-pgstac-base.outputs.pgstac-image-exists != 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Display inputs
+        run: |
+          echo "Inputs:"
+          echo ${{ needs.check-pgstac-base.outputs.pgstac-image-exists }}
+          echo ${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Log in to the Container registry
