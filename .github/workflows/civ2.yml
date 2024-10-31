@@ -41,6 +41,7 @@ jobs:
       - name: Check if pgstac-base docker image needs to be updated
         id: pgstac_image_check
         run: |
+          set -e
           IMAGE=stac-utils/pgstac-base
           HASH=$(git log -1 --pretty="format:%h" -- docker/pgstac)
           TAG="\"sha-$HASH\""
