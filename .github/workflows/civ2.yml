@@ -132,14 +132,14 @@ jobs:
           with:
             working-directory: src/pypgstac
             target: x86_64
-            args: --release --out ${{ runner.temp }}/dist
+            args: --release --out /home/runner/work/pgstac/pgstac/dist
             sccache: 'true'
             manylinux: auto
         - name: Upload wheels
           uses: actions/upload-artifact@v4
           with:
             name: wheels
-            path: ${{ runner.temp }}/dist/*
+            path: /home/runner/work/pgstac/pgstac/dist/*
             if-no-files-found: error
   test:
     needs: [check-pgstac-base, check-pypgstac-base, buildpg, buildpypgstacbase, wheels]
