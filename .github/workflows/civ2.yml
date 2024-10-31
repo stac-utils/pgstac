@@ -177,13 +177,18 @@ jobs:
       - name: Install pypgstac
         run:  |
           cd $GITHUB_WORKSPACE/src/pypgstac
+          pwd
+          ls
           source $UV_PROJECT_ENVIRONMENT/bin/activate
           uv pip install --offline --find-links /tmp/wheels pypgstac
       - name: Run tests
         run:  |
-          cd $GITHUB_WORKSPACE/src/pypgstac
+          cd $GITHUB_WORKSPACE
+          pwd
+          ls
+          echo $UV_PROJECT_ENVIRONMENT
           source $UV_PROJECT_ENVIRONMENT/bin/activate
-          $SCRIPTS/test
+          ./scripts/test
 
   # linux_x86_64:
   #   runs-on: ubuntu-latest
