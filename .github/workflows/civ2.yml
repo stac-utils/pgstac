@@ -107,7 +107,7 @@ jobs:
           echo "pypgstac-image-hash: $HASH"
 
   buildpypgstacbase:
-    name: Build and push base postgres image
+    name: Build and push base pypgstac image
     needs: [check-pypgstac-base]
     if: ${{ needs.check-pypgstac-base.outputs.pypgstac-image-exists != 'true' }}
     runs-on: ubuntu-latest
@@ -184,6 +184,10 @@ jobs:
         with:
             name: wheels
             path: /tmp/wheels
+      - name: Check paths
+        run: |
+          ls /home/runner/work/
+          ls /home/runner/work/pgstac/pgstac
       - name: Install pypgstac
         run:  |
           cd /home/runner/work/pgstac/pgstac/src/pypgstac
