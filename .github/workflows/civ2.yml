@@ -131,7 +131,7 @@ jobs:
           platforms: linux/amd64
           context: .
           target: pypgstac-base
-          file: docker/pgstac/Dockerfile
+          file: docker/pypgstac/Dockerfile
           tags: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
           push: true
           cache-from: type=gha
