@@ -155,7 +155,7 @@ jobs:
             path: /home/runner/work/pgstac/pgstac/dist/*
             if-no-files-found: error
   test:
-    needs: [buildpg, buildpypgstacbase, wheels]
+    needs: [check-pgstac-base, check-pypgstac-base, buildpg, buildpypgstacbase, wheels]
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     container: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
