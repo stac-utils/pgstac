@@ -178,6 +178,9 @@ jobs:
         run:  |
           pwd
           ls
+          ls /
+          export
+          ls /venv
           source /venv/bin/activate
           uv pip install --offline --find-links /tmp/wheels pypgstac
       - name: Run tests
