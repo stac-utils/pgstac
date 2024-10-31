@@ -77,7 +77,7 @@ jobs:
           context: .
           target: pgstacbase
           file: docker/pgstac/Dockerfile
-          tags: ghcr.io/stac-utils/${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
+          tags: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
           push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
