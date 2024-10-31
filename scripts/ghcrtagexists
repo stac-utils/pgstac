@@ -1,0 +1,5 @@
+#!/bin/bash
+IMAGE="$1"
+TAG="\"$2\""
+TOKEN=$(curl -s https://ghcr.io/token\?scope\="repository:$IMAGE:pull" | jq -r .token)
+curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/$IMAGE/tags/list | jq "any(.tags[]; . == $TAG)"
