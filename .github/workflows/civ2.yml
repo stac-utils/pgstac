@@ -8,22 +8,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  REGISTRYPATH: ghcr.io/stac-utils/
-  PGSTACIMAGE: ghcr.io/stac-utils/pgstac-postgres
-  PGSTACLATEST: ghcr.io/stac-utils/pgstac-postgres:latest
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRYPATH: ghcr.io/stac-utils
   DOCKER_BUILDKIT: 1
-  PIP_BREAK_SYSTEM_PACKAGES: 1
-  PGPASSWORD: postgres
-  PGHOST: postgres
-  PGDATABASE: postgres
-  PGUSER: postgres
-  POSTGRES_PASSWORD: postgres
-  SCRIPTS: /home/runner/work/pgstac/pgstac/docker/pypgstac/bin
-  PGSTACDIR: /home/runner/work/pgstac/pgstac/src/pgstac
-  PYPGSTACDIR: /home/runner/work/pgstac/pgstac/src/pypgstac
-  MIGRATIONSDIR: /home/runner/work/pgstac/pgstac/src/pgstac/migrations
-  TESTS: /home/runner/work/pgstac/pgstac/src/pypgstac/tests
+
 
 
 jobs:
@@ -77,7 +64,7 @@ jobs:
           context: .
           target: pgstacbase
           file: docker/pgstac/Dockerfile
-          tags: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
+          tags: ${{ env.REGISTRYPATH }}/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
           push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
@@ -132,7 +119,7 @@ jobs:
           context: .
           target: pypgstac-base
           file: docker/pypgstac/Dockerfile
-          tags: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
+          tags: ${{ env.REGISTRYPATH }}/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
           push: true
           cache-from: type=gha
           cache-to: type=gha, mode=max
@@ -145,20 +132,20 @@ jobs:
           with:
             working-directory: src/pypgstac
             target: x86_64
-            args: --release --out /home/runner/work/pgstac/pgstac/dist
+            args: --release --out ${{ env.GITHUB_WORKSPACE }}/dist
             sccache: 'true'
             manylinux: auto
         - name: Upload wheels
           uses: actions/upload-artifact@v4
           with:
             name: wheels
-            path: /home/runner/work/pgstac/pgstac/dist/*
+            path: ${{ env.GITHUB_WORKSPACE }}/dist/*
             if-no-files-found: error
   test:
     needs: [check-pgstac-base, check-pypgstac-base, buildpg, buildpypgstacbase, wheels]
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
-    container: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
+    container: ${{ env.REGISTRYPATH }}/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
     env:
       PGHOST: localhost
       PGUSER: postgres
@@ -166,7 +153,7 @@ jobs:
       PGDATABASE: postgres
     services:
       pg:
-        image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
+        image: ${{ env.REGISTRYPATH }}/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -186,16 +173,15 @@ jobs:
             path: /tmp/wheels
       - name: Check paths
         run: |
-          ls /home/runner/work/
-          ls /home/runner/work/pgstac/pgstac
+          ls ${{ env.GITHUB_WORKSPACE }}
       - name: Install pypgstac
         run:  |
-          cd /home/runner/work/pgstac/pgstac/src/pypgstac
+          cd ${{ env.GITHUB_WORKSPACE }}/src/pypgstac
           source $UV_PROJECT_ENVIRONMENT/bin/activate
           uv pip install --offline --find-links /tmp/wheels pypgstac
       - name: Run tests
         run:  |
-          cd /home/runner/work/pgstac/pgstac/src/pypgstac
+          cd ${{ env.GITHUB_WORKSPACE }}/src/pypgstac
           source $UV_PROJECT_ENVIRONMENT/bin/activate
           $SCRIPTS/test
 
@@ -208,14 +194,14 @@ jobs:
   #       with:
   #         working-directory: src/pypgstac
   #         target: x86_64
-  #         args: --release --out /home/runner/work/pgstac/pgstac/dist
+  #         args: --release --out ${{ env.GITHUB_WORKSPACE }}/dist
   #         sccache: 'true'
   #         manylinux: auto
   #     - name: Upload wheels
   #       uses: actions/upload-artifact@v4
   #       with:
   #         name: wheels-x86_64
-  #         path: /home/runner/work/pgstac/pgstac/dist/*
+  #         path: ${{ env.GITHUB_WORKSPACE }}/dist/*
   #         if-no-files-found: error
 
   # linux:
@@ -231,14 +217,14 @@ jobs:
   #       with:
   #         working-directory: src/pypgstac
   #         target: ${{ matrix.target }}
-  #         args: --release --out /home/runner/work/pgstac/pgstac/dist
+  #         args: --release --out ${{ env.GITHUB_WORKSPACE }}/dist
   #         sccache: 'true'
   #         manylinux: auto
   #     - name: Upload wheels
   #       uses: actions/upload-artifact@v4
   #       with:
   #         name: wheels-${{ matrix.target }}
-  #         path: /home/runner/work/pgstac/pgstac/dist/*
+  #         path: ${{ env.GITHUB_WORKSPACE }}/dist/*
   #         if-no-files-found: error
 
   # windows:
@@ -259,13 +245,13 @@ jobs:
   #       with:
   #         working-directory: src/pypgstac
   #         target: ${{ matrix.target }}
-  #         args: --release --out /home/runner/work/pgstac/pgstac/dist
+  #         args: --release --out ${{ env.GITHUB_WORKSPACE }}/dist
   #         sccache: 'true'
   #     - name: Upload wheels
   #       uses: actions/upload-artifact@v4
   #       with:
   #         name: win-wheels-${{ matrix.target }}
-  #         path: /home/runner/work/pgstac/pgstac/dist/*
+  #         path: ${{ env.GITHUB_WORKSPACE }}/dist/*
   #         if-no-files-found: error
 
   # macos:
@@ -300,12 +286,12 @@ jobs:
   #       with:
   #         working-directory: src/pypgstac
   #         command: sdist
-  #         args: --out /home/runner/work/pgstac/pgstac/dist
+  #         args: --out ${{ env.GITHUB_WORKSPACE }}/dist
   #     - name: Upload sdist
   #       uses: actions/upload-artifact@v4
   #       with:
   #         name: source-wheels
-  #         path: /home/runner/work/pgstac/pgstac/dist/*
+  #         path: ${{ env.GITHUB_WORKSPACE }}/dist/*
   #         if-no-files-found: error
 
   #
