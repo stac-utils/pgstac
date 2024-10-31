@@ -706,6 +706,12 @@ SELECT * FROM pg_temp.testpaging('desc','asc');
 \copy items_staging (content) FROM 'tests/testdata/items_duplicate_ids.ndjson'
 
 SELECT is(
+    (SELECT count(*) FROM items WHERE id='pgstac-test-item-duplicated'),
+    '2',
+    'Check count of items with dupe id'
+);
+
+SELECT is(
     (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"]}')->'features')),
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, no collections specified. #192'

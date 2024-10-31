@@ -34,7 +34,7 @@ SELECT plan(229);
 \i tests/pgtap/004a_collectionsearch.sql
 \i tests/pgtap/005_tileutils.sql
 \i tests/pgtap/006_tilesearch.sql
-\i tests/pgtap/999_version.sql
+\i tests/pgtap/999_testreadonly.sql
 
 -- Finish the tests and clean up.
 SELECT * FROM finish();

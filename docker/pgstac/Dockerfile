@@ -1,8 +1,8 @@
-ARG PG_MAJOR=15
+ARG PG_MAJOR=16
 ARG POSTGIS_MAJOR=3
 
 # Base postgres image that pgstac can be installed onto
-FROM postgres:${PG_MAJOR}-bullseye AS pgstacbase
+FROM postgres:${PG_MAJOR}-bookworm AS pgstacbase
 ARG POSTGIS_MAJOR
 RUN  \
     apt-get update \
@@ -20,11 +20,12 @@ COPY docker/pgstac/dbinit/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.
 
 # Base postgres image with plrust installed that can be used for future development using plrust
 FROM pgstacbase AS pgstacbase-plrust
-ENV PLRUSTVERSION=1.2.7
-ENV RUSTVERSION=1.72.0
-ENV PLRUSTDOWNLOADURL=https://github.com/tcdi/plrust/releases/download/
-ENV PLRUSTFILE=plrust-trusted-${PLRUSTVERSION}_${RUSTVERSION}-debian-pg${PG_MAJOR}-amd64.deb
-ENV PLRUSTURL=${PLRUSTDOWNLOADURL}v${PLRUSTVERSION}/${PLRUSTFILE}
+ENV \
+    PLRUSTVERSION=1.2.7 \
+    RUSTVERSION=1.72.0 \
+    PLRUSTDOWNLOADURL=https://github.com/tcdi/plrust/releases/download/ \
+    PLRUSTFILE=plrust-trusted-${PLRUSTVERSION}_${RUSTVERSION}-debian-pg${PG_MAJOR}-amd64.deb \
+    PLRUSTURL=${PLRUSTDOWNLOADURL}v${PLRUSTVERSION}/${PLRUSTFILE}
 ADD $PLRUSTURL .
 ENV PATH=/home/postgres/.cargo/bin:$PATH
 RUN  \

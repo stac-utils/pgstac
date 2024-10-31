@@ -1,6 +1,4 @@
-ARG UV_VERSION=latest
-ARG PY_VERSION=3.12
-
+# Image used to build wheels for pypgstac
 FROM ghcr.io/pyo3/maturin AS pypgstacbuilder
 WORKDIR /io
 RUN --mount=type=bind,source=./src/pypgstac,target=/io \
@@ -10,7 +8,8 @@ RUN --mount=type=bind,source=./src/pypgstac,target=/io \
 ENTRYPOINT []
 CMD []
 
-FROM ghcr.io/astral-sh/uv:python3.9-bookworm-slim AS pypgstac-slim
+# Image that contains pypgstac but not psql, dev, or test
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS pypgstac-slim-base
 ENV \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -24,22 +23,14 @@ RUN \
     --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
     --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
     uv venv --allow-existing --relocatable /venv \
-    && uv sync --frozen --no-install-project \
-    && uv pip install psycopg[binary] psycopg-pool
-
-RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/wheels \
-    for i in /wheels/pypgstac*x86_64.whl; do uv pip install pypgstac@$i; done
+    && uv sync --frozen --no-install-project --extra psycopg
 
 ENTRYPOINT []
 CMD ["/bin/true"]
 
-FROM ghcr.io/astral-sh/uv:python3.9-bookworm-slim AS pypgstac
+# Base image with psql and all dependencies
+FROM pypgstac-slim-base AS pypgstac-base
 ENV \
-    UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1 \
-    UV_PROJECT_ENVIRONMENT=/venv \
-    UV_PYTHON_INSTALL_DIR=/venv/bin \
-    VIRTUAL_ENVIRONMENT=/venv \
     PATH=/scripts:/venv/bin:$PATH \
     SCRIPTS=/scripts \
     PGSTACDIR=/src/pgstac \
@@ -48,27 +39,34 @@ ENV \
     TESTS=/src/pypgstac/tests
 WORKDIR /opt/src/pypgstac
 RUN \
+    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=./src/pypgstac/uv.lock,target=/opt/src/pypgstac/uv.lock \
     --mount=type=bind,source=./src/pypgstac/pyproject.toml,target=/opt/src/pypgstac/pyproject.toml \
     apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         postgresql-client libpq-dev python3-dev \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \
-    && uv venv --allow-existing --relocatable /venv \
-    && uv sync --frozen --no-install-project --extra test --extra dev --extra migrations \
-    && uv pip install psycopg[binary] psycopg-pool setuptools
+    && uv sync --frozen --no-install-project --extra test --extra dev --extra migrations --extra psycopg \
+    && uv pip install setuptools
 
+
+# slim image for running pypgstac
+FROM pypgstac-slim-base AS pypgstac-slim
 COPY ./docker/pypgstac/bin/ /scripts/
 COPY ./src /src
+RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/tmp/wheels \
+    uv pip install --offline --find-links /tmp/wheels pypgstac
 
-RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/wheels \
-    for i in /wheels/pypgstac*x86_64.whl; do echo $i; uv pip install pypgstac@$i; done
+# Loaded image for running pypgstac and test suite
+FROM pypgstac-base AS pypgstac
+COPY ./docker/pypgstac/bin/ /scripts/
+COPY ./src /src
+RUN --mount=type=bind,from=pypgstacbuilder,source=/wheels,target=/tmp/wheels \
+    uv pip install --offline --find-links /tmp/wheels pypgstac
 
-ENTRYPOINT []
-CMD ["/bin/true"]
 
 
 
