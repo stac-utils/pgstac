@@ -145,7 +145,7 @@ jobs:
     needs: [check-pgstac-base, check-pypgstac-base, buildpg, buildpypgstacbase, wheels]
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
-    container: ${{ env.REGISTRYPATH }}/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
+    container: ghcr.io/stac-utils/pypgstac-base:${{ needs.check-pypgstac-base.outputs.pypgstac-image-hash }}
     env:
       PGHOST: localhost
       PGUSER: postgres
@@ -153,7 +153,7 @@ jobs:
       PGDATABASE: postgres
     services:
       pg:
-        image: ${{ env.REGISTRYPATH }}/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
+        image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
