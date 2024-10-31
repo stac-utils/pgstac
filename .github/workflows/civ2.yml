@@ -43,7 +43,7 @@ jobs:
         run: |
           IMAGE=stac-utils/pgstac-base
           HASH=$(git log -1 --pretty="format:%h" -- docker/pgstac)
-          TAG="\"$HASH\""
+          TAG="\"sha-$HASH\""
           TOKEN=$(curl -s https://ghcr.io/token\?scope\="repository:$IMAGE:pull" | jq -r .token)
           EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/$IMAGE/tags/list | jq "try(any(.tags[]; . == $TAG))")
           echo "pgstac-image-exists=$EXISTS" >>$GITHUB_OUTPUT
