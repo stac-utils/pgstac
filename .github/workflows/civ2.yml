@@ -176,7 +176,6 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          cd /opt/src/pypgstac
           pwd
           ls
           source /venv/bin/activate
