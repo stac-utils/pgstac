@@ -154,6 +154,7 @@ jobs:
         PGDATABASE: postgres
       volumes:
         - ${{ github.workspace }}:/opt/src/
+        - ${{ github.workspace }}:/src/
     services:
       pg:
         image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
@@ -166,6 +167,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        ports:
+          - 5432:5432
 
     steps:
       - uses: actions/checkout@v4
@@ -176,16 +179,9 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
-          pwd
-          ln -s $PWD/src /src
-          ls -altrh /src
-          export
-          . /venv/bin/activate
-          echo "venv activated"
-          uv pip install --offline --find-links /tmp/wheels pypgstac
-          echo "pypgstac installed from wheel"
-          /scripts/test
-          echo "tests completed"
+          . /venv/bin/activate && echo "venv activated"
+          uv pip install --offline --find-links /tmp/wheels pypgstac && echo "pypgstac installed from wheel"
+          /scripts/test && echo "tests completed"
 
 
   # linux_x86_64:
