@@ -180,7 +180,7 @@ jobs:
           ls
           ls /
           export
-          ls /venv
+          ls /venv/bin
           source /venv/bin/activate
           echo "venv activated"
           uv pip install --offline --find-links /tmp/wheels pypgstac
