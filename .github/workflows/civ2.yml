@@ -181,7 +181,7 @@ jobs:
           ls /
           export
           ls /venv/bin
-          source /venv/bin/activate
+          . /venv/bin/activate
           echo "venv activated"
           uv pip install --offline --find-links /tmp/wheels pypgstac
           echo "pypgstac installed from wheel"
