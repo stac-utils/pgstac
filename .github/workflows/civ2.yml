@@ -182,11 +182,12 @@ jobs:
           export
           ls /venv
           source /venv/bin/activate
+          echo "venv activated"
           uv pip install --offline --find-links /tmp/wheels pypgstac
-      - name: Run tests
-        run:  |
-          source /venv/bin/activate
+          echo "pypgstac installed from wheel"
           /scripts/test
+          echo "tests completed"
+
 
   # linux_x86_64:
   #   runs-on: ubuntu-latest
