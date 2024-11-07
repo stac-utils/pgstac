@@ -179,10 +179,8 @@ jobs:
           pwd
           mkdir -p /src
           ln -s $PWD/src /src
-          ls
-          ls /
+          ls -altrh /src
           export
-          ls /venv/bin
           . /venv/bin/activate
           echo "venv activated"
           uv pip install --offline --find-links /tmp/wheels pypgstac
