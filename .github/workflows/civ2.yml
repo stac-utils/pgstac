@@ -153,8 +153,8 @@ jobs:
         PGPASSWORD: postgres
         PGDATABASE: postgres
       volumes:
-        - ${{ github.workspace }}:/opt/src/
-        - ${{ github.workspace }}:/src/
+        - ${{ github.workspace }}:/opt/src
+        - ${{ github.workspace }}:/src
     services:
       pg:
         image: ghcr.io/stac-utils/pgstac-base:${{ needs.check-pgstac-base.outputs.pgstac-image-hash }}
