@@ -177,6 +177,8 @@ jobs:
       - name: Install pypgstac
         run:  |
           pwd
+          mkdir -p /src
+          ln -s $PWD/src /src
           ls
           ls /
           export
