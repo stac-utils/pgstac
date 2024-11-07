@@ -179,8 +179,11 @@ jobs:
             path: /tmp/wheels
       - name: Install pypgstac
         run:  |
+          echo "ls /"
           ls /
+          echo "ls /opt/"
           ls /opt/
+          echo "ls /src/"
           ls /src/
           . /venv/bin/activate && echo "venv activated"
           uv pip install --offline --find-links /tmp/wheels pypgstac && echo "pypgstac installed from wheel"
