@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
     "cachetools==5.3.*",
     "fire==0.4.*",
-    "hydraters==0.1.0",
+    "hydraters==0.1.*",
     "orjson>=3.5.2",
     "plpygis==0.2.*",
     "pydantic>=1.7",
