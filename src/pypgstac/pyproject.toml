@@ -20,14 +20,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "smart-open>=4.2",
-    "orjson>=3.5.2",
-    "python-dateutil==2.8.*",
+    "cachetools==5.3.*",
     "fire==0.4.*",
+    "hydraters==0.1.*",
+    "orjson>=3.5.2",
     "plpygis==0.2.*",
     "pydantic>=1.7",
+    "python-dateutil==2.8.*",
+    "smart-open>=4.2",
     "tenacity==8.1.*",
-    "cachetools==5.3.*",
     "version-parser>= 1.0.1",
 ]
 
@@ -37,9 +38,6 @@ test = [
     "pytest-cov",
     "pystac[validation]==1.*",
     "types-cachetools",
-]
-build = [
-    "maturin>=1,<2",
 ]
 dev = [
     "flake8==3.9.*",
@@ -71,8 +69,8 @@ Changelog = "https://stac-utils.github.io/pgstac/release-notes/"
 pypgstac = "pypgstac.pypgstac:cli"
 
 [build-system]
-requires = ["maturin>=1,<2"]
-build-backend = "maturin"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.coverage.run]
 branch = true
@@ -118,20 +116,11 @@ ignore = [
 known-first-party = ["pypgstac"]
 
 [tool.mypy]
-no_strict_optional = "True"
-ignore_missing_imports = "True"
-disallow_untyped_defs = "True"
-namespace_packages = "True"
+strict_optional = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+namespace_packages = true
 
 [tool.pydocstyle]
 select = "D1"
 match = "(?!test).*.py"
-
-[tool.maturin]
-python-source = "python"
-module-name = "pypgstac.pgstacrs"
-strip = true
-sdist-generator = "cargo"
-include = [
-    "pypgstac/migrations/*.sql"
-]

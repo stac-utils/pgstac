@@ -151,106 +151,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
-  linux:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: src/pypgstac
-          target: ${{ matrix.target }}
-          args: --release --out /home/runner/work/pgstac/pgstac/dist
-          sccache: 'true'
-          manylinux: auto
-      - name: Upload wheels
-        uses: actions/upload-artifact@v3
-        with:
-          name: wheels
-          path: /home/runner/work/pgstac/pgstac/dist/*
-
-  windows:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        target: [x64, x86]
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          architecture: ${{ matrix.target }}
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: src/pypgstac
-          target: ${{ matrix.target }}
-          args: --release --out /home/runner/work/pgstac/pgstac/dist
-          sccache: 'true'
-      - name: Upload wheels
-        uses: actions/upload-artifact@v3
-        with:
-          name: wheels
-          path: /home/runner/work/pgstac/pgstac/dist/*
-
-  macos:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        target: [x86_64, aarch64]
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: src/pypgstac
-          target: ${{ matrix.target }}
-          args: --release --out /tmp/dist
-          sccache: 'true'
-      - name: Upload wheels
-        uses: actions/upload-artifact@v3
-        with:
-          name: wheels
-          path: /tmp/dist/*
-
-  sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: src/pypgstac
-          command: sdist
-          args: --out /home/runner/work/pgstac/pgstac/dist
-      - name: Upload sdist
-        uses: actions/upload-artifact@v3
-        with:
-          name: wheels
-          path: /home/runner/work/pgstac/pgstac/dist/*
-
   releasetopypi:
     name: Release
     runs-on: ubuntu-latest
-    needs: [linux, windows, macos, sdist]
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pypgstac
     steps:
-      - uses: actions/download-artifact@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          name: wheels
+          python-version: "3.x"
+      - name: Install build
+        run: pip install build
+      - name: Build
+        run: python -m build
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_USERNAME: ${{ secrets.PYPI_STACUTILS_USERNAME }}
-          MATURIN_PASSWORD: ${{ secrets.PYPI_STACUTILS_PASSWORD }}
-        with:
-          command: upload
-          args: --skip-existing *
+        uses: pypa/gh-action-pypi-publish@release/v1
