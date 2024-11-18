@@ -95,7 +95,7 @@ CREATE UNIQUE INDEX ON partitions (partition);
 
 CREATE MATERIALIZED VIEW partition_steps AS
 SELECT
-    partition as name,
+    split_part(partition, '.', -1) AS name,
     date_trunc('month',lower(partition_dtrange)) as sdate,
     date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
     FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
