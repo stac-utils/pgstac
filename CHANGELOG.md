@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add `open=True` in `psycopg.ConnectionPool` to avoid future behavior change
 - Switch from postgres `server_version` to `server_version_num` to get PG version (Fixes #300)
 - Allow read-only replicas work even when the context extension is enabled (Fixes #300)
+- Allow docker entrypoint to execute `psql` command in shell script if `PGHOST` is set (Fixes #318)
 
 ## [v0.9.1]
 

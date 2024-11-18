@@ -155,9 +155,9 @@ docker_verify_minimum_env() {
 #    ie: docker_process_init_files /always-initdb.d/*
 # process initializer files, based on file extensions and permissions
 docker_process_init_files() {
-	# psql here for backwards compatibility "${psql[@]}"
-	psql=( docker_process_sql )
-
+	# psql here so that *.sh files that call psql will use the docker_process_sql helper instead
+	psql() { docker_process_sql "$@"; }
+	export -f psql docker_process_sql
 	printf '\n'
 	local f
 	for f; do
@@ -181,6 +181,8 @@ docker_process_init_files() {
 		esac
 		printf '\n'
 	done
+	unset -f psql
+	export -fn docker_process_sql
 }
 
 # Execute sql script, passed via stdin (or -f flag of pqsl)
@@ -189,7 +191,7 @@ docker_process_init_files() {
 #    ie: docker_process_sql -f my-file.sql
 #    ie: docker_process_sql <my-file.sql
 docker_process_sql() {
-	local query_runner=( psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --no-password --no-psqlrc )
+	local query_runner=( $(type -P psql) -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --no-password --no-psqlrc )
 	if [ -n "$POSTGRES_DB" ]; then
 		query_runner+=( --dbname "$POSTGRES_DB" )
 	fi
