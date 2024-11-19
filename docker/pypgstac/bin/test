@@ -46,10 +46,10 @@ function test_formatting(){
     cd $SRCDIR/pypgstac
 
     echo "Running ruff"
-    ruff -n python tests
+    ruff -n src tests
 
     echo "Running mypy"
-    mypy python
+    mypy src
 
     echo "Checking if there are any staged migrations."
     find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }

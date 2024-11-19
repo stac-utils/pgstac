@@ -492,12 +492,12 @@ class Loader:
                 ),
             )
             if db_rows:
-                datetime_range_min: Optional[datetime] = db_rows[0][0] or datetime.min
-                datetime_range_max: Optional[datetime] = db_rows[0][1] or datetime.max
-                end_datetime_range_min: Optional[datetime] = (
+                datetime_range_min: datetime = db_rows[0][0] or datetime.min
+                datetime_range_max: datetime = db_rows[0][1] or datetime.max
+                end_datetime_range_min: datetime = (
                     db_rows[0][2] or datetime.min
                 )
-                end_datetime_range_max: Optional[datetime] = (
+                end_datetime_range_max: datetime = (
                     db_rows[0][3] or datetime.max
                 )
 
