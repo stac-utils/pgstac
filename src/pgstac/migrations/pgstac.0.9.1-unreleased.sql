@@ -431,6 +431,65 @@ create or replace view "pgstac"."partitions_view" as  SELECT (parse_ident((pg_pa
   WHERE pg_partition_tree.isleaf;
 
 
+CREATE OR REPLACE FUNCTION pgstac.queryable(dotpath text, OUT path text, OUT expression text, OUT wrapper text, OUT nulled_wrapper text)
+ RETURNS record
+ LANGUAGE plpgsql
+ STABLE STRICT
+AS $function$
+DECLARE
+    q RECORD;
+    path_elements text[];
+BEGIN
+    dotpath := replace(dotpath, 'properties.', '');
+    IF dotpath = 'start_datetime' THEN
+        dotpath := 'datetime';
+    END IF;
+    IF dotpath IN ('id', 'geometry', 'datetime', 'end_datetime', 'collection') THEN
+        path := dotpath;
+        expression := dotpath;
+        wrapper := NULL;
+        RETURN;
+    END IF;
+
+    SELECT * INTO q FROM queryables
+        WHERE
+            name=dotpath
+            OR name = 'properties.' || dotpath
+            OR name = replace(dotpath, 'properties.', '')
+    ;
+    IF q.property_wrapper IS NULL THEN
+        IF q.definition->>'type' = 'number' THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSE
+            nulled_wrapper := NULL;
+            wrapper := 'to_text';
+        END IF;
+    ELSE
+        wrapper := q.property_wrapper;
+        nulled_wrapper := wrapper;
+    END IF;
+    IF q.property_path IS NOT NULL THEN
+        path := q.property_path;
+    ELSE
+        path_elements := string_to_array(dotpath, '.');
+        IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
+            path := format('content->%s', array_to_path(path_elements));
+        ELSIF path_elements[1] = 'properties' THEN
+            path := format('content->%s', array_to_path(path_elements));
+        ELSE
+            path := format($F$content->'properties'->%s$F$, array_to_path(path_elements));
+        END IF;
+    END IF;
+    expression := format('%I(%s)', wrapper, path);
+    RETURN;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.stac_search_to_where(j jsonb)
  RETURNS text
  LANGUAGE plpgsql
