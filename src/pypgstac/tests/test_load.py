@@ -291,12 +291,14 @@ def test_format_items_keys(loader: Loader) -> None:
     assert "collection" in out
     assert "geometry" in out
     assert "content" in out
+    assert "private" in out
 
     # Special keys expected not to be in the item content
     content_json = json.loads(out["content"])
     assert "id" not in content_json
     assert "collection" not in content_json
     assert "geometry" not in content_json
+    assert "private" not in content_json
 
     # Ensure bbox is included in content
     assert "bbox" in content_json
