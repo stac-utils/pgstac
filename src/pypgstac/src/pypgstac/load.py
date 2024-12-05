@@ -318,7 +318,7 @@ class Loader:
                         sql.SQL(
                             """
                             COPY {}
-                            (id, collection, datetime, end_datetime, geometry, content)
+                            (id, collection, datetime, end_datetime, geometry, content, private)
                             FROM stdin;
                             """,
                         ).format(sql.Identifier(partition.name)),
@@ -333,6 +333,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
+                                    item["private"],
                                 ),
                             )
                     logger.debug(cur.statusmessage)
@@ -353,7 +354,7 @@ class Loader:
                     with cur.copy(
                         """
                         COPY items_ingest_temp
-                        (id, collection, datetime, end_datetime, geometry, content)
+                        (id, collection, datetime, end_datetime, geometry, content, private)
                         FROM stdin;
                         """,
                     ) as copy:
@@ -367,6 +368,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
+                                    item["private"],
                                 ),
                             )
                     logger.debug(cur.statusmessage)
@@ -677,6 +679,11 @@ class Loader:
         content.pop("id", None)
         content.pop("collection", None)
         content.pop("geometry", None)
+
+        if (private := content.pop("private", None)) is not None:
+            out["private"] = orjson.dumps(private).decode()
+        else:
+            out["private"] = None
 
         out["content"] = orjson.dumps(content).decode()
 
