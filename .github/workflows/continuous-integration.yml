@@ -31,8 +31,10 @@ jobs:
           filters: |
             pgstac:
               - 'docker/pgstac/**'
+              - 'src/pgstac/pgstac.sql'
             pypgstac:
               - 'docker/pypgstac/**'
+              - 'src/**'
       - id: check
         run: |
           buildpg=false;
@@ -101,6 +103,7 @@ jobs:
   test:
     name: test
     needs: [changes, buildpg, buildpyrust]
+    if: ${{ needs.changes.outputs.buildpgdocker == 'true' || needs.changes.outputs.buildpyrustdocker == 'true' }}
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.changes.outputs.pyrustdocker }}
