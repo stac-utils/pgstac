@@ -335,7 +335,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
-                                    item["private"],
+                                    item.get("private", None),
                                 ),
                             )
                     logger.debug(cur.statusmessage)
@@ -372,7 +372,7 @@ class Loader:
                                     item["end_datetime"],
                                     item["geometry"],
                                     item["content"],
-                                    item["private"],
+                                    item.get("private", None),
                                 ),
                             )
                     logger.debug(cur.statusmessage)
