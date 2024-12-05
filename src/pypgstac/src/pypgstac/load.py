@@ -318,7 +318,9 @@ class Loader:
                         sql.SQL(
                             """
                             COPY {}
-                            (id, collection, datetime, end_datetime, geometry, content, private)
+                            (id, collection, datetime,
+                            end_datetime, geometry,
+                            content, private)
                             FROM stdin;
                             """,
                         ).format(sql.Identifier(partition.name)),
@@ -354,7 +356,9 @@ class Loader:
                     with cur.copy(
                         """
                         COPY items_ingest_temp
-                        (id, collection, datetime, end_datetime, geometry, content, private)
+                        (id, collection, datetime,
+                        end_datetime, geometry,
+                        content, private)
                         FROM stdin;
                         """,
                     ) as copy:
