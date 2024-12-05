@@ -68,7 +68,7 @@ class TestHydrate:
             ),
         )
 
-        assert type(base_item) == dict
+        assert type(base_item) is dict
 
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == raw_item

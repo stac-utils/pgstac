@@ -12,6 +12,7 @@ BEGIN
     END IF;
     EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s;', _where)
     INTO explain;
+    RAISE DEBUG 'EXPLAIN: %', explain;
 
     RETURN QUERY
     WITH t AS (

@@ -46,10 +46,10 @@ function test_formatting(){
     cd $SRCDIR/pypgstac
 
     echo "Running ruff"
-    ruff -n python tests
+    ruff check src/pypgstac tests
 
     echo "Running mypy"
-    mypy python
+    mypy src/pypgstac
 
     echo "Checking if there are any staged migrations."
     find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
@@ -82,7 +82,7 @@ DROP DATABASE IF EXISTS pgstac_test_pgtap WITH (force);
 EOSQL
 if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
     echo "PGTap tests failed."
-    echo "$TESTOUTPUT"
+    echo "$TESTOUTPUT" | awk NF
     exit 1
 else
     echo "PGTap Tests Passed!"

@@ -1,4 +1,5 @@
 """Utilities to bulk load data into pgstac from json/ndjson."""
+
 import contextlib
 import itertools
 import logging
@@ -83,7 +84,10 @@ class Methods(str, Enum):
 
 @contextlib.contextmanager
 def open_std(
-    filename: str, mode: str = "r", *args: Any, **kwargs: Any,
+    filename: str,
+    mode: str = "r",
+    *args: Any,
+    **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
     fh: Union[TextIO, BinaryIO]
@@ -305,7 +309,6 @@ class Loader:
                 logger.debug(f"Partition {partition.name} does not require an update.")
 
             with conn.transaction():
-
                 t = time.perf_counter()
                 if insert_mode in (
                     None,
@@ -432,7 +435,6 @@ class Loader:
                                 ;
                                 """,
                             ).format(sql.Identifier(partition.name)),
-
                         )
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
@@ -442,7 +444,7 @@ class Loader:
                         f"You entered {insert_mode}.",
                     )
                 logger.debug("Updating Partition Stats")
-                cur.execute("SELECT update_partition_stats_q(%s);",(partition.name,))
+                cur.execute("SELECT update_partition_stats_q(%s);", (partition.name,))
                 logger.debug(cur.statusmessage)
                 logger.debug(f"Rows affected: {cur.rowcount}")
         logger.debug(
@@ -492,14 +494,10 @@ class Loader:
                 ),
             )
             if db_rows:
-                datetime_range_min: Optional[datetime] = db_rows[0][0] or datetime.min
-                datetime_range_max: Optional[datetime] = db_rows[0][1] or datetime.max
-                end_datetime_range_min: Optional[datetime] = (
-                    db_rows[0][2] or datetime.min
-                )
-                end_datetime_range_max: Optional[datetime] = (
-                    db_rows[0][3] or datetime.max
-                )
+                datetime_range_min: datetime = db_rows[0][0] or datetime.min
+                datetime_range_max: datetime = db_rows[0][1] or datetime.max
+                end_datetime_range_min: datetime = db_rows[0][2] or datetime.min
+                end_datetime_range_max: datetime = db_rows[0][3] or datetime.max
 
                 partition = Partition(
                     name=partition_name,
@@ -579,7 +577,8 @@ class Loader:
                     yield item
 
     def read_hydrated(
-        self, file: Union[Path, str, Iterator[Any]] = "stdin",
+        self,
+        file: Union[Path, str, Iterator[Any]] = "stdin",
     ) -> Generator:
         for line in read_json(file):
             item = self.format_item(line)

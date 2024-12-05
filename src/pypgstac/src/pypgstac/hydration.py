@@ -20,7 +20,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
     def merge(b: Dict[str, Any], i: Dict[str, Any]) -> None:
-        for key in b:
+        for key, _ in b.items():
             if key in i:
                 if isinstance(b[key], dict) and isinstance(i.get(key), dict):
                     # Recurse on dicts to merge values

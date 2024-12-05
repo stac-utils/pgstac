@@ -22,10 +22,11 @@ def test_landsat_c2_l1(loader: Loader) -> None:
     base_item = cast(
         Dict[str, Any],
         loader.db.query_one(
-            "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],),
+            "SELECT base_item FROM collections WHERE id=%s;",
+            (collection["id"],),
         ),
     )
 
-    assert type(base_item) == dict
+    assert type(base_item) is dict
     assert base_item["collection"] == collection["id"]
     assert base_item["assets"] == collection["item_assets"]
