@@ -46,7 +46,7 @@ $$ LANGUAGE PLPGSQL STABLE STRICT;
 
 CREATE OR REPLACE VIEW partition_sys_meta AS
 SELECT
-    relid::text as partition,
+    (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
     replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
         ELSE pg_get_expr(parent.relpartbound, parent.oid)
     END, 'FOR VALUES IN (''',''), ''')','') AS collection,
@@ -64,28 +64,28 @@ FROM
 WHERE isleaf
 ;
 
-CREATE VIEW partitions_view AS
+CREATE OR REPLACE VIEW partitions_view AS
 SELECT
-    relid::text as partition,
+    (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
     replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
         ELSE pg_get_expr(parent.relpartbound, parent.oid)
     END, 'FOR VALUES IN (''',''), ''')','') AS collection,
     level,
     c.reltuples,
     c.relhastriggers,
-    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
-    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
-    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange,
+    COALESCE(pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
+    COALESCE((pgstac.dt_constraint(edt.oid)).dt, pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
+    COALESCE((pgstac.dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange,
     dtrange,
     edtrange,
     spatial,
     last_updated
 FROM
-    pg_partition_tree('items')
+    pg_partition_tree('pgstac.items')
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    LEFT JOIN partition_stats ON (relid::text=partition)
+    LEFT JOIN pgstac.partition_stats ON ((parse_ident(relid::text))[cardinality(parse_ident(relid::text))]=partition)
 WHERE isleaf
 ;
 
@@ -132,6 +132,7 @@ BEGIN
         _partition
     ) INTO dtrange, edtrange;
     extent := st_estimatedextent('pgstac', _partition, 'geometry');
+    RAISE DEBUG 'Estimated Extent: %', extent;
     INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
         SELECT _partition, dtrange, edtrange, extent, now()
         ON CONFLICT (partition) DO

@@ -99,10 +99,11 @@ BEGIN
     FROM collection_search_rows(_search) c;
 
     number_returned := jsonb_array_length(out_records);
+    RAISE DEBUG 'nm: %, nr: %, l:%, o:%', number_matched, number_returned, _limit, _offset;
 
 
 
-    IF _limit <= number_matched AND number_matched = 0 THEN --need to have paging links
+    IF _limit <= number_matched AND number_matched > 0 THEN --need to have paging links
         nextoffset := least(_offset + _limit, number_matched - 1);
         prevoffset := greatest(_offset - _limit, 0);
 

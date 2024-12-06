@@ -23,7 +23,9 @@ LANDSAT_ITEM = (
 
 class TestDehydrate:
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
         return hydration.dehydrate(base_item, item)
 
@@ -42,11 +44,12 @@ class TestDehydrate:
         base_item = cast(
             Dict[str, Any],
             loader.db.query_one(
-                "SELECT base_item FROM collections WHERE id=%s;", (collection["id"],),
+                "SELECT base_item FROM collections WHERE id=%s;",
+                (collection["id"],),
             ),
         )
 
-        assert type(base_item) == dict
+        assert type(base_item) is dict
 
         dehydrated = self.dehydrate(base_item, item)
 

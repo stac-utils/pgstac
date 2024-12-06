@@ -39,14 +39,20 @@ if [[ $BUILD == 1 ]]; then
     sleep 4
 fi
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
+echo "PGSTAC_RUNNING=$PGSTAC_RUNNING"
 if [[ $CPFILES == 1 ]]; then
-    docker ps | grep pypgstacworker
-    [[ $? == 0 ]] && echo "Killing pypgstacworker" && docker kill pypgstacworker
+    echo "Checking if pypgstacworker is running"
+    docker ps | grep pypgstacworker && echo "Killing pypgstacworker" && docker kill pypgstacworker || echo "pypgstac worker not running"
+    echo "Running pypgstac worker"
     docker compose run -d --rm --name pypgstacworker pypgstac /bin/bash
+    echo "Executing ${CONTAINER_ARGS[@]} in pypgstac worker"
     docker compose exec pypgstac "${CONTAINER_ARGS[@]}"
+    echo "copying datafiles to host"
     docker cp pypgstacworker:/opt/src $SCRIPT_DIR/..
+    echo "killing pypgstac worker"
     docker kill pypgstacworker
 else
+    echo "Running ${CONTAINER_ARGS[@]} in pypgstacworker"
     docker compose run -T --rm pypgstac "${CONTAINER_ARGS[@]}"
 fi
 JOBEXITCODE=$?

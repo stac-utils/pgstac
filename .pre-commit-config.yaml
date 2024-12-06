@@ -18,12 +18,15 @@ repos:
     -   id: check-symlinks
 
 
--   repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: 'v0.0.284'
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 'v0.8.2'
     hooks:
     -   id: ruff
-        files: pypgstac\/.*\.py$
+        files: src/pypgstac\/.*\.py$
         args: [--fix, --exit-non-zero-on-fix]
+    -   id: ruff-format
+        files: src/pypgstac\/.*\.py$
+
 
 -   repo: local
     hooks:

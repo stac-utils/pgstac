@@ -126,12 +126,17 @@ DECLARE
     q RECORD;
     path_elements text[];
 BEGIN
+    dotpath := replace(dotpath, 'properties.', '');
+    IF dotpath = 'start_datetime' THEN
+        dotpath := 'datetime';
+    END IF;
     IF dotpath IN ('id', 'geometry', 'datetime', 'end_datetime', 'collection') THEN
         path := dotpath;
         expression := dotpath;
         wrapper := NULL;
         RETURN;
     END IF;
+
     SELECT * INTO q FROM queryables
         WHERE
             name=dotpath

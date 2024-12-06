@@ -251,6 +251,47 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.chunker(_where text, OUT s timestamp with time zone, OUT e timestamp with time zone)
+ RETURNS SETOF record
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    explain jsonb;
+BEGIN
+    IF _where IS NULL THEN
+        _where := ' TRUE ';
+    END IF;
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s;', _where)
+    INTO explain;
+    RAISE DEBUG 'EXPLAIN: %', explain;
+
+    RETURN QUERY
+    WITH t AS (
+        SELECT j->>0 as p FROM
+            jsonb_path_query(
+                explain,
+                'strict $.**."Relation Name" ? (@ != null)'
+            ) j
+    ),
+    parts AS (
+        SELECT sdate, edate FROM t JOIN partition_steps ON (t.p = name)
+    ),
+    times AS (
+        SELECT sdate FROM parts
+        UNION
+        SELECT edate FROM parts
+    ),
+    uniq AS (
+        SELECT DISTINCT sdate FROM times ORDER BY sdate
+    ),
+    last AS (
+    SELECT sdate, lead(sdate, 1) over () as edate FROM uniq
+    )
+    SELECT sdate, edate FROM last WHERE edate IS NOT NULL;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.collection_search(_search jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -274,6 +315,7 @@ BEGIN
     FROM collection_search_rows(_search) c;
 
     number_returned := jsonb_array_length(out_records);
+    RAISE DEBUG 'nm: %, nr: %, l:%, o:%', number_matched, number_returned, _limit, _offset;
 
 
 
@@ -341,6 +383,108 @@ BEGIN
         RAISE NOTICE 'Q: %', q;
         RETURN NEXT q;
     END LOOP;
+    RETURN;
+END;
+$function$
+;
+
+create or replace view "pgstac"."partition_sys_meta" as  SELECT (parse_ident((pg_partition_tree.relid)::text))[cardinality(parse_ident((pg_partition_tree.relid)::text))] AS partition,
+    replace(replace(
+        CASE
+            WHEN (pg_partition_tree.level = 1) THEN pg_get_expr(c.relpartbound, c.oid)
+            ELSE pg_get_expr(parent.relpartbound, parent.oid)
+        END, 'FOR VALUES IN ('''::text, ''::text), ''')'::text, ''::text) AS collection,
+    pg_partition_tree.level,
+    c.reltuples,
+    c.relhastriggers,
+    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS partition_dtrange,
+    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS constraint_dtrange,
+    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS constraint_edtrange
+   FROM (((pg_partition_tree('items'::regclass) pg_partition_tree(relid, parentrelid, isleaf, level)
+     JOIN pg_class c ON (((pg_partition_tree.relid)::oid = c.oid)))
+     JOIN pg_class parent ON ((((pg_partition_tree.parentrelid)::oid = parent.oid) AND pg_partition_tree.isleaf)))
+     LEFT JOIN pg_constraint edt ON (((edt.conrelid = c.oid) AND (edt.contype = 'c'::"char"))))
+  WHERE pg_partition_tree.isleaf;
+
+
+create or replace view "pgstac"."partitions_view" as  SELECT (parse_ident((pg_partition_tree.relid)::text))[cardinality(parse_ident((pg_partition_tree.relid)::text))] AS partition,
+    replace(replace(
+        CASE
+            WHEN (pg_partition_tree.level = 1) THEN pg_get_expr(c.relpartbound, c.oid)
+            ELSE pg_get_expr(parent.relpartbound, parent.oid)
+        END, 'FOR VALUES IN ('''::text, ''::text), ''')'::text, ''::text) AS collection,
+    pg_partition_tree.level,
+    c.reltuples,
+    c.relhastriggers,
+    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS partition_dtrange,
+    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS constraint_dtrange,
+    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone, '[]'::text)) AS constraint_edtrange,
+    partition_stats.dtrange,
+    partition_stats.edtrange,
+    partition_stats.spatial,
+    partition_stats.last_updated
+   FROM ((((pg_partition_tree('items'::regclass) pg_partition_tree(relid, parentrelid, isleaf, level)
+     JOIN pg_class c ON (((pg_partition_tree.relid)::oid = c.oid)))
+     JOIN pg_class parent ON ((((pg_partition_tree.parentrelid)::oid = parent.oid) AND pg_partition_tree.isleaf)))
+     LEFT JOIN pg_constraint edt ON (((edt.conrelid = c.oid) AND (edt.contype = 'c'::"char"))))
+     LEFT JOIN partition_stats ON (((parse_ident((pg_partition_tree.relid)::text))[cardinality(parse_ident((pg_partition_tree.relid)::text))] = partition_stats.partition)))
+  WHERE pg_partition_tree.isleaf;
+
+
+CREATE OR REPLACE FUNCTION pgstac.queryable(dotpath text, OUT path text, OUT expression text, OUT wrapper text, OUT nulled_wrapper text)
+ RETURNS record
+ LANGUAGE plpgsql
+ STABLE STRICT
+AS $function$
+DECLARE
+    q RECORD;
+    path_elements text[];
+BEGIN
+    dotpath := replace(dotpath, 'properties.', '');
+    IF dotpath = 'start_datetime' THEN
+        dotpath := 'datetime';
+    END IF;
+    IF dotpath IN ('id', 'geometry', 'datetime', 'end_datetime', 'collection') THEN
+        path := dotpath;
+        expression := dotpath;
+        wrapper := NULL;
+        RETURN;
+    END IF;
+
+    SELECT * INTO q FROM queryables
+        WHERE
+            name=dotpath
+            OR name = 'properties.' || dotpath
+            OR name = replace(dotpath, 'properties.', '')
+    ;
+    IF q.property_wrapper IS NULL THEN
+        IF q.definition->>'type' = 'number' THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSE
+            nulled_wrapper := NULL;
+            wrapper := 'to_text';
+        END IF;
+    ELSE
+        wrapper := q.property_wrapper;
+        nulled_wrapper := wrapper;
+    END IF;
+    IF q.property_path IS NOT NULL THEN
+        path := q.property_path;
+    ELSE
+        path_elements := string_to_array(dotpath, '.');
+        IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
+            path := format('content->%s', array_to_path(path_elements));
+        ELSIF path_elements[1] = 'properties' THEN
+            path := format('content->%s', array_to_path(path_elements));
+        ELSE
+            path := format($F$content->'properties'->%s$F$, array_to_path(path_elements));
+        END IF;
+    END IF;
+    expression := format('%I(%s)', wrapper, path);
     RETURN;
 END;
 $function$
@@ -435,6 +579,85 @@ BEGIN
         RETURN ' TRUE ';
     END IF;
     RETURN _where;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.update_partition_stats(_partition text, istrigger boolean DEFAULT false)
+ RETURNS void
+ LANGUAGE plpgsql
+ STRICT SECURITY DEFINER
+AS $function$
+DECLARE
+    dtrange tstzrange;
+    edtrange tstzrange;
+    cdtrange tstzrange;
+    cedtrange tstzrange;
+    extent geometry;
+    collection text;
+BEGIN
+    RAISE NOTICE 'Updating stats for %.', _partition;
+    EXECUTE format(
+        $q$
+            SELECT
+                tstzrange(min(datetime), max(datetime),'[]'),
+                tstzrange(min(end_datetime), max(end_datetime), '[]')
+            FROM %I
+        $q$,
+        _partition
+    ) INTO dtrange, edtrange;
+    extent := st_estimatedextent('pgstac', _partition, 'geometry');
+    RAISE DEBUG 'Estimated Extent: %', extent;
+    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
+        SELECT _partition, dtrange, edtrange, extent, now()
+        ON CONFLICT (partition) DO
+            UPDATE SET
+                dtrange=EXCLUDED.dtrange,
+                edtrange=EXCLUDED.edtrange,
+                spatial=EXCLUDED.spatial,
+                last_updated=EXCLUDED.last_updated
+    ;
+
+    SELECT
+        constraint_dtrange, constraint_edtrange, pv.collection
+        INTO cdtrange, cedtrange, collection
+    FROM partitions_view pv WHERE partition = _partition;
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
+
+
+    RAISE NOTICE 'Checking if we need to modify constraints...';
+    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
+    IF
+        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
+        AND NOT istrigger
+    THEN
+        RAISE NOTICE 'Modifying Constraints';
+        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
+        RAISE NOTICE 'New      % %', dtrange, edtrange;
+        PERFORM drop_table_constraints(_partition);
+        PERFORM create_table_constraints(_partition, dtrange, edtrange);
+        REFRESH MATERIALIZED VIEW partitions;
+        REFRESH MATERIALIZED VIEW partition_steps;
+    END IF;
+    RAISE NOTICE 'Checking if we need to update collection extents.';
+    IF get_setting_bool('update_collection_extent') THEN
+        RAISE NOTICE 'updating collection extent for %', collection;
+        PERFORM run_or_queue(format($q$
+            UPDATE collections
+            SET content = jsonb_set_lax(
+                content,
+                '{extent}'::text[],
+                collection_extent(%L, FALSE),
+                true,
+                'use_json_null'
+            ) WHERE id=%L
+            ;
+        $q$, collection, collection));
+    ELSE
+        RAISE NOTICE 'Not updating collection extent for %', collection;
+    END IF;
 
 END;
 $function$
