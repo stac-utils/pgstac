@@ -167,8 +167,10 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install build
+        working-directory: /home/runner/work/pgstac/pgstac/src/pypgstac
         run: pip install build
       - name: Build
+        working-directory: /home/runner/work/pgstac/pgstac/src/pypgstac
         run: python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
