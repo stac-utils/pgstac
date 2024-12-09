@@ -187,3 +187,24 @@ These are procedures that should be run periodically to make sure that statistic
 SELECT cron.schedule('0 * * * *', 'CALL validate_constraints();');
 SELECT cron.schedule('10, * * * *', 'CALL analyze_items();');
 ```
+
+### System Checks
+
+#### System and pgSTAC Settings
+PgSTAC includes a function for checking common Postgres settings. You must pass in the amount of total memory available to get appropriate memory settings. Do note that these suggestions are merely a good first pass and figuring out the ideal parameters requires further analysis of a system and logs.
+```sql
+SELECT * FROM check_pgstac_settings('32GB');
+```
+
+#### Unused Indexes
+Having too many indexes that do not get used can drastically hurt the performance of the database. The following query can be used to show indexes that are not getting used and should be considered for removal.
+```sql
+SELECT
+    relname, indexrelname, idx_scan, last_idx_scan,idx_tup_read, idx_tup_fetch,
+    pg_relation_size(relid) as index_bytes,
+    pg_size_pretty(pg_relation_size(relid)) as index_size
+FROM pg_stat_user_indexes
+WHERE schemaname = 'pgstac'
+ORDER BY idx_scan ASC
+;
+```
