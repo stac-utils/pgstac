@@ -20,11 +20,18 @@ nav:
   - Home: "index.md"
   - PgSTAC: "pgstac.md"
   - pyPgSTAC: "pypgstac.md"
+  - Performance:
+    - item_size_analysis.ipynb
   - Development - Contributing: "contributing.md"
   - Release Notes: "release-notes.md"
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      include_source: True
+      include_requirejs: True
+      execute: True
+      show_input: False
 
 theme:
   name: material
