@@ -16,18 +16,17 @@ jobs:
     name: Deploy docs
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout master
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.8
+          python-version: 3.12
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install mkdocs mkdocs-material
+          python -m pip install mkdocs mkdocs-material mkdocs-jupyter pandas seaborn folium
 
       - name: Deploy docs
         run: mkdocs gh-deploy --force -f docs/mkdocs.yml
