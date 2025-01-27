@@ -8,14 +8,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import (
     Any,
     BinaryIO,
     Dict,
     Generator,
     Iterable,
-    Iterator,
     Optional,
     TextIO,
     Tuple,
@@ -121,7 +119,10 @@ def open_std(
                 pass
 
 
-def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
+_ReadJsonFileType = Union[str, Iterable[Union[Dict, bytes, bytearray, memoryview, str]]]
+
+
+def read_json(file: _ReadJsonFileType = "stdin") -> Generator[Any, None, None]:
     """Load data from an ndjson or json file."""
     if file is None:
         file = "stdin"
@@ -205,7 +206,7 @@ class Loader:
 
     def load_collections(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
+        file: _ReadJsonFileType = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
@@ -556,7 +557,10 @@ class Loader:
 
         return partition_name
 
-    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+    def read_dehydrated(
+        self,
+        file: str = "stdin",
+    ) -> Generator[Dict[str, Any], None, None]:
         if file is None:
             file = "stdin"
         if isinstance(file, str):
@@ -595,8 +599,8 @@ class Loader:
 
     def read_hydrated(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
-    ) -> Generator:
+        file: _ReadJsonFileType = "stdin",
+    ) -> Generator[Dict[str, Any], None, None]:
         for line in read_json(file):
             item = self.format_item(line)
             item["partition"] = self._partition_update(item)
@@ -604,7 +608,7 @@ class Loader:
 
     def load_items(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
+        file: _ReadJsonFileType = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
@@ -630,7 +634,7 @@ class Loader:
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
-    def format_item(self, _item: Union[Path, str, Dict[str, Any]]) -> Dict[str, Any]:
+    def format_item(self, _item: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
         """Format an item to insert into a record."""
         out: Dict[str, Any] = {}
         item: Dict[str, Any]
