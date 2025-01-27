@@ -153,6 +153,8 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                 yield line
             else:
                 yield orjson.loads(line)
+    else:
+        raise TypeError(f"Unsupported read json from file of type {type(file)}")
 
 
 class Loader:
@@ -588,6 +590,10 @@ class Loader:
                             item[field] = tab_split[i]
                     item["partition"] = self._partition_update(item)
                     yield item
+        else:
+            raise TypeError(
+                f"Unsupported read dehydrated from file of type {type(file)}",
+            )
 
     def read_hydrated(
         self,
