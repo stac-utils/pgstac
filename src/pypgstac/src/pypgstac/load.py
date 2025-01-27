@@ -19,6 +19,7 @@ from typing import (
     Optional,
     TextIO,
     Tuple,
+    TypeVar,
     Union,
 )
 
@@ -55,7 +56,13 @@ class Partition:
     requires_update: bool
 
 
-def chunked_iterable(iterable: Iterable, size: Optional[int] = 10000) -> Iterable:
+_T = TypeVar("_T")
+
+
+def chunked_iterable(
+    iterable: Iterable[_T],
+    size: Optional[int] = 10000,
+) -> Generator[Tuple[_T, ...], None, None]:
     """Chunk an iterable."""
     it = iter(iterable)
     while True:
