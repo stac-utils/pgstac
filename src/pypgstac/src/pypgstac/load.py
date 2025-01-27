@@ -91,19 +91,19 @@ class Methods(str, Enum):
 
 @contextlib.contextmanager
 def open_std(
-    filename: str,
+    filename: Optional[str],
     mode: str = "r",
     *args: Any,
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
     fh: Union[TextIO, BinaryIO]
-    if (
-        filename is None
-        or filename == "-"
-        or filename == "stdin"
-        or filename == "stdout"
-    ):
+    if filename in {
+        None,
+        "-",
+        "stdin",
+        "stdout",
+    }:
         stream = sys.stdin if "r" in mode else sys.stdout
         fh = stream.buffer if "b" in mode else stream
         close = False
