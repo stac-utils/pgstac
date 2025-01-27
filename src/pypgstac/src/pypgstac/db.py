@@ -10,12 +10,7 @@ import psycopg
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-
-try:
-    from pydantic.v1 import BaseSettings  # type:ignore
-except ImportError:
-    from pydantic import BaseSettings  # type:ignore
-
+from pydantic_settings import BaseSettings
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 logger = logging.getLogger(__name__)
