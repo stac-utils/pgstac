@@ -126,8 +126,7 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
     if file is None:
         file = "stdin"
     if isinstance(file, str):
-        open_file: Any = open_std(file, "r")
-        with open_file as f:
+        with open_std(file, "r") as f:
             # Try reading line by line as ndjson
             try:
                 for line in f:
@@ -561,8 +560,7 @@ class Loader:
         if file is None:
             file = "stdin"
         if isinstance(file, str):
-            open_file: Any = open_std(file, "r")
-            with open_file as f:
+            with open_std(file, "r") as f:
                 # Note: if 'content' is changed to be anything
                 # but the last field, the logic below will break.
                 fields = [
