@@ -18,10 +18,11 @@ CREATE TEMP TABLE temp_collections (
 INSERT INTO temp_collections (
   title, description, keywords, minx, miny, maxx, maxy, sdt, edt
 ) VALUES
+    -- no keywords
     (
         'Stranger Things',
-        'Some teenagers drop out of school to fight monsters',
-        'monster, scary, dark, 80s',
+        'Some teenagers drop out of school to fight scary monsters',
+        null,
         -180, -90, 180, 90,
         '2016-01-01T00:00:00Z',
         '2025-12-31T23:59:59Z'
@@ -49,6 +50,15 @@ INSERT INTO temp_collections (
         -180, -90, 180, 90,
         '2019-01-01T00:00:00Z',
         '2025-12-31T23:59:59Z'
+    ),
+    -- no title
+    (
+        null,
+        'A humoristic portrayal of office life',
+        'Scranton, paper',
+        -180, -90, 180, 90,
+        '2005-01-01T00:00:00Z',
+        '2013-12-31T23:59:59Z'
     );
 
 SELECT
@@ -90,3 +100,4 @@ select collection_search('{"q": "bear and stranger"}');
 
 select collection_search('{"q": "\"bear or stranger\""}');
 
+select collection_search('{"q": "office"}');
