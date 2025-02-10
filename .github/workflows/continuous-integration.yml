@@ -42,7 +42,6 @@ jobs:
           echo "buildpg=$buildpg" >>$GITHUB_OUTPUT;
           buildpy=false;
           [[ "${{ steps.filter.outputs.pypgstac }}" == "true" ]] && buildpy=true || ref=main;
-          cicd-remove-hardcoded-org-name
           echo "pytag=${{ env.REGISTRY }}/${GITHUB_REPOSITORY_OWNER}/pgstac-pyrust:$ref" >>$GITHUB_OUTPUT;
           echo "buildpy=$buildpg" >>$GITHUB_OUTPUT;
 
