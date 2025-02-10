@@ -222,8 +222,8 @@ BEGIN
             $quote$
             (
                 to_tsvector('english', content->'properties'->>'description') ||
-                to_tsvector('english', content->'properties'->>'title') ||
-                to_tsvector('english', content->'properties'->'keywords')
+                to_tsvector('english', coalesce(content->'properties'->>'title', '')) ||
+                to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))
             ) @@ %L
             $quote$,
             ft_query
