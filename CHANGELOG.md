@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.9.3]
+
+### Fixed
+
+- Fix CI issue with tests not running
+- Fix for issue with nulls in title or keywords for free text search
+
+### Changed
+
+- Replace hardcoded org name in CI
+
 ## [v0.9.2]
 
 ### Added
@@ -537,6 +548,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.3]: https://github.com/stac-utils/pgstac/compare/v0.9.2...v0.9.3
 [v0.9.2]: https://github.com/stac-utils/pgstac/compare/v0.9.1...v0.9.2
 [v0.9.1]: https://github.com/stac-utils/pgstac/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/stac-utils/pgstac/compare/v0.8.5...v0.9.0
