@@ -28,6 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-qemu-action@v3
+        # Temporary workaround for ARM builds
+        # https://github.com/docker/setup-qemu-action/issues/198
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
       - uses: docker/setup-buildx-action@v2
       - name: Log in to the Container registry
         uses: docker/login-action@v2
@@ -61,6 +65,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-qemu-action@v3
+        # Temporary workaround for ARM builds
+        # https://github.com/docker/setup-qemu-action/issues/198
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
       - uses: docker/setup-buildx-action@v2
       - name: Log in to the Container registry
         uses: docker/login-action@v2
@@ -93,6 +101,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-qemu-action@v3
+        # Temporary workaround for ARM builds
+        # https://github.com/docker/setup-qemu-action/issues/198
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
       - uses: docker/setup-buildx-action@v2
       - name: Log in to the Container registry
         uses: docker/login-action@v2
@@ -125,6 +137,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-qemu-action@v3
+        # Temporary workaround for ARM builds
+        # https://github.com/docker/setup-qemu-action/issues/198
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
       - uses: docker/setup-buildx-action@v2
       - name: Log in to the Container registry
         uses: docker/login-action@v2
