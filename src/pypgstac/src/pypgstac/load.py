@@ -8,17 +8,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import (
     Any,
     BinaryIO,
     Dict,
     Generator,
     Iterable,
-    Iterator,
     Optional,
     TextIO,
     Tuple,
+    TypeVar,
     Union,
 )
 
@@ -55,7 +54,13 @@ class Partition:
     requires_update: bool
 
 
-def chunked_iterable(iterable: Iterable, size: Optional[int] = 10000) -> Iterable:
+_T = TypeVar("_T")
+
+
+def chunked_iterable(
+    iterable: Iterable[_T],
+    size: Optional[int] = 10000,
+) -> Generator[Tuple[_T, ...], None, None]:
     """Chunk an iterable."""
     it = iter(iterable)
     while True:
@@ -84,19 +89,19 @@ class Methods(str, Enum):
 
 @contextlib.contextmanager
 def open_std(
-    filename: str,
+    filename: Optional[str],
     mode: str = "r",
     *args: Any,
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
     fh: Union[TextIO, BinaryIO]
-    if (
-        filename is None
-        or filename == "-"
-        or filename == "stdin"
-        or filename == "stdout"
-    ):
+    if filename in {
+        None,
+        "-",
+        "stdin",
+        "stdout",
+    }:
         stream = sys.stdin if "r" in mode else sys.stdout
         fh = stream.buffer if "b" in mode else stream
         close = False
@@ -114,13 +119,15 @@ def open_std(
                 pass
 
 
-def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
+_ReadJsonFileType = Union[str, Iterable[Union[Dict, bytes, bytearray, memoryview, str]]]
+
+
+def read_json(file: _ReadJsonFileType = "stdin") -> Generator[Any, None, None]:
     """Load data from an ndjson or json file."""
     if file is None:
         file = "stdin"
     if isinstance(file, str):
-        open_file: Any = open_std(file, "r")
-        with open_file as f:
+        with open_std(file, "r") as f:
             # Try reading line by line as ndjson
             try:
                 for line in f:
@@ -146,6 +153,8 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                 yield line
             else:
                 yield orjson.loads(line)
+    else:
+        raise TypeError(f"Unsupported read json from file of type {type(file)}")
 
 
 class Loader:
@@ -197,7 +206,7 @@ class Loader:
 
     def load_collections(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
+        file: _ReadJsonFileType = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
@@ -548,12 +557,14 @@ class Loader:
 
         return partition_name
 
-    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+    def read_dehydrated(
+        self,
+        file: str = "stdin",
+    ) -> Generator[Dict[str, Any], None, None]:
         if file is None:
             file = "stdin"
         if isinstance(file, str):
-            open_file: Any = open_std(file, "r")
-            with open_file as f:
+            with open_std(file, "r") as f:
                 # Note: if 'content' is changed to be anything
                 # but the last field, the logic below will break.
                 fields = [
@@ -581,11 +592,15 @@ class Loader:
                             item[field] = tab_split[i]
                     item["partition"] = self._partition_update(item)
                     yield item
+        else:
+            raise TypeError(
+                f"Unsupported read dehydrated from file of type {type(file)}",
+            )
 
     def read_hydrated(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
-    ) -> Generator:
+        file: _ReadJsonFileType = "stdin",
+    ) -> Generator[Dict[str, Any], None, None]:
         for line in read_json(file):
             item = self.format_item(line)
             item["partition"] = self._partition_update(item)
@@ -593,7 +608,7 @@ class Loader:
 
     def load_items(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
+        file: _ReadJsonFileType = "stdin",
         insert_mode: Optional[Methods] = Methods.insert,
         dehydrated: Optional[bool] = False,
         chunksize: Optional[int] = 10000,
@@ -619,7 +634,7 @@ class Loader:
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
-    def format_item(self, _item: Union[Path, str, Dict[str, Any]]) -> Dict[str, Any]:
+    def format_item(self, _item: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
         """Format an item to insert into a record."""
         out: Dict[str, Any] = {}
         item: Dict[str, Any]

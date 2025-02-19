@@ -18,38 +18,38 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "cachetools==5.3.*",
-    "fire==0.4.*",
-    "hydraters==0.1.*",
-    "orjson>=3.6.2",
-    "plpygis==0.2.*",
-    "pydantic>=1.7",
-    "python-dateutil==2.8.*",
-    "smart-open>=4.2",
-    "tenacity==8.1.*",
-    "version-parser>= 1.0.1",
+    "cachetools>=5.0.0",
+    "fire>=0.4.0",
+    "hydraters>=0.1.0",
+    "orjson>=3.6.0",
+    "plpygis>=0.2.0",
+    "pydantic-settings>=2.0.0",
+    "python-dateutil>=2.8.0",
+    "smart-open>=4.2.0",
+    "tenacity>=8.0.0",
+    "version-parser>=1.0.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest",
     "pytest-cov",
-    "pystac[validation]==1.*",
+    "pystac[validation]>=1.0.0",
     "types-cachetools",
 ]
 dev = [
-    "flake8==7.1.1",
-    "black>=24.10.0",
-    "mypy>=1.13.0",
-    "types-setuptools",
-    "ruff==0.8.2",
+    "black",
+    "mypy",
+    "ruff",
     "pre-commit",
 ]
 psycopg = [
-    "psycopg[binary]==3.1.*",
-    "psycopg-pool==3.1.*",
+    "psycopg[binary]>=3.1.9",
+    "psycopg-pool>=3.1",
 ]
 migrations = [
     "psycopg2-binary",
