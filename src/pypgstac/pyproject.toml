@@ -35,9 +35,11 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest",
+    "pytest-benchmark",
     "pytest-cov",
     "pystac[validation]==1.*",
     "types-cachetools",
+    "morecantile",
 ]
 dev = [
     "flake8==7.1.1",
@@ -54,6 +56,13 @@ psycopg = [
 migrations = [
     "psycopg2-binary",
     "migra"
+]
+docs = [
+    "jupyter",
+    "pandas",
+    "seaborn",
+    "mkdocs-jupyter",
+    "folium"
 ]
 
 
@@ -123,3 +132,6 @@ namespace_packages = true
 [tool.pydocstyle]
 select = "D1"
 match = "(?!test).*.py"
+
+[tool.pytest.ini_options]
+addopts = "-vv --benchmark-skip"
