@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [v0.9.4]
+
+### Changed
+ - Relax pypgstac dependencies
+
 ## [v0.9.3]
 
 ### Fixed
@@ -548,6 +553,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.4]: https://github.com/stac-utils/pgstac/compare/v0.9.3...v0.9.4
 [v0.9.3]: https://github.com/stac-utils/pgstac/compare/v0.9.2...v0.9.3
 [v0.9.2]: https://github.com/stac-utils/pgstac/compare/v0.9.1...v0.9.2
 [v0.9.1]: https://github.com/stac-utils/pgstac/compare/v0.9.0...v0.9.1
