@@ -102,6 +102,11 @@ jobs:
     name: test
     needs: [changes, buildpg, buildpyrust]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        flags:
+          - ""
+          - "--resolution lowest-direct"
     container:
       image: ${{ needs.changes.outputs.pyrustdocker }}
       env:
@@ -109,25 +114,23 @@ jobs:
         PGHOST: postgres
         PGDATABASE: postgres
         PGUSER: postgres
-
     services:
       postgres:
         env:
           POSTGRES_PASSWORD: postgres
+          UV_SYSTEM_PYTHON: 1
         image: ${{ needs.changes.outputs.pgdocker }}
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - uses: actions/checkout@v3
+      - uses: astral-sh/setup-uv@v5
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
-        run: |
-          pip install .[dev,test,psycopg];
-
+        run: uv pip install ${{ matrix.flags }} .[dev,test,psycopg]
       - name: Run tests
         working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
         run: |
