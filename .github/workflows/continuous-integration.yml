@@ -118,7 +118,6 @@ jobs:
       postgres:
         env:
           POSTGRES_PASSWORD: postgres
-          UV_SYSTEM_PYTHON: 1
         image: ${{ needs.changes.outputs.pgdocker }}
         options: >-
           --health-cmd pg_isready
@@ -131,6 +130,8 @@ jobs:
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
         run: uv pip install ${{ matrix.flags }} .[dev,test,psycopg]
+        env:
+          UV_SYSTEM_PYTHON: 1
       - name: Run tests
         working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
         run: |
