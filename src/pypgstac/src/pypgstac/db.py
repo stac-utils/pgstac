@@ -163,6 +163,8 @@ class PgstacDB:
                     self.connection.rollback()
         except Exception:
             pass
+        finally:
+            self.connection.close()
         try:
             if self.pool is not None and self.connection is not None:
                 self.pool.putconn(self.connection)
