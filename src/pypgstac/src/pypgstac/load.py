@@ -673,7 +673,7 @@ class Loader:
             geom = Geometry.from_geojson(geojson)
             if geom is None:
                 raise Exception(f"Invalid geometry encountered: {geojson}")
-            geometry = str(geom.wkb)
+            geometry = str(geom.ewkb)
         out["geometry"] = geometry
 
         content = dehydrate(base_item, item)
