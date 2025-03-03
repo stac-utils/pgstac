@@ -461,3 +461,24 @@ def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
         """,
     )
     assert cdtmin == "2011-07-31 00:00:00+00"
+
+
+def test_valid_srid(loader: Loader) -> None:
+    """Test pypgstac items have a valid srid.
+
+    https://github.com/stac-utils/pgstac/issues/357
+    """
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode=Methods.ignore,
+    )
+    loader.load_items(
+        str(TEST_ITEMS),
+        insert_mode=Methods.insert,
+    )
+    srid = loader.db.query_one(
+        """
+        SELECT st_srid(geometry) from items LIMIT 1;
+    """,
+    )
+    assert srid > 0
