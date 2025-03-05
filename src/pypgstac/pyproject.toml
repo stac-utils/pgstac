@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+    "morecantile==6.2.*",
     "pytest==8.3.*",
     "pytest-benchmark==5.1.*",
     "pytest-cov==6.0.*",
