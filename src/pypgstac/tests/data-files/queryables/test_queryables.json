@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "$id": "https://example.com/stac/queryables",
+  "type": "object",
+  "title": "Test Queryables for PgSTAC",
+  "description": "Test queryable names for PgSTAC",
+  "properties": {
+    "id": {
+      "description": "Item identifier",
+      "type": "string"
+    },
+    "collection": {
+      "description": "Collection identifier",
+      "type": "string"
+    },
+    "datetime": {
+      "description": "Datetime",
+      "type": "string",
+      "format": "date-time"
+    },
+    "geometry": {
+      "description": "Geometry",
+      "type": "object"
+    },
+    "test:string_prop": {
+      "description": "Test string property",
+      "type": "string"
+    },
+    "test:number_prop": {
+      "description": "Test number property",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "test:integer_prop": {
+      "description": "Test integer property",
+      "type": "integer"
+    },
+    "test:datetime_prop": {
+      "description": "Test datetime property",
+      "type": "string",
+      "format": "date-time"
+    },
+    "test:array_prop": {
+      "description": "Test array property",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}
