@@ -125,6 +125,7 @@ class PgstacCLI:
         file: str,
         collection_ids: Optional[list[str]] = None,
         delete_missing: Optional[bool] = False,
+        index_fields: Optional[list[str]] = None,
     ) -> None:
         """Load queryables from a JSON file.
 
@@ -135,6 +136,9 @@ class PgstacCLI:
             delete_missing: If True, delete properties not present in the file.
                             If collection_ids is specified, only delete properties
                             for those collections.
+            index_fields: List of field names to create indexes for. If not provided,
+                         no indexes will be created. Creating too many indexes can
+                         negatively impact performance.
         """
 
         # Read the queryables JSON file
@@ -177,8 +181,10 @@ class PgstacCLI:
                     elif definition.get("type") == "array":
                         property_wrapper = "to_text_array"
 
-                    # Determine index type (default to BTREE)
-                    property_index_type = "BTREE"
+                    # Determine if this field should be indexed
+                    property_index_type = None
+                    if index_fields and name in index_fields:
+                        property_index_type = "BTREE"
 
                     # First delete any existing queryable with the same name
                     if not collection_ids:
@@ -286,8 +292,9 @@ class PgstacCLI:
 
                         cur.execute(query, params)
 
-                # Trigger index creation
-                cur.execute("SELECT maintain_partitions();")
+                # Trigger index creation only if index_fields were provided
+                if index_fields and len(index_fields) > 0:
+                    cur.execute("SELECT maintain_partitions();")
 
 
 def cli() -> fire.Fire:
