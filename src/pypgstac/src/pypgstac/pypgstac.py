@@ -124,14 +124,17 @@ class PgstacCLI:
         self,
         file: str,
         collection_ids: Optional[list[str]] = None,
+        delete_missing: Optional[bool] = False,
     ) -> None:
         """Load queryables from a JSON file.
 
         Args:
             file: Path to the JSON file containing queryables definition
             collection_ids: Comma-separated list of collection IDs to apply the
-                            queryables
-                to
+                            queryables to
+            delete_missing: If True, delete properties not present in the file.
+                            If collection_ids is specified, only delete properties
+                            for those collections.
         """
 
         # Read the queryables JSON file
@@ -223,6 +226,65 @@ class PgstacCLI:
                             property_index_type,
                         ],
                     )
+
+                # If delete_missing is True,
+                # delete all queryables that were not in the file
+                if delete_missing:
+                    # Get the list of property names from the file
+                    property_names = list(properties.keys())
+
+                    # Skip core fields that are already indexed
+                    core_fields = [
+                        "id",
+                        "geometry",
+                        "datetime",
+                        "end_datetime",
+                        "collection",
+                    ]
+                    property_names = [
+                        name for name in property_names if name not in core_fields
+                    ]
+
+                    if not property_names:
+                        # If no valid properties, don't delete anything
+                        pass
+                    elif not collection_ids:
+                        # If no collection_ids specified,
+                        # delete queryables with NULL collection_ids
+                        # that are not in the property_names list
+                        placeholders = ", ".join(["%s"] * len(property_names))
+                        core_placeholders = ", ".join(["%s"] * len(core_fields))
+
+                        # Build the query with proper placeholders
+                        query = f"""
+                            DELETE FROM queryables
+                            WHERE collection_ids IS NULL
+                            AND name NOT IN ({placeholders})
+                            AND name NOT IN ({core_placeholders})
+                        """
+
+                        # Flatten the parameters
+                        params = property_names + core_fields
+
+                        cur.execute(query, params)
+                    else:
+                        # Delete queryables with matching collection_ids
+                        # that are not in the property_names list
+                        placeholders = ", ".join(["%s"] * len(property_names))
+                        core_placeholders = ", ".join(["%s"] * len(core_fields))
+
+                        # Build the query with proper placeholders
+                        query = f"""
+                            DELETE FROM queryables
+                            WHERE collection_ids = %s::text[]
+                            AND name NOT IN ({placeholders})
+                            AND name NOT IN ({core_placeholders})
+                        """
+
+                        # Flatten the parameters
+                        params = [collection_ids] + property_names + core_fields
+
+                        cur.execute(query, params)
 
                 # Trigger index creation
                 cur.execute("SELECT maintain_partitions();")

@@ -159,6 +159,132 @@ def test_load_queryables_invalid_json(db: PgstacDB) -> None:
     invalid_json_file.unlink()
 
 
+def test_load_queryables_delete_missing(db: PgstacDB) -> None:
+    """Test loading queryables with delete_missing=True."""
+    # Create a CLI instance
+    cli = PgstacCLI(dsn=db.dsn)
+
+    # First, load the test queryables
+    cli.load_queryables(str(TEST_QUERYABLES_JSON))
+
+    # Create a temporary file with only one property
+    partial_props_file = HERE / "data-files" / "queryables" / "partial_props.json"
+    with open(partial_props_file, "w") as f:
+        f.write(
+            """
+            {
+                "type": "object",
+                "title": "Partial Properties",
+                "properties": {
+                    "test:string_prop": {
+                        "type": "string",
+                        "title": "String Property"
+                    }
+                }
+            }
+            """,
+        )
+
+    # Load the partial queryables with delete_missing=True
+    cli.load_queryables(str(partial_props_file), delete_missing=True)
+
+    # Verify that only the string property remains
+    result = db.query(
+        """
+        SELECT name
+        FROM queryables
+        WHERE name LIKE 'test:%'
+        ORDER BY name;
+        """,
+    )
+
+    # Convert result to a list of names
+    queryable_names = [row[0] for row in result]
+
+    # Check that only the string property remains
+    assert len(queryable_names) == 1
+    assert queryable_names[0] == "test:string_prop"
+
+    # Clean up
+    partial_props_file.unlink()
+
+
+def test_load_queryables_delete_missing_with_collections(
+    db: PgstacDB, loader: Loader,
+) -> None:
+    """Test loading queryables with delete_missing=True and specific collections."""
+    # Load test collections first
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode="insert",
+    )
+
+    # Get collection IDs from the database
+    result = db.query("SELECT id FROM collections LIMIT 2;")
+    collection_ids = [row[0] for row in result]
+
+    # Create a CLI instance
+    cli = PgstacCLI(dsn=db.dsn)
+
+    # First, load all test queryables for the specific collections
+    cli.load_queryables(
+        str(TEST_QUERYABLES_JSON),
+        collection_ids=collection_ids,
+    )
+
+    # Create a temporary file with only one property
+    partial_props_file = HERE / "data-files" / "queryables" / "partial_props.json"
+    with open(partial_props_file, "w") as f:
+        f.write(
+            """
+            {
+                "type": "object",
+                "title": "Partial Properties",
+                "properties": {
+                    "test:string_prop": {
+                        "type": "string",
+                        "title": "String Property"
+                    }
+                }
+            }
+            """,
+        )
+
+    # Load the partial queryables with delete_missing=True for the specific collections
+    cli.load_queryables(
+        str(partial_props_file),
+        collection_ids=collection_ids,
+        delete_missing=True,
+    )
+
+    # Verify that only the string property remains for the specific collections
+    result = db.query(
+        """
+        SELECT name, collection_ids
+        FROM queryables
+        WHERE name LIKE 'test:%'
+        ORDER BY name;
+        """,
+    )
+
+    # Convert result to a list of dictionaries
+    queryables = [{"name": row[0], "collection_ids": row[1]} for row in result]
+
+    # Filter queryables for the specific collections
+    specific_queryables = [
+        q
+        for q in queryables
+        if q["collection_ids"] and set(q["collection_ids"]) == set(collection_ids)
+    ]
+
+    # Check that only the string property remains for the specific collections
+    assert len(specific_queryables) == 1
+    assert specific_queryables[0]["name"] == "test:string_prop"
+
+    # Clean up
+    partial_props_file.unlink()
+
+
 def test_load_queryables_no_properties(db: PgstacDB) -> None:
     """Test loading queryables with no properties."""
     # Create a CLI instance
@@ -171,7 +297,8 @@ def test_load_queryables_no_properties(db: PgstacDB) -> None:
 
     # Loading should raise a ValueError
     with pytest.raises(
-        ValueError, match="No properties found in queryables definition",
+        ValueError,
+        match="No properties found in queryables definition",
     ):
         cli.load_queryables(str(no_props_file))
 
