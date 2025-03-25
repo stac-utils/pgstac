@@ -107,10 +107,24 @@ To load queryables and delete properties not present in the file:
 pypgstac load_queryables queryables.json --delete_missing
 ```
 
+To load queryables and create indexes only for specific fields:
+
+```
+pypgstac load_queryables queryables.json --index_fields [field1,field2]
+```
+
+By default, no indexes are created when loading queryables. Using the `--index_fields` parameter allows you to selectively create indexes only for fields that require them. Creating too many indexes can degrade database performance, especially for write operations, so it's recommended to only index fields that are frequently used in queries.
+
 When using `--delete_missing` with specific collections, only properties for those collections will be deleted:
 
 ```
 pypgstac load_queryables queryables.json --collection_ids [collection1,collection2] --delete_missing
+```
+
+You can combine all parameters as needed:
+
+```
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2] --delete_missing --index_fields [field1,field2]
 ```
 
 The JSON file should follow the queryables schema as described in the [STAC API - Filter Extension](https://github.com/stac-api-extensions/filter#queryables). Here's an example:
