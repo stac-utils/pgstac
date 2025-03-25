@@ -85,7 +85,7 @@ def test_load_queryables_with_collections(db: PgstacDB, loader: Loader) -> None:
     # Load queryables for specific collections
     cli.load_queryables(
         str(TEST_QUERYABLES_JSON),
-        collection_ids=",".join(collection_ids),
+        collection_ids=collection_ids,
     )
 
     # Verify that the queryables were loaded with the correct collection IDs

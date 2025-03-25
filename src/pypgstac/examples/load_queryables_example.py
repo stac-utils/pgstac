@@ -29,7 +29,6 @@ def main():
     if not sample_file.exists():
         return
 
-
     # Create a PgstacCLI instance
     # This will use the standard PostgreSQL environment variables for connection
     cli = PgstacCLI()
@@ -39,8 +38,7 @@ def main():
 
     # Example of loading for specific collections
     # Uncomment the following line to test with specific collections
-    load_for_specific_collections(cli, sample_file, "landsat-8,sentinel-2")
-
+    load_for_specific_collections(cli, sample_file, ["landsat-8", "sentinel-2"])
 
 
 if __name__ == "__main__":

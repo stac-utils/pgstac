@@ -5,10 +5,11 @@ import sys
 from typing import Optional
 
 import fire
+import orjson
 from smart_open import open
 
 from pypgstac.db import PgstacDB
-from pypgstac.load import Loader, Methods, Tables
+from pypgstac.load import Loader, Methods, Tables, read_json
 from pypgstac.migrate import Migrate
 
 
@@ -122,7 +123,7 @@ class PgstacCLI:
     def load_queryables(
         self,
         file: str,
-        collection_ids: Optional[str] = None,
+        collection_ids: Optional[list[str]] = None,
     ) -> None:
         """Load queryables from a JSON file.
 
@@ -132,14 +133,6 @@ class PgstacCLI:
                             queryables
                 to
         """
-        import orjson
-
-        from pypgstac.load import read_json
-
-        # Parse collection_ids if provided
-        coll_ids_array = None
-        if collection_ids:
-            coll_ids_array = [cid.strip() for cid in collection_ids.split(",")]
 
         # Read the queryables JSON file
         queryables_data = None
@@ -185,7 +178,7 @@ class PgstacCLI:
                     property_index_type = "BTREE"
 
                     # First delete any existing queryable with the same name
-                    if coll_ids_array is None:
+                    if not collection_ids:
                         # If no collection_ids specified, delete queryables
                         # with NULL collection_ids
                         cur.execute(
@@ -202,7 +195,7 @@ class PgstacCLI:
                             DELETE FROM queryables
                             WHERE name = %s AND collection_ids = %s::text[]
                             """,
-                            [name, coll_ids_array],
+                            [name, collection_ids],
                         )
 
                         # Also delete queryables with NULL collection_ids
@@ -224,7 +217,7 @@ class PgstacCLI:
                         """,
                         [
                             name,
-                            coll_ids_array,
+                            collection_ids,
                             orjson.dumps(definition).decode(),
                             property_wrapper,
                             property_index_type,
