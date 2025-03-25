@@ -98,7 +98,19 @@ pypgstac load_queryables queryables.json
 To load queryables for specific collections:
 
 ```
-pypgstac load_queryables queryables.json --collection_ids collection1,collection2
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2]
+```
+
+To load queryables and delete properties not present in the file:
+
+```
+pypgstac load_queryables queryables.json --delete_missing
+```
+
+When using `--delete_missing` with specific collections, only properties for those collections will be deleted:
+
+```
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2] --delete_missing
 ```
 
 The JSON file should follow the queryables schema as described in the [STAC API - Filter Extension](https://github.com/stac-api-extensions/filter#queryables). Here's an example:
