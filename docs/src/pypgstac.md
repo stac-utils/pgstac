@@ -85,6 +85,80 @@ To upsert any records, adding anything new and replacing anything with the same 
 pypgstac load items --method upsert
 ```
 
+### Loading Queryables
+
+Queryables are a mechanism that allows clients to discover what terms are available for use when writing filter expressions in a STAC API. The Filter Extension enables clients to filter collections and items based on their properties using the Common Query Language (CQL2).
+
+To load queryables from a JSON file:
+
+```
+pypgstac load_queryables queryables.json
+```
+
+To load queryables for specific collections:
+
+```
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2]
+```
+
+To load queryables and delete properties not present in the file:
+
+```
+pypgstac load_queryables queryables.json --delete_missing
+```
+
+To load queryables and create indexes only for specific fields:
+
+```
+pypgstac load_queryables queryables.json --index_fields [field1,field2]
+```
+
+By default, no indexes are created when loading queryables. Using the `--index_fields` parameter allows you to selectively create indexes only for fields that require them. Creating too many indexes can degrade database performance, especially for write operations, so it's recommended to only index fields that are frequently used in queries.
+
+When using `--delete_missing` with specific collections, only properties for those collections will be deleted:
+
+```
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2] --delete_missing
+```
+
+You can combine all parameters as needed:
+
+```
+pypgstac load_queryables queryables.json --collection_ids [collection1,collection2] --delete_missing --index_fields [field1,field2]
+```
+
+The JSON file should follow the queryables schema as described in the [STAC API - Filter Extension](https://github.com/stac-api-extensions/filter#queryables). Here's an example:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "$id": "https://example.com/stac/queryables",
+  "type": "object",
+  "title": "Queryables for Example STAC API",
+  "description": "Queryable names for the Example STAC API",
+  "properties": {
+    "id": {
+      "description": "Item identifier",
+      "type": "string"
+    },
+    "datetime": {
+      "description": "Datetime",
+      "type": "string",
+      "format": "date-time"
+    },
+    "eo:cloud_cover": {
+      "description": "Cloud cover percentage",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+The command will extract the properties from the JSON file and create queryables in the database. It will also determine the appropriate property wrapper based on the type of each property and create the necessary indexes.
+
 ### Automated Collection Extent Updates
 
 By setting `pgstac.update_collection_extent` to `true`, a trigger is enabled to automatically adjust the spatial and temporal extents in collections when new items are ingested. This feature, while helpful, may increase overhead within data load transactions. To alleviate performance impact, combining this setting with `pgstac.use_queue` is beneficial. This approach necessitates a separate process, such as a scheduled task via the `pg_cron` extension, to periodically invoke `CALL run_queued_queries();`. Such asynchronous processing ensures efficient transactional performance and updated collection extents.

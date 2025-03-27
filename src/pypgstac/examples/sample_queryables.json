@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "$id": "https://example.com/stac/queryables",
+  "type": "object",
+  "title": "Queryables for Example STAC API",
+  "description": "Queryable names for the Example STAC API",
+  "properties": {
+    "id": {
+      "description": "Item identifier",
+      "type": "string"
+    },
+    "collection": {
+      "description": "Collection identifier",
+      "type": "string"
+    },
+    "datetime": {
+      "description": "Datetime",
+      "type": "string",
+      "format": "date-time"
+    },
+    "geometry": {
+      "description": "Geometry",
+      "type": "object"
+    },
+    "eo:cloud_cover": {
+      "description": "Cloud cover percentage",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "platform": {
+      "description": "Platform name",
+      "type": "string",
+      "enum": ["landsat-8", "sentinel-2"]
+    },
+    "instrument": {
+      "description": "Instrument name",
+      "type": "string"
+    },
+    "gsd": {
+      "description": "Ground sample distance in meters",
+      "type": "number"
+    },
+    "view:off_nadir": {
+      "description": "Off-nadir angle in degrees",
+      "type": "number"
+    },
+    "view:sun_azimuth": {
+      "description": "Sun azimuth angle in degrees",
+      "type": "number"
+    },
+    "view:sun_elevation": {
+      "description": "Sun elevation angle in degrees",
+      "type": "number"
+    },
+    "sci:doi": {
+      "description": "Digital Object Identifier",
+      "type": "string"
+    },
+    "created": {
+      "description": "Date and time the item was created",
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated": {
+      "description": "Date and time the item was last updated",
+      "type": "string",
+      "format": "date-time"
+    },
+    "landcover:classes": {
+      "description": "Land cover classes",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}
