@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add `load_queryables` function to pypgstac for loading queryables from a JSON file
 - Add support for specifying collection IDs when loading queryables
 
+### Fixed
+- Added missing 0.8.6-0.9.0 migration script
+
 ## [v0.9.5]
 
 ### Changed
