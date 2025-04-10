@@ -1,1 +1,1 @@
-SELECT set_version('0.9.5');
+SELECT set_version('0.9.6');
