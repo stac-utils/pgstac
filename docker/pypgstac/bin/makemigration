@@ -137,7 +137,8 @@ cat $SQLDIR/000_idempotent_pre.sql >>$MIGRATIONSQL
 echo "-- BEGIN migra calculated SQL" >>$MIGRATIONSQL
 cat $MIGRATION >>$MIGRATIONSQL
 echo "-- END migra calculated SQL" >>$MIGRATIONSQL
-cat $SQLDIR/998_idempotent_post.sql $SQLDIR/999_version.sql >>$MIGRATIONSQL
+cat $SQLDIR/998_idempotent_post.sql >>$MIGRATIONSQL
+echo "SELECT set_version('${TO}');" >>$MIGRATIONSQL
 
 echo "Migration created at $MIGRATIONSQL."
 exit 0
