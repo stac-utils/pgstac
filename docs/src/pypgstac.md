@@ -57,7 +57,7 @@ There are two types of migrations:
  - **Base migrations** install PgSTAC into a database with no current PgSTAC installation. These migrations follow the file pattern `"pgstac.[version].sql"`
  - **Incremental migrations** are used to move PgSTAC from one version to the next. These migrations follow the file pattern `"pgstac.[version].[fromversion].sql"`
 
-Migrations are stored in ```pypgstac/pypgstac/migration`s``` and are distributed with the pyPgSTAC package.
+Migrations are stored in ```pypgstac/pypgstac/migrations``` and are distributed with the pyPgSTAC package.
 
 ### Running Migrations
 pyPgSTAC has a utility for checking the version of an existing PgSTAC database and applying the appropriate migrations in the correct order. It can also be used to setup a database from scratch.
@@ -65,6 +65,97 @@ pyPgSTAC has a utility for checking the version of an existing PgSTAC database a
 To create an initial PgSTAC database or bring an existing one up to date, check you have the pypgstac version installed you want to migrate to and run:
 ```
 pypgstac migrate
+```
+
+### Bootstrapping an Empty Database
+
+When starting with an empty database, you have two options for initializing PgSTAC:
+
+#### Option 1: Execute as Power User
+
+This approach uses a database user with administrative privileges (such as 'postgres') to run the migration, which will automatically create all necessary extensions and roles:
+
+```bash
+# Set environment variables for database connection
+export PGHOST=localhost
+export PGPORT=5432
+export PGDATABASE=yourdatabase
+export PGUSER=postgres  # A user with admin privileges
+export PGPASSWORD=yourpassword
+
+# Run the migration
+pypgstac migrate
+```
+
+The migration process will automatically:
+- Create required extensions (postgis, btree_gist, unaccent)
+- Create necessary roles (pgstac_admin, pgstac_read, pgstac_ingest)
+- Set up the pgstac schema and tables
+
+In production environments, you should assign these roles to your application database user rather than continuing to use the postgres user:
+
+```sql
+-- Grant appropriate roles to your application user
+GRANT pgstac_read TO your_app_user;
+GRANT pgstac_ingest TO your_app_user;
+GRANT pgstac_admin TO your_app_user;
+
+-- Set the search path for your application user
+ALTER USER your_app_user SET search_path TO pgstac, public;
+```
+
+#### Option 2: Create User with Initial Grants
+
+If you don't have administrative privileges or prefer more control over the setup process, you can manually prepare the database before running migrations.
+
+Connect to your database as an administrator and execute:
+
+```sql
+\c [database]
+
+-- Create required extensions
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
+-- Create required roles
+CREATE ROLE pgstac_admin;
+CREATE ROLE pgstac_read;
+CREATE ROLE pgstac_ingest;
+
+-- Grant appropriate permissions
+ALTER DATABASE [database] OWNER TO [user];
+ALTER USER [user] SET search_path TO pgstac, public;
+ALTER DATABASE [database] set search_path to pgstac, public;
+GRANT CONNECT ON DATABASE [database] TO [user];
+GRANT ALL PRIVILEGES ON TABLES TO [user];
+GRANT ALL PRIVILEGES ON SEQUENCES TO [user];
+GRANT pgstac_read TO [user] WITH ADMIN OPTION;
+GRANT pgstac_ingest TO [user] WITH ADMIN OPTION;
+GRANT pgstac_admin TO [user] WITH ADMIN OPTION;
+```
+
+Then run the migration as your non-admin user:
+
+```bash
+# Set environment variables for database connection
+export PGHOST=localhost
+export PGPORT=5432
+export PGDATABASE=yourdatabase
+export PGUSER=[user]  # Your non-admin user
+export PGPASSWORD=yourpassword
+
+# Run the migration
+pypgstac migrate
+```
+
+### Verifying Migration
+
+To verify that PgSTAC was installed correctly:
+
+```bash
+# Check the PgSTAC version
+pypgstac version
 ```
 
 ### Bulk Data Loading
