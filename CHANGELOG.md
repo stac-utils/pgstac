@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add `--create-missing-collections` option to load_queryables to automatically create collections that don't exist
+
 ## [v0.9.6]
 
 ### Added
