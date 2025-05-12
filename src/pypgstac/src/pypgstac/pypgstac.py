@@ -126,6 +126,7 @@ class PgstacCLI:
         collection_ids: Optional[list[str]] = None,
         delete_missing: Optional[bool] = False,
         index_fields: Optional[list[str]] = None,
+        create_missing_collections: Optional[bool] = False,
     ) -> None:
         """Load queryables from a JSON file.
 
@@ -139,6 +140,9 @@ class PgstacCLI:
             index_fields: List of field names to create indexes for. If not provided,
                          no indexes will be created. Creating too many indexes can
                          negatively impact performance.
+            create_missing_collections: If True and collection_ids is specified,
+                                     automatically create empty collections for any
+                                     collection IDs that don't exist.
         """
 
         # Read the queryables JSON file
@@ -146,6 +150,59 @@ class PgstacCLI:
         for item in read_json(file):
             queryables_data = item
             break  # We only need the first item
+
+            # Create missing collections if requested
+        if create_missing_collections and collection_ids:
+            conn = self._db.connect()
+            with conn.cursor() as cur:
+                # Get list of existing collections
+                cur.execute(
+                    "SELECT id FROM collections WHERE id = ANY(%s);",
+                    [collection_ids],
+                )
+                existing_collections = {r[0] for r in cur.fetchall()}
+
+                # Create empty collections for any that don't exist
+                missing_collections = [
+                    cid for cid in collection_ids if cid not in existing_collections
+                ]
+                if missing_collections:
+                    with conn.transaction():
+                        # Create a temporary table for bulk insert
+                        cur.execute(
+                            """
+                            DROP TABLE IF EXISTS tmp_collections;
+                            CREATE TEMP TABLE tmp_collections
+                            (content jsonb) ON COMMIT DROP;
+                            """,
+                        )
+                        # Insert collection records into temp table
+                        with cur.copy(
+                            "COPY tmp_collections (content) FROM stdin;",
+                        ) as copy:
+                            for cid in missing_collections:
+                                empty_collection = {
+                                    "id": cid,
+                                    "stac_version": "1.0.0",
+                                    "description": "Automatically created collection"
+                                    + f" for {cid}",
+                                    "license": "proprietary",
+                                    "extent": {
+                                        "spatial": {"bbox": [[-180, -90, 180, 90]]},
+                                        "temporal": {"interval": [[None, None]]},
+                                    },
+                                }
+                                copy.write_row(
+                                    (orjson.dumps(empty_collection).decode(),),
+                                )
+
+                        # Insert from temp table to collections
+                        cur.execute(
+                            """
+                            INSERT INTO collections (content)
+                            SELECT content FROM tmp_collections;
+                            """,
+                        )
 
         if not queryables_data:
             raise ValueError(f"No valid JSON data found in {file}")
