@@ -584,6 +584,117 @@ def test_load_queryables_create_missing_collections(db: PgstacDB) -> None:
     for queryable in queryables:
         assert set(queryable["collection_ids"]) == set(non_existent_collections)
 
+def test_load_queryables_with_multiple_hyphenated_collections(db: PgstacDB) -> None:
+    """Test loading queryables for multiple collections with hyphenated names."""
+    # Create a CLI instance
+    cli = PgstacCLI(dsn=db.dsn)
+
+    # Create collections with hyphenated names
+    hyphenated_collections = [
+        "test-collection-1",
+        "my-hyphenated-collection-2",
+        "another-test-collection-3",
+    ]
+    cli.load_queryables(
+        str(TEST_QUERYABLES_JSON),
+        collection_ids=hyphenated_collections,
+        create_missing_collections=True,
+        index_fields=["test:string_prop", "test:number_prop"],
+    )
+
+    # Verify that all collections were created
+    result = db.query(
+        """
+        SELECT id FROM collections WHERE id = ANY(%s);
+        """,
+        [hyphenated_collections],
+    )
+    collections = [row[0] for row in result]
+    assert len(collections) == len(hyphenated_collections)
+    assert set(collections) == set(hyphenated_collections)
+
+    # Verify that queryables were loaded for all collections
+    result = db.query(
+        """
+        SELECT name, collection_ids, property_index_type
+        FROM queryables
+        WHERE name LIKE 'test:%%'
+            AND collection_ids @> %s
+        ORDER BY name;
+        """,
+        [hyphenated_collections],
+    )
+
+    # Convert result to a list of dictionaries
+    queryables = [
+        {"name": row[0], "collection_ids": row[1], "property_index_type": row[2]}
+        for row in result
+    ]
+
+    # Check that all queryables were created and associated with all collections
+    assert len(queryables) == 5  # All test properties should be present
+    for queryable in queryables:
+        # Verify all collections are associated with each queryable
+        assert set(hyphenated_collections).issubset(set(queryable["collection_ids"]))
+        # Check that only specified properties have indexes
+        if queryable["name"] in ["test:string_prop", "test:number_prop"]:
+            assert queryable["property_index_type"] == "BTREE"
+        else:
+            assert queryable["property_index_type"] is None
+
+def test_load_queryables_with_hyphenated_collection(db: PgstacDB) -> None:
+    """Test loading queryables for a collection with a hyphenated name."""
+    # Create a CLI instance
+    cli = PgstacCLI(dsn=db.dsn)
+
+    # Create a collection with a hyphenated name
+    hyphenated_collection = "test-collection-with-hyphens"
+    cli.load_queryables(
+        str(TEST_QUERYABLES_JSON),
+        collection_ids=[hyphenated_collection],
+        create_missing_collections=True,
+        index_fields=["test:string_prop"],
+    )
+
+    # Verify that the collection was created
+    result = db.query(
+        """
+        SELECT id FROM collections WHERE id = %s;
+        """,
+        [hyphenated_collection],
+    )
+    collections = [row[0] for row in result]
+    assert len(collections) == 1
+    assert collections[0] == hyphenated_collection
+
+    # Verify that queryables were loaded for this collection
+    result = db.query(
+        """
+        SELECT name, collection_ids, property_index_type
+        FROM queryables
+        WHERE name LIKE 'test:%%'
+            AND %s = ANY(collection_ids)
+        ORDER BY name;
+        """,
+        [hyphenated_collection],
+    )
+
+    # Convert result to a list of dictionaries
+    queryables = [
+        {"name": row[0], "collection_ids": row[1], "property_index_type": row[2]}
+        for row in result
+    ]
+
+    # Check that all queryables were created and associated with the collection
+    assert len(queryables) == 5  # All test properties should be present
+    for queryable in queryables:
+        assert hyphenated_collection in queryable["collection_ids"]
+        # Check that only test:string_prop has an index
+        if queryable["name"] == "test:string_prop":
+            assert queryable["property_index_type"] == "BTREE"
+        else:
+            assert queryable["property_index_type"] is None
+
 def test_load_queryables_no_properties(db: PgstacDB) -> None:
     """Test loading queryables with no properties."""
     # Create a CLI instance
