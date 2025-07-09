@@ -1,9 +1,11 @@
 """Utilities to help migrate pgstac schema."""
+
 import glob
 import logging
 import os
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional
 
 from smart_open import open
@@ -36,7 +38,8 @@ class MigrationPath:
     def parse_filename(self, filename: str) -> List[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", "",
+            "pgstac.",
+            "",
         )
         return filename.split("-")
 
@@ -96,7 +99,7 @@ class MigrationPath:
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
-    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -105,20 +108,19 @@ def get_sql(file: str) -> str:
     return "\n".join(sqlstrs)
 
 
+@dataclass
 class Migrate:
     """Utilities for migrating pgstac database."""
 
-    def __init__(self, db: PgstacDB, schema: str = "pgstac"):
-        """Prepare for migration."""
-        self.db = db
-        self.schema = schema
+    db: PgstacDB
+    schema: str = "pgstac"
 
     def run_migration(self, toversion: Optional[str] = None) -> str:
         """Migrate a pgstac database to current version."""
         if toversion is None:
             toversion = __version__
         files = []
-        if re.search(r"-dev$",toversion):
+        if re.search(r"-dev$", toversion):
             logger.info("using unreleased version")
             toversion = "unreleased"
 
@@ -126,7 +128,7 @@ class Migrate:
             map(
                 int,
                 [
-                    self.db.pg_version[i:i + 2]
+                    self.db.pg_version[i : i + 2]
                     for i in range(0, len(self.db.pg_version), 2)
                 ],
             ),
@@ -147,18 +149,17 @@ class Migrate:
         if len(files) < 1:
             raise Exception("Could not find migration files")
 
-        conn = self.db.connect()
+        with self.db.connect() as conn:
+            with conn.cursor() as cur:
+                conn.autocommit = False
+                for file in files:
+                    logger.debug(f"Running migration file {file}.")
+                    migration_sql = get_sql(file)
+                    cur.execute(migration_sql)
+                    logger.debug(cur.statusmessage)
+                    logger.debug(cur.rowcount)
 
-        with conn.cursor() as cur:
-            conn.autocommit = False
-            for file in files:
-                logger.debug(f"Running migration file {file}.")
-                migration_sql = get_sql(file)
-                cur.execute(migration_sql)
-                logger.debug(cur.statusmessage)
-                logger.debug(cur.rowcount)
-
-            logger.debug(f"Database migrated to {toversion}")
+                logger.debug(f"Database migrated to {toversion}")
 
         newversion = self.db.version
         if conn is not None:

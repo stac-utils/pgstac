@@ -16,7 +16,10 @@ from pypgstac.pypgstac import PgstacCLI
 
 
 def load_for_specific_collections(
-    cli, sample_file, collection_ids, delete_missing=False,
+    cli,
+    sample_file,
+    collection_ids,
+    delete_missing=False,
 ):
     """Load queryables for specific collections.
 
@@ -27,7 +30,9 @@ def load_for_specific_collections(
         delete_missing: If True, delete properties not present in the file
     """
     cli.load_queryables(
-        str(sample_file), collection_ids=collection_ids, delete_missing=delete_missing,
+        str(sample_file),
+        collection_ids=collection_ids,
+        delete_missing=delete_missing,
     )
 
 
@@ -57,7 +62,10 @@ def main():
     # Example of loading for specific collections with delete_missing=True
     # This will delete properties not present in the file, but only for the specified collections
     load_for_specific_collections(
-        cli, sample_file, ["landsat-8", "sentinel-2"], delete_missing=True,
+        cli,
+        sample_file,
+        ["landsat-8", "sentinel-2"],
+        delete_missing=True,
     )
 
 

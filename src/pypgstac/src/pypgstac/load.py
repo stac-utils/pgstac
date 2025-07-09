@@ -5,7 +5,7 @@ import itertools
 import logging
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -148,15 +148,13 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                 yield orjson.loads(line)
 
 
+@dataclass
 class Loader:
     """Utilities for loading data."""
 
     db: PgstacDB
-    _partition_cache: Dict[str, Partition]
 
-    def __init__(self, db: PgstacDB):
-        self.db = db
-        self._partition_cache: Dict[str, Partition] = {}
+    _partition_cache: Dict[str, Partition] = field(init=False, default_factory=dict)
 
     def check_version(self) -> None:
         db_version = self.db.version
@@ -205,60 +203,61 @@ class Loader:
 
         if file is None:
             file = "stdin"
-        conn = self.db.connect()
-        with conn.cursor() as cur:
-            with conn.transaction():
-                cur.execute(
-                    """
-                    DROP TABLE IF EXISTS tmp_collections;
-                    CREATE TEMP TABLE tmp_collections
-                    (content jsonb) ON COMMIT DROP;
-                    """,
-                )
-                with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
-                    for collection in read_json(file):
-                        copy.write_row((orjson.dumps(collection).decode(),))
-                if insert_mode in (
-                    None,
-                    Methods.insert,
-                ):
+
+        with self.db.connect() as conn:
+            with conn.cursor() as cur:
+                with conn.transaction():
                     cur.execute(
                         """
-                        INSERT INTO collections (content)
-                        SELECT content FROM tmp_collections;
+                        DROP TABLE IF EXISTS tmp_collections;
+                        CREATE TEMP TABLE tmp_collections
+                        (content jsonb) ON COMMIT DROP;
                         """,
                     )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode in (
-                    Methods.insert_ignore,
-                    Methods.ignore,
-                ):
-                    cur.execute(
-                        """
-                        INSERT INTO collections (content)
-                        SELECT content FROM tmp_collections
-                        ON CONFLICT DO NOTHING;
-                        """,
-                    )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode == Methods.upsert:
-                    cur.execute(
-                        """
-                        INSERT INTO collections (content)
-                        SELECT content FROM tmp_collections
-                        ON CONFLICT (id) DO
-                        UPDATE SET content=EXCLUDED.content;
-                        """,
-                    )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Rows affected: {cur.rowcount}")
-                else:
-                    raise Exception(
-                        "Available modes are insert, ignore, and upsert."
-                        f"You entered {insert_mode}.",
-                    )
+                    with cur.copy("COPY tmp_collections (content) FROM stdin;") as copy:
+                        for collection in read_json(file):
+                            copy.write_row((orjson.dumps(collection).decode(),))
+                    if insert_mode in (
+                        None,
+                        Methods.insert,
+                    ):
+                        cur.execute(
+                            """
+                            INSERT INTO collections (content)
+                            SELECT content FROM tmp_collections;
+                            """,
+                        )
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
+                    elif insert_mode in (
+                        Methods.insert_ignore,
+                        Methods.ignore,
+                    ):
+                        cur.execute(
+                            """
+                            INSERT INTO collections (content)
+                            SELECT content FROM tmp_collections
+                            ON CONFLICT DO NOTHING;
+                            """,
+                        )
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
+                    elif insert_mode == Methods.upsert:
+                        cur.execute(
+                            """
+                            INSERT INTO collections (content)
+                            SELECT content FROM tmp_collections
+                            ON CONFLICT (id) DO
+                            UPDATE SET content=EXCLUDED.content;
+                            """,
+                        )
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
+                    else:
+                        raise Exception(
+                            "Available modes are insert, ignore, and upsert."
+                            f"You entered {insert_mode}.",
+                        )
 
     @retry(
         stop=stop_after_attempt(5),
@@ -276,186 +275,192 @@ class Loader:
         insert_mode: Optional[Methods] = Methods.insert,
     ) -> None:
         """Load items data for a single partition."""
-        conn = self.db.connect()
-        t = time.perf_counter()
+        with self.db.connect() as conn:
+            t = time.perf_counter()
 
-        logger.debug(f"Loading data for partition: {partition}.")
-        with conn.cursor() as cur:
-            if partition.requires_update:
-                with conn.transaction():
-                    cur.execute(
-                        """
-                        SELECT check_partition(
-                            %s,
-                            tstzrange(%s, %s, '[]'),
-                            tstzrange(%s, %s, '[]')
-                        );
-                    """,
-                        (
-                            partition.collection,
-                            partition.datetime_range_min,
-                            partition.datetime_range_max,
-                            partition.end_datetime_range_min,
-                            partition.end_datetime_range_max,
-                        ),
-                    )
-
-                    logger.debug(
-                        f"Adding or updating partition {partition.name} "
-                        f"took {time.perf_counter() - t}s",
-                    )
-                partition.requires_update = False
-            else:
-                logger.debug(f"Partition {partition.name} does not require an update.")
-
-            with conn.transaction():
-                t = time.perf_counter()
-                if insert_mode in (
-                    None,
-                    Methods.insert,
-                ):
-                    with cur.copy(
-                        sql.SQL(
+            logger.debug(f"Loading data for partition: {partition}.")
+            with conn.cursor() as cur:
+                if partition.requires_update:
+                    with conn.transaction():
+                        cur.execute(
                             """
-                            COPY {}
+                            SELECT check_partition(
+                                %s,
+                                tstzrange(%s, %s, '[]'),
+                                tstzrange(%s, %s, '[]')
+                            );
+                        """,
+                            (
+                                partition.collection,
+                                partition.datetime_range_min,
+                                partition.datetime_range_max,
+                                partition.end_datetime_range_min,
+                                partition.end_datetime_range_max,
+                            ),
+                        )
+
+                        logger.debug(
+                            f"Adding or updating partition {partition.name} "
+                            f"took {time.perf_counter() - t}s",
+                        )
+                    partition.requires_update = False
+                else:
+                    logger.debug(
+                        f"Partition {partition.name} does not require an update.",
+                    )
+
+                with conn.transaction():
+                    t = time.perf_counter()
+                    if insert_mode in (
+                        None,
+                        Methods.insert,
+                    ):
+                        with cur.copy(
+                            sql.SQL(
+                                """
+                                COPY {}
+                                (id, collection, datetime,
+                                end_datetime, geometry,
+                                content, private)
+                                FROM stdin;
+                                """,
+                            ).format(sql.Identifier(partition.name)),
+                        ) as copy:
+                            for item in items:
+                                item.pop("partition")
+                                copy.write_row(
+                                    (
+                                        item["id"],
+                                        item["collection"],
+                                        item["datetime"],
+                                        item["end_datetime"],
+                                        item["geometry"],
+                                        item["content"],
+                                        item.get("private", None),
+                                    ),
+                                )
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Rows affected: {cur.rowcount}")
+                    elif insert_mode in (
+                        Methods.insert_ignore,
+                        Methods.upsert,
+                        Methods.delsert,
+                        Methods.ignore,
+                    ):
+                        cur.execute(
+                            """
+                            DROP TABLE IF EXISTS items_ingest_temp;
+                            CREATE TEMP TABLE items_ingest_temp
+                            ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
+                            """,
+                        )
+                        with cur.copy(
+                            """
+                            COPY items_ingest_temp
                             (id, collection, datetime,
                             end_datetime, geometry,
                             content, private)
                             FROM stdin;
                             """,
-                        ).format(sql.Identifier(partition.name)),
-                    ) as copy:
-                        for item in items:
-                            item.pop("partition")
-                            copy.write_row(
-                                (
-                                    item["id"],
-                                    item["collection"],
-                                    item["datetime"],
-                                    item["end_datetime"],
-                                    item["geometry"],
-                                    item["content"],
-                                    item.get("private", None),
-                                ),
+                        ) as copy:
+                            for item in items:
+                                item.pop("partition")
+                                copy.write_row(
+                                    (
+                                        item["id"],
+                                        item["collection"],
+                                        item["datetime"],
+                                        item["end_datetime"],
+                                        item["geometry"],
+                                        item["content"],
+                                        item.get("private", None),
+                                    ),
+                                )
+                        logger.debug(cur.statusmessage)
+                        logger.debug(f"Copied rows: {cur.rowcount}")
+
+                        cur.execute(
+                            sql.SQL(
+                                """
+                                    LOCK TABLE ONLY {} IN EXCLUSIVE MODE;
+                                """,
+                            ).format(sql.Identifier(partition.name)),
+                        )
+                        if insert_mode in (
+                            Methods.ignore,
+                            Methods.insert_ignore,
+                        ):
+                            cur.execute(
+                                sql.SQL(
+                                    """
+                                    INSERT INTO {}
+                                    SELECT *
+                                    FROM items_ingest_temp ON CONFLICT DO NOTHING;
+                                    """,
+                                ).format(sql.Identifier(partition.name)),
                             )
+                            logger.debug(cur.statusmessage)
+                            logger.debug(f"Rows affected: {cur.rowcount}")
+                        elif insert_mode == Methods.upsert:
+                            cur.execute(
+                                sql.SQL(
+                                    """
+                                    INSERT INTO {} AS t SELECT * FROM items_ingest_temp
+                                    ON CONFLICT (id) DO UPDATE
+                                    SET
+                                        datetime = EXCLUDED.datetime,
+                                        end_datetime = EXCLUDED.end_datetime,
+                                        geometry = EXCLUDED.geometry,
+                                        collection = EXCLUDED.collection,
+                                        content = EXCLUDED.content
+                                    WHERE t IS DISTINCT FROM EXCLUDED
+                                    ;
+                                """,
+                                ).format(sql.Identifier(partition.name)),
+                            )
+                            logger.debug(cur.statusmessage)
+                            logger.debug(f"Rows affected: {cur.rowcount}")
+                        elif insert_mode == Methods.delsert:
+                            cur.execute(
+                                sql.SQL(
+                                    """
+                                    WITH deletes AS (
+                                        DELETE FROM items i USING items_ingest_temp s
+                                            WHERE
+                                                i.id = s.id
+                                                AND i.collection = s.collection
+                                    )
+                                    INSERT INTO {} AS t SELECT * FROM items_ingest_temp
+                                    ON CONFLICT (id) DO UPDATE
+                                    SET
+                                        datetime = EXCLUDED.datetime,
+                                        end_datetime = EXCLUDED.end_datetime,
+                                        geometry = EXCLUDED.geometry,
+                                        collection = EXCLUDED.collection,
+                                        content = EXCLUDED.content
+                                    WHERE t IS DISTINCT FROM EXCLUDED
+                                    ;
+                                    """,
+                                ).format(sql.Identifier(partition.name)),
+                            )
+                            logger.debug(cur.statusmessage)
+                            logger.debug(f"Rows affected: {cur.rowcount}")
+                    else:
+                        raise Exception(
+                            "Available modes are insert, ignore, upsert, and delsert."
+                            f"You entered {insert_mode}.",
+                        )
+                    logger.debug("Updating Partition Stats")
+                    cur.execute(
+                        "SELECT update_partition_stats_q(%s);",
+                        (partition.name,),
+                    )
                     logger.debug(cur.statusmessage)
                     logger.debug(f"Rows affected: {cur.rowcount}")
-                elif insert_mode in (
-                    Methods.insert_ignore,
-                    Methods.upsert,
-                    Methods.delsert,
-                    Methods.ignore,
-                ):
-                    cur.execute(
-                        """
-                        DROP TABLE IF EXISTS items_ingest_temp;
-                        CREATE TEMP TABLE items_ingest_temp
-                        ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
-                        """,
-                    )
-                    with cur.copy(
-                        """
-                        COPY items_ingest_temp
-                        (id, collection, datetime,
-                        end_datetime, geometry,
-                        content, private)
-                        FROM stdin;
-                        """,
-                    ) as copy:
-                        for item in items:
-                            item.pop("partition")
-                            copy.write_row(
-                                (
-                                    item["id"],
-                                    item["collection"],
-                                    item["datetime"],
-                                    item["end_datetime"],
-                                    item["geometry"],
-                                    item["content"],
-                                    item.get("private", None),
-                                ),
-                            )
-                    logger.debug(cur.statusmessage)
-                    logger.debug(f"Copied rows: {cur.rowcount}")
 
-                    cur.execute(
-                        sql.SQL(
-                            """
-                                LOCK TABLE ONLY {} IN EXCLUSIVE MODE;
-                            """,
-                        ).format(sql.Identifier(partition.name)),
-                    )
-                    if insert_mode in (
-                        Methods.ignore,
-                        Methods.insert_ignore,
-                    ):
-                        cur.execute(
-                            sql.SQL(
-                                """
-                                INSERT INTO {}
-                                SELECT *
-                                FROM items_ingest_temp ON CONFLICT DO NOTHING;
-                                """,
-                            ).format(sql.Identifier(partition.name)),
-                        )
-                        logger.debug(cur.statusmessage)
-                        logger.debug(f"Rows affected: {cur.rowcount}")
-                    elif insert_mode == Methods.upsert:
-                        cur.execute(
-                            sql.SQL(
-                                """
-                                INSERT INTO {} AS t SELECT * FROM items_ingest_temp
-                                ON CONFLICT (id) DO UPDATE
-                                SET
-                                    datetime = EXCLUDED.datetime,
-                                    end_datetime = EXCLUDED.end_datetime,
-                                    geometry = EXCLUDED.geometry,
-                                    collection = EXCLUDED.collection,
-                                    content = EXCLUDED.content
-                                WHERE t IS DISTINCT FROM EXCLUDED
-                                ;
-                            """,
-                            ).format(sql.Identifier(partition.name)),
-                        )
-                        logger.debug(cur.statusmessage)
-                        logger.debug(f"Rows affected: {cur.rowcount}")
-                    elif insert_mode == Methods.delsert:
-                        cur.execute(
-                            sql.SQL(
-                                """
-                                WITH deletes AS (
-                                    DELETE FROM items i USING items_ingest_temp s
-                                        WHERE
-                                            i.id = s.id
-                                            AND i.collection = s.collection
-                                )
-                                INSERT INTO {} AS t SELECT * FROM items_ingest_temp
-                                ON CONFLICT (id) DO UPDATE
-                                SET
-                                    datetime = EXCLUDED.datetime,
-                                    end_datetime = EXCLUDED.end_datetime,
-                                    geometry = EXCLUDED.geometry,
-                                    collection = EXCLUDED.collection,
-                                    content = EXCLUDED.content
-                                WHERE t IS DISTINCT FROM EXCLUDED
-                                ;
-                                """,
-                            ).format(sql.Identifier(partition.name)),
-                        )
-                        logger.debug(cur.statusmessage)
-                        logger.debug(f"Rows affected: {cur.rowcount}")
-                else:
-                    raise Exception(
-                        "Available modes are insert, ignore, upsert, and delsert."
-                        f"You entered {insert_mode}.",
-                    )
-                logger.debug("Updating Partition Stats")
-                cur.execute("SELECT update_partition_stats_q(%s);", (partition.name,))
-                logger.debug(cur.statusmessage)
-                logger.debug(f"Rows affected: {cur.rowcount}")
-        logger.debug(
-            f"Copying data for {partition} took {time.perf_counter() - t} seconds",
-        )
+            logger.debug(
+                f"Copying data for {partition} took {time.perf_counter() - t} seconds",
+            )
 
     def _partition_update(self, item: Dict[str, Any]) -> str:
         """Update the cached partition with the item information and return the name.
@@ -604,6 +609,7 @@ class Loader:
         if file is None:
             file = "stdin"
         t = time.perf_counter()
+
         self._partition_cache = {}
 
         if dehydrated and isinstance(file, str):
