@@ -107,6 +107,8 @@ class PgstacDB:
     def connect(self) -> Connection:
         """Return database connection."""
         pool = self.get_pool()
+
+        conn: Connection = None
         try:
             conn = pool.getconn()
             conn.autocommit = True
@@ -144,7 +146,8 @@ class PgstacDB:
                 yield conn
 
         finally:
-            pool.putconn(conn)
+            if conn:
+                pool.putconn(conn)
 
     def wait(self) -> None:
         """Block until database connection is ready."""
