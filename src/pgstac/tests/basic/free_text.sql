@@ -88,6 +88,10 @@ select collection_search('{"q": "\"great story\""}');
 
 select collection_search('{"q": "monster -school"}');
 
+select collection_search('{"q": "+restaurant -sad"}');
+
+select collection_search('{"q": "+restaurant"}');
+
 select collection_search('{"q": "bear or stranger"}');
 
 select collection_search('{"q": "bear OR stranger"}');

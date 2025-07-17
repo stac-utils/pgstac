@@ -1,1 +1,1 @@
-SELECT set_version('0.9.6');
+SELECT set_version('unreleased');
