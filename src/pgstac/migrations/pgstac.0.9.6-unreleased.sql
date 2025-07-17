@@ -196,96 +196,58 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
 set check_function_bodies = off;
 
-CREATE OR REPLACE FUNCTION pgstac.stac_search_to_where(j jsonb)
- RETURNS text
+CREATE OR REPLACE FUNCTION pgstac.q_to_tsquery(input text)
+ RETURNS tsquery
  LANGUAGE plpgsql
- STABLE
 AS $function$
 DECLARE
-    where_segments text[];
-    _where text;
-    dtrange tstzrange;
-    collections text[];
-    geom geometry;
-    sdate timestamptz;
-    edate timestamptz;
-    filterlang text;
-    filter jsonb := j->'filter';
-    ft_query tsquery;
+    processed_text text;
+    temp_text text;
+    quote_array text[];
+    placeholder text := '@QUOTE@';
 BEGIN
-    IF j ? 'ids' THEN
-        where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
+    -- Extract all quoted phrases and store in array
+    quote_array := regexp_matches(input, '"[^"]*"', 'g');
+
+    -- Replace each quoted part with a unique placeholder if there are any quoted phrases
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        processed_text := input;
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, quote_array[i], placeholder || i || placeholder);
+        END LOOP;
+    ELSE
+        processed_text := input;
     END IF;
 
-    IF j ? 'collections' THEN
-        collections := to_text_array(j->'collections');
-        where_segments := where_segments || format('collection = ANY (%L) ', collections);
+    -- Replace non-quoted text using regular expressions
+
+    -- , -> |
+    processed_text := regexp_replace(processed_text, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+
+    -- and -> &
+    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'gi');
+
+    -- or -> |
+    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
+
+    -- + ->
+    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_]+)', '\1', 'g'); -- +term at start
+    processed_text := regexp_replace(processed_text, '\s*\+([a-zA-Z0-9_]+)', ' & \1', 'g'); -- +term elsewhere
+
+    -- - ->  !
+    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
+    processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
+    -- Replace placeholders back with quoted phrases if there were any
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, placeholder || i || placeholder, '''' || substring(quote_array[i] from 2 for length(quote_array[i]) - 2) || '''');
+        END LOOP;
     END IF;
 
-    IF j ? 'datetime' THEN
-        dtrange := parse_dtrange(j->'datetime');
-        sdate := lower(dtrange);
-        edate := upper(dtrange);
+    -- Print processed_text to the console for debugging purposes
+    RAISE NOTICE 'processed_text: %', processed_text;
 
-        where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
-            edate,
-            sdate
-        );
-    END IF;
-
-    IF j ? 'q' THEN
-        ft_query := q_to_tsquery(j->>'q');
-        where_segments := where_segments || format(
-            $quote$
-            (
-                to_tsvector('english', content->'properties'->>'description') ||
-                to_tsvector('english', coalesce(content->'properties'->>'title', '')) ||
-                to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))
-            ) @@ %L
-            $quote$,
-            ft_query
-        );
-    END IF;
-
-    geom := stac_geom(j);
-    IF geom IS NOT NULL THEN
-        where_segments := where_segments || format('st_intersects(geometry, %L)',geom);
-    END IF;
-
-    filterlang := COALESCE(
-        j->>'filter-lang',
-        get_setting('default_filter_lang', j->'conf')
-    );
-    IF NOT filter @? '$.**.op' THEN
-        filterlang := 'cql-json';
-    END IF;
-
-    IF filterlang NOT IN ('cql-json','cql2-json') AND j ? 'filter' THEN
-        RAISE EXCEPTION '% is not a supported filter-lang. Please use cql-json or cql2-json.', filterlang;
-    END IF;
-
-    IF j ? 'query' AND j ? 'filter' THEN
-        RAISE EXCEPTION 'Can only use either query or filter at one time.';
-    END IF;
-
-    IF j ? 'query' THEN
-        filter := query_to_cql2(j->'query');
-    ELSIF filterlang = 'cql-json' THEN
-        filter := cql1_to_cql2(filter);
-    END IF;
-    RAISE NOTICE 'FILTER: %', filter;
-    where_segments := where_segments || cql2_query(filter);
-    IF cardinality(where_segments) < 1 THEN
-        RETURN ' TRUE ';
-    END IF;
-
-    _where := array_to_string(array_remove(where_segments, NULL), ' AND ');
-
-    IF _where IS NULL OR BTRIM(_where) = '' THEN
-        RETURN ' TRUE ';
-    END IF;
-    RETURN _where;
-
+    RETURN to_tsquery('english', processed_text);
 END;
 $function$
 ;

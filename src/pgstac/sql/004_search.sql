@@ -161,12 +161,13 @@ BEGIN
     -- or -> |
     processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
 
-    -- +term -> & term
-    processed_text := regexp_replace(processed_text, '\+([a-zA-Z0-9_]+)', '& \1', 'g');
+    -- + ->
+    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_]+)', '\1', 'g'); -- +term at start
+    processed_text := regexp_replace(processed_text, '\s*\+([a-zA-Z0-9_]+)', ' & \1', 'g'); -- +term elsewhere
 
-    -- -term -> ! term
-    processed_text := regexp_replace(processed_text, '\-([a-zA-Z0-9_]+)', '& ! \1', 'g');
-
+    -- - ->  !
+    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
+    processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
     -- Replace placeholders back with quoted phrases if there were any
     IF array_length(quote_array, 1) IS NOT NULL THEN
         FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
@@ -177,7 +178,7 @@ BEGIN
     -- Print processed_text to the console for debugging purposes
     RAISE NOTICE 'processed_text: %', processed_text;
 
-    RETURN to_tsquery(processed_text);
+    RETURN to_tsquery('english', processed_text);
 END;
 $$
 LANGUAGE plpgsql;

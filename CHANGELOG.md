@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Fix bad handling of leading +/- terms in free-text search
+- Use consistent tsquery config in free-text search
+
 ## [v0.9.6]
 
 ### Added
