@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+### [v0.9.7]
+
 - Fix bad handling of leading +/- terms in free-text search
 - Use consistent tsquery config in free-text search
 
@@ -19,18 +20,20 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add support for specifying collection IDs when loading queryables
 
 ### Fixed
+
 - Added missing 0.8.6-0.9.0 migration script
 
 ## [v0.9.5]
 
 ### Changed
 
- - Pin to `plpygic>=0.5.0` and use `geom.ewkb` instead of `geom.wkt` when formatting items in `Loader.format_item`. Fixes (#357)
+- Pin to `plpygic>=0.5.0` and use `geom.ewkb` instead of `geom.wkt` when formatting items in `Loader.format_item`. Fixes (#357)
 
 ## [v0.9.4]
 
 ### Changed
- - Relax pypgstac dependencies
+
+- Relax pypgstac dependencies
 
 ## [v0.9.3]
 
@@ -63,6 +66,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Consistently ensure use of instantiated postgres fields when addressing with 'properties.' prefix
 
 ### Changed
+
 - Move rust hydration to a separate repo
 
 ## [v0.9.1]
@@ -100,8 +104,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Fixed
 
- - Relax version requirement for smart-open (Fixes #273)
- - Use uv pip in docker build
+- Relax version requirement for smart-open (Fixes #273)
+- Use uv pip in docker build
 
 ## [v0.8.5]
 
@@ -575,6 +579,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.7]: https://github.com/stac-utils/pgstac/compare/v0.9.6...v0.9.7
 [v0.9.6]: https://github.com/stac-utils/pgstac/compare/v0.9.5...v0.9.6
 [v0.9.5]: https://github.com/stac-utils/pgstac/compare/v0.9.4...v0.9.5
 [v0.9.4]: https://github.com/stac-utils/pgstac/compare/v0.9.3...v0.9.4
