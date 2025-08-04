@@ -105,3 +105,5 @@ select collection_search('{"q": "bear and stranger"}');
 select collection_search('{"q": "\"bear or stranger\""}');
 
 select collection_search('{"q": "office"}');
+
+select collection_search('{"q": ["bear", "stranger"]}');

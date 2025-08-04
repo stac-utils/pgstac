@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [unreleased]
+### Fixed
+- Allow array as q parameter for full text search
+
+
 ## [v0.9.7]
 
 ### Fixed
