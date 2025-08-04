@@ -128,15 +128,26 @@ CREATE OR REPLACE FUNCTION partition_query_view(
 $$ LANGUAGE SQL IMMUTABLE;
 
 
-CREATE OR REPLACE FUNCTION q_to_tsquery (input text)
+CREATE OR REPLACE FUNCTION q_to_tsquery (jinput jsonb)
     RETURNS tsquery
     AS $$
 DECLARE
+    input text;
     processed_text text;
     temp_text text;
     quote_array text[];
     placeholder text := '@QUOTE@';
 BEGIN
+    IF jsonb_typeof(jinput) = 'string' THEN
+        input := jinput->>0;
+    ELSIF jsonb_typeof(jinput) = 'array' THEN
+        input := array_to_string(
+            array(select jsonb_array_elements_text(jinput)),
+            ' OR '
+        );
+    ELSE
+        RAISE EXCEPTION 'Input must be a string or an array of strings.';
+    END IF;
     -- Extract all quoted phrases and store in array
     quote_array := regexp_matches(input, '"[^"]*"', 'g');
 
@@ -218,7 +229,7 @@ BEGIN
     END IF;
 
     IF j ? 'q' THEN
-        ft_query := q_to_tsquery(j->>'q');
+        ft_query := q_to_tsquery(j->'q');
         where_segments := where_segments || format(
             $quote$
             (
