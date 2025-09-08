@@ -5,10 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [unreleased]
+### Added
+- Real-time LISTEN/NOTIFY notifications for item operations (INSERT, UPDATE, DELETE)
+
 ## [v0.9.8]
 ### Fixed
 - Allow array as q parameter for full text search
-
 
 ## [v0.9.7]
 

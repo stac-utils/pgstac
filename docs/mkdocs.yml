@@ -20,6 +20,7 @@ nav:
   - Home: "index.md"
   - PgSTAC: "pgstac.md"
   - pyPgSTAC: "pypgstac.md"
+  - Notifications: "notifications.md"
   - Performance:
     - item_size_analysis.ipynb
   - Development - Contributing: "contributing.md"
