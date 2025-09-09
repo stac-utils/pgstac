@@ -208,3 +208,87 @@ WHERE schemaname = 'pgstac'
 ORDER BY idx_scan ASC
 ;
 ```
+
+### Notification Triggers
+
+You can add notification triggers alongside pgstac to get notified when items are inserted, updated, or deleted.
+
+**Important:** Do NOT create these in the `pgstac` schema as they could be removed in future migrations.
+
+#### Example Notification Setup
+
+Here's an example of how to set up notification triggers for item changes:
+
+```sql
+-- Create the notification function
+CREATE OR REPLACE FUNCTION notify_items_change_func()
+RETURNS TRIGGER AS $$
+DECLARE
+
+BEGIN
+    PERFORM pg_notify('pgstac_items_change'::text, json_build_object(
+            'operation', TG_OP,
+            'items', jsonb_agg(
+                jsonb_build_object(
+                    'collection', data.collection,
+                    'id', data.id
+                )
+            )
+        )::text
+        )
+        FROM data
+    ;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create triggers for INSERT operations
+CREATE OR REPLACE TRIGGER notify_items_change_insert
+    AFTER INSERT ON pgstac.items
+    REFERENCING NEW TABLE AS data
+    FOR EACH STATEMENT EXECUTE FUNCTION notify_items_change_func()
+;
+
+-- Create triggers for UPDATE operations
+CREATE OR REPLACE TRIGGER notify_items_change_update
+    AFTER UPDATE ON pgstac.items
+    REFERENCING NEW TABLE AS data
+    FOR EACH STATEMENT EXECUTE FUNCTION notify_items_change_func()
+;
+
+-- Create triggers for DELETE operations
+CREATE OR REPLACE TRIGGER notify_items_change_delete
+    AFTER DELETE ON pgstac.items
+    REFERENCING OLD TABLE AS data
+    FOR EACH STATEMENT EXECUTE FUNCTION notify_items_change_func()
+;
+```
+
+#### Usage
+
+Listen for notifications:
+```sql
+LISTEN pgstac_items_change;
+```
+
+Payload structure:
+
+```json
+{
+  "operation": "INSERT",
+  "items": [
+    {
+      "collection": "sentinel-2-l2a",
+      "id": "item-1"
+    },
+    {
+      "collection": "sentinel-2-l2a",
+      "id": "item-2"
+    }
+  ]
+}
+```
+
+#### Customization
+
+You may modify the function to include additional metadata, filter by collection, or use different channels. Only trigger on the `items` table, not `items_staging`.
