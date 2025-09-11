@@ -215,6 +215,8 @@ You can add notification triggers alongside pgstac to get notified when items ar
 
 **Important:** Do NOT create these in the `pgstac` schema as they could be removed in future migrations.
 
+**Note on pgSTAC's UPDATE behavior:** For performance and consistency, `update_item()` in pgSTAC uses a **DELETE+INSERT** pattern instead of a direct SQL `UPDATE`. As a result, standard `UPDATE` triggers will not fire during these operations. Applications that rely on change notifications should implement logic that accounts for this behavior.
+
 #### Example Notification Setup
 
 Here's an example of how to set up notification triggers for item changes:
