@@ -1,4 +1,5 @@
 """Fixtures for pypgstac tests."""
+
 import os
 from typing import Generator
 
@@ -40,11 +41,11 @@ def db() -> Generator:
                 try:
                     conn.execute("DROP DATABASE pypgstactestdb;")
                     conn.execute(
-                    """
+                        """
                     CREATE DATABASE pypgstactestdb
                     TEMPLATE pgstac_test_db_template;
                     """,
-                )
+                    )
                 except Exception:
                     pass
 
