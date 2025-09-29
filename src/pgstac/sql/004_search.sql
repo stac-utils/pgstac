@@ -179,6 +179,18 @@ BEGIN
     -- - ->  !
     processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
     processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
+
+    -- terms separated with spaces are assumed to represent an AND clause. loop through these
+    -- occurrences and replace them with &
+    LOOP
+        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)(?!\s*[&|<>])', '\1 & \2', 'g');
+        IF temp_text = processed_text THEN
+            EXIT; -- No more replacements were made
+        END IF;
+        processed_text := temp_text;
+    END LOOP;
+
+
     -- Replace placeholders back with quoted phrases if there were any
     IF array_length(quote_array, 1) IS NOT NULL THEN
         FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
