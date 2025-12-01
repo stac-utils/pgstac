@@ -628,7 +628,13 @@ BEGIN
     THEN
         RETURN j;
     ELSE
-        includes := includes || '["id","collection"]'::jsonb;
+        IF j ? 'collection' THEN
+            -- STAC Item: has "collection"
+            includes := includes || '["id","collection"]'::jsonb;
+        ELSE
+            -- STAC Collection (or anything without that key)
+            includes := includes || '["id"]'::jsonb;
+        END IF;
         FOR path IN SELECT explode_dotpaths(includes) LOOP
             outj := jsonb_set_nested(outj, path, j #> path);
         END LOOP;
