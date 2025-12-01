@@ -108,7 +108,11 @@ BEGIN
     THEN
         RETURN j;
     ELSE
-        includes := includes || '["id","collection"]'::jsonb;
+        IF j ? 'collection' THEN
+            includes := includes || '["id","collection"]'::jsonb;
+        ELSE
+            includes := includes || '["id"]'::jsonb;
+        END IF;
         FOR path IN SELECT explode_dotpaths(includes) LOOP
             outj := jsonb_set_nested(outj, path, j #> path);
         END LOOP;
