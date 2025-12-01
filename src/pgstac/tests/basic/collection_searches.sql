@@ -50,4 +50,4 @@ select collection_search('{"filter":{"op":"eq", "args":[{"property":"title"},"My
 
 select collection_search('{"datetime":["2012-01-01","2012-01-02"], "filter":{"op":"eq", "args":[{"property":"title"},"My Test Collection."]},"limit":10, "sortby":[{"field":"datetime","direction":"desc"}]}');
 
-select collection_search('{"fields": {"include": ["title"]}}');
+select collection_search('{"ids":["testcollection_1","testcollection_2"], "fields": {"include": ["title"]}}');
