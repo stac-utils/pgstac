@@ -3048,15 +3048,26 @@ CREATE OR REPLACE FUNCTION partition_query_view(
 $$ LANGUAGE SQL IMMUTABLE;
 
 
-CREATE OR REPLACE FUNCTION q_to_tsquery (input text)
+CREATE OR REPLACE FUNCTION q_to_tsquery (jinput jsonb)
     RETURNS tsquery
     AS $$
 DECLARE
+    input text;
     processed_text text;
     temp_text text;
     quote_array text[];
     placeholder text := '@QUOTE@';
 BEGIN
+    IF jsonb_typeof(jinput) = 'string' THEN
+        input := jinput->>0;
+    ELSIF jsonb_typeof(jinput) = 'array' THEN
+        input := array_to_string(
+            array(select jsonb_array_elements_text(jinput)),
+            ' OR '
+        );
+    ELSE
+        RAISE EXCEPTION 'Input must be a string or an array of strings.';
+    END IF;
     -- Extract all quoted phrases and store in array
     quote_array := regexp_matches(input, '"[^"]*"', 'g');
 
@@ -3081,12 +3092,13 @@ BEGIN
     -- or -> |
     processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
 
-    -- +term -> & term
-    processed_text := regexp_replace(processed_text, '\+([a-zA-Z0-9_]+)', '& \1', 'g');
+    -- + ->
+    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_]+)', '\1', 'g'); -- +term at start
+    processed_text := regexp_replace(processed_text, '\s*\+([a-zA-Z0-9_]+)', ' & \1', 'g'); -- +term elsewhere
 
-    -- -term -> ! term
-    processed_text := regexp_replace(processed_text, '\-([a-zA-Z0-9_]+)', '& ! \1', 'g');
-
+    -- - ->  !
+    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
+    processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
     -- Replace placeholders back with quoted phrases if there were any
     IF array_length(quote_array, 1) IS NOT NULL THEN
         FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
@@ -3097,7 +3109,7 @@ BEGIN
     -- Print processed_text to the console for debugging purposes
     RAISE NOTICE 'processed_text: %', processed_text;
 
-    RETURN to_tsquery(processed_text);
+    RETURN to_tsquery('english', processed_text);
 END;
 $$
 LANGUAGE plpgsql;
@@ -3137,7 +3149,7 @@ BEGIN
     END IF;
 
     IF j ? 'q' THEN
-        ft_query := q_to_tsquery(j->>'q');
+        ft_query := q_to_tsquery(j->'q');
         where_segments := where_segments || format(
             $quote$
             (
@@ -4566,4 +4578,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
-SELECT set_version('0.9.4');
+SELECT set_version('0.9.8');
