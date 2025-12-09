@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+
+## [UNRELEASED]
+
+* changed container images to use non-root `user`
+
 ## [v0.9.8]
+
 ### Fixed
 - Allow array as q parameter for full text search
 

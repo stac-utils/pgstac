@@ -28,3 +28,8 @@ COPY src/pypgstac /opt/src/pypgstac
 COPY src/pgstac /opt/src/pgstac
 WORKDIR /opt/src/pypgstac
 RUN uv pip install --system -e . && rm -rf /usr/local/cargo/registry
+
+RUN addgroup --gid 1000 user && \
+    adduser --uid 1000 --gid 1000 --disabled-password --gecos "" --home /home/user user && \
+    chown -R user:user /opt/src/pypgstac /opt/src/pgstac
+USER user
