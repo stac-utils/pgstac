@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [UNRELEASED]
 
 * changed container images to use non-root `user`
+* fix bug where closed and broken db connections are reused.
 
 ## [v0.9.8]
 
