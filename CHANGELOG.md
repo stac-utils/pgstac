@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Fix bad handling of leading +/- terms in free-text search
 - Use consistent tsquery config in free-text search
 
+### Added
+
+- Add `--create-missing-collections` option to load_queryables to automatically create collections that don't exist
+
 ## [v0.9.6]
 
 ### Added
