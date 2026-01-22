@@ -3105,10 +3105,10 @@ BEGIN
     processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
     processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
 
-    -- terms separated with spaces are assumed to represent an AND clause. loop through these
-    -- occurrences and replace them with &
+    -- terms separated with spaces are assumed to represent adjacent terms. loop through these
+    -- occurrences and replace them with the adjacency operator (<->)
     LOOP
-        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)(?!\s*[&|<>])', '\1 & \2', 'g');
+        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)(?!\s*[&|<>])', '\1 <-> \2', 'g');
         IF temp_text = processed_text THEN
             EXIT; -- No more replacements were made
         END IF;
