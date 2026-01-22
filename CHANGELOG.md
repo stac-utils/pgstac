@@ -8,7 +8,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [UNRELEASED]
 
+##[v0.9.9]
+
+### Changed
 * changed container images to use non-root `user`
+
+### Fixed
+* replace space-separated terms with adjacency operator in free-text search (#387)
 
 ## [v0.9.8]
 
@@ -586,6 +592,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.9]: https://github.com/stac-utils/pgstac/compare/v0.9.8...v0.9.9
 [v0.9.8]: https://github.com/stac-utils/pgstac/compare/v0.9.7...v0.9.8
 [v0.9.7]: https://github.com/stac-utils/pgstac/compare/v0.9.6...v0.9.7
 [v0.9.6]: https://github.com/stac-utils/pgstac/compare/v0.9.5...v0.9.6
