@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/contributing/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/item_size_analysis/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/pgstac/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/pypgstac/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+    <url>
+         <loc>https://stac-utils.github.io/pgstac/release-notes/</loc>
+         <lastmod>2026-01-22</lastmod>
+    </url>
+</urlset>

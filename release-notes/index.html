@@ -1,0 +1,4906 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="PostgreSQL schema and functions for Spatio-Temporal Asset Catalog (STAC).">
+      
+      
+      
+        <link rel="canonical" href="https://stac-utils.github.io/pgstac/release-notes/">
+      
+      
+        <link rel="prev" href="../contributing/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Release Notes - pgstac</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#changelog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="pgstac" class="md-header__button md-logo" aria-label="pgstac" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pgstac
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Release Notes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/stac-utils/pgstac" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    stac-utils/pgstac
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="pgstac" class="md-nav__button md-logo" aria-label="pgstac" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pgstac
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/stac-utils/pgstac" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    stac-utils/pgstac
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pgstac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PgSTAC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pypgstac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    pyPgSTAC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Performance
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../item_size_analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    impacts of STAC item footprint size on dynamic tiling query performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development - Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [UNRELEASED]
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v099" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v098" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v097" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v096" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v095" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v094" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v093" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v092" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v091" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v090" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v086" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v0.8.6]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v0.8.6]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v085" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v084" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v083" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v082" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v081" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v080" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0710" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v079" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v078" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v077" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v076" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v075" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v074" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v073" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v072" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v071" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v070" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0613" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.13
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.13">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0612" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0611" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.11
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.11">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0610" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v069" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v068" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v067" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v066" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v065" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v064" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v063" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v062" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v061" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v060" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v051" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.5.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v050" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.5.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v045" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v044" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v043" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_42" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v041" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_43" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v040" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_44" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v034" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.3.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v033" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.3.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v032" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.2
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed_46" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v031" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.1
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v028" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.2.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.2.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [UNRELEASED]
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v099" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v098" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v097" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v096" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v095" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v094" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v093" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v092" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v091" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v090" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.9.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.9.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#breaking-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breaking Changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v086" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v0.8.6]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v0.8.6]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v085" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v084" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v083" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v082" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v081" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v080" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.8.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.8.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0710" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v079" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v078" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v077" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v076" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v075" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v074" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v073" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v072" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v071" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v070" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.7.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.7.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0613" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.13
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.13">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0612" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0611" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.11
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.11">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0610" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v069" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.9
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.9">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v068" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v067" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.7
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.7">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v066" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v065" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v064" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v063" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v062" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v061" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v060" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.6.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.6.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v051" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.5.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v050" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.5.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v045" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.5
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v044" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v043" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.2
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.2">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_42" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v041" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_43" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v040" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.4.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.4.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_44" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v034" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.4
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.3.4">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v033" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.3
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.3.3">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v032" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.2
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed_46" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v031" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.3.1
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v028" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.2.8
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v0.2.8">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
+<p>All notable changes to this project will be documented in this file.</p>
+<p>The format is based on <a href="http://keepachangelog.com/">Keep a Changelog</a>
+and this project adheres to <a href="http://semver.org/">Semantic Versioning</a>.</p>
+<h2 id="unreleased">[UNRELEASED]<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="v099"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.8...v0.9.9">v0.9.9</a><a class="headerlink" href="#v099" title="Permanent link">&para;</a></h2>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li>changed container images to use non-root <code>user</code></li>
+</ul>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li>replace space-separated terms with adjacency operator in free-text search (#387)</li>
+</ul>
+<h2 id="v098"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.7...v0.9.8">v0.9.8</a><a class="headerlink" href="#v098" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Allow array as q parameter for full text search</li>
+</ul>
+<h2 id="v097"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.6...v0.9.7">v0.9.7</a><a class="headerlink" href="#v097" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_2">Fixed<a class="headerlink" href="#fixed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix bad handling of leading &plusmn; terms in free-text search</li>
+<li>Use consistent tsquery config in free-text search</li>
+</ul>
+<h2 id="v096"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.5...v0.9.6">v0.9.6</a><a class="headerlink" href="#v096" title="Permanent link">&para;</a></h2>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add <code>load_queryables</code> function to pypgstac for loading queryables from a JSON file</li>
+<li>Add support for specifying collection IDs when loading queryables</li>
+</ul>
+<h3 id="fixed_3">Fixed<a class="headerlink" href="#fixed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Added missing 0.8.6-0.9.0 migration script</li>
+</ul>
+<h2 id="v095"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.4...v0.9.5">v0.9.5</a><a class="headerlink" href="#v095" title="Permanent link">&para;</a></h2>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Pin to <code>plpygic&gt;=0.5.0</code> and use <code>geom.ewkb</code> instead of <code>geom.wkt</code> when formatting items in <code>Loader.format_item</code>. Fixes (#357)</li>
+</ul>
+<h2 id="v094"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.3...v0.9.4">v0.9.4</a><a class="headerlink" href="#v094" title="Permanent link">&para;</a></h2>
+<h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Relax pypgstac dependencies</li>
+</ul>
+<h2 id="v093"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.2...v0.9.3">v0.9.3</a><a class="headerlink" href="#v093" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_4">Fixed<a class="headerlink" href="#fixed_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix CI issue with tests not running</li>
+<li>Fix for issue with nulls in title or keywords for free text search</li>
+</ul>
+<h3 id="changed_3">Changed<a class="headerlink" href="#changed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Replace hardcoded org name in CI</li>
+</ul>
+<h2 id="v092"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.1...v0.9.2">v0.9.2</a><a class="headerlink" href="#v092" title="Permanent link">&para;</a></h2>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add limited support for free-text search in the search functions. (Fixes #293)</li>
+<li>the <code>q</code> parameter is converted from the
+    <a href="https://docs.ogc.org/DRAFTS/24-031.html">OGC API - Features syntax</a> into a <code>tsquery</code>
+    statement which is used to compare to the description, title, and keywords fields in items or collection_search</li>
+<li>the text search is un-indexed and will be very slow for item-level searches!</li>
+<li>Add support for Postgres 17</li>
+<li>Support for adding data to the private field using the pypgstac loader</li>
+</ul>
+<h3 id="fixed_5">Fixed<a class="headerlink" href="#fixed_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add <code>open=True</code> in <code>psycopg.ConnectionPool</code> to avoid future behavior change</li>
+<li>Switch from postgres <code>server_version</code> to <code>server_version_num</code> to get PG version (Fixes #300)</li>
+<li>Allow read-only replicas work even when the context extension is enabled (Fixes #300)</li>
+<li>Consistently ensure use of instantiated postgres fields when addressing with 'properties.' prefix</li>
+</ul>
+<h3 id="changed_4">Changed<a class="headerlink" href="#changed_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Move rust hydration to a separate repo</li>
+</ul>
+<h2 id="v091"><a href="https://github.com/stac-utils/pgstac/compare/v0.9.0...v0.9.1">v0.9.1</a><a class="headerlink" href="#v091" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_6">Fixed<a class="headerlink" href="#fixed_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed double nested extent when using trigger based update collection extent. (Fixes #274)</li>
+<li>Fix time formatting (Fixes #275)</li>
+<li>Relaxes smart-open dependency check (Fixes #273)</li>
+<li>Switch to uv for docker image</li>
+</ul>
+<h2 id="v090"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.5...v0.9.0">v0.9.0</a><a class="headerlink" href="#v090" title="Permanent link">&para;</a></h2>
+<h3 id="breaking-changes">Breaking Changes<a class="headerlink" href="#breaking-changes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Context Extension has been deprecated. Context is now reported using OGC Features compliant numberMatched and numberReturned</li>
+<li>Paging return from search using prev/next properties has been deprecated. Paging is now available in the spec compliant Links</li>
+</ul>
+<h3 id="added_2">Added<a class="headerlink" href="#added_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add support for Casei and Accenti (Fixes #237). (Also, requires the addition of the unaccent extension)</li>
+<li>Add numberReturned and numberMatched fields for ItemCollection. BREAKING CHANGE: As the context extension is deprecated, this also removes the "context" item from results.</li>
+<li>Updated docs on automated updates of collection extents. (CLOSES #247)</li>
+<li>stac search now returns paging information using standards compliant links rather than prev/next properties (Fixes #265)</li>
+</ul>
+<h3 id="fixed_7">Fixed<a class="headerlink" href="#fixed_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixes issue when there is a None rather than an empty dictionary in hydration.</li>
+<li>Use "debug" log level rather than "log" to prevent growth in log messages due to differences in how client_min_messages and log_min_messages treat log levels. (Fixes #242)</li>
+<li>Refactor search_query and search_where functions to eliminate race condition when running identical queries. (Fixes #233)</li>
+<li>Fixes CQL2 Parser for Between operator (Fixes #251)</li>
+<li>Update PyO3 for rust hydration performance improvements.</li>
+</ul>
+<h2 id="v086">[v0.8.6]<a class="headerlink" href="#v086" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_8">Fixed<a class="headerlink" href="#fixed_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Relax version requirement for smart-open (Fixes #273)</li>
+<li>Use uv pip in docker build</li>
+</ul>
+<h2 id="v085"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.4...v0.8.5">v0.8.5</a><a class="headerlink" href="#v085" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_9">Fixed<a class="headerlink" href="#fixed_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue when installing or migrating pgstac using a non superuser (particularly when using the default role found on RDS). (FIXES #239). Backports fix into migrations for 0.8.2, 0.8.3, and 0.8.4.</li>
+<li>Adds fixes/updates to documentation</li>
+<li>Fixes issue when using geometry with the strict queryables setting set.</li>
+</ul>
+<h2 id="v084"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.3...v0.8.4">v0.8.4</a><a class="headerlink" href="#v084" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_10">Fixed<a class="headerlink" href="#fixed_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Make release deployment use postgres images without plrust</li>
+<li>Update versions of plrust in dockerfile (used for development, there is no plrust code yet)</li>
+<li>Update incremental migration tests to start at v0.3.0 rather than v0.1.9 due to a breaking change in pg_partman at version 5 that has no ability to pin a version. Migrating from prior to v0.3.0 should still work fine as long as pg_partman has not been updated on the database.</li>
+</ul>
+<h2 id="v083"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.2...v0.8.3">v0.8.3</a><a class="headerlink" href="#v083" title="Permanent link">&para;</a></h2>
+<h3 id="added_3">Added<a class="headerlink" href="#added_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add support for arm64 to Docker images</li>
+</ul>
+<h3 id="fixed_11">Fixed<a class="headerlink" href="#fixed_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixes a critical bug when using the ingest_staging_upsert table or the upsert_item/upsert_items functions to update records with existing data where the existing row would get deleted, but the new row would not get added.</li>
+</ul>
+<h2 id="v082"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.1...v0.8.2">v0.8.2</a><a class="headerlink" href="#v082" title="Permanent link">&para;</a></h2>
+<h3 id="added_4">Added<a class="headerlink" href="#added_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add support functions and tests for Collection Search</li>
+<li>Add configuration parameter for base_url to be able to generate absolute links</li>
+<li>With this release, this is only used to create links for paging in collection_search</li>
+<li>Adds read only mode to allow use of pgstac on read replicas</li>
+<li>Note: Turning on romode disables any caching (particularly when context is turned on) and does not allow to store q query hash that can be used with geometry_search.</li>
+<li>Add option to pypgstac loader "--usequeue" that forces use of the query queue for the loading process</li>
+<li>Add "pypgstac runqueue" command to run any commands that are set in the query queue</li>
+</ul>
+<h3 id="fixed_12">Fixed<a class="headerlink" href="#fixed_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix bug with end_datetime constraint management leading to inability to add data outside of constraints</li>
+<li>Fix bugs dealing with table ownership to ensure that all pgstac tables are owned by the pgstac_admin role</li>
+<li>Fixes issues with errors/warnings caused when doing index maintenance</li>
+<li>Fixes issues with errors/warnings caused with partition management</li>
+<li>Make sure that pgstac_ingest role always has read/write permissions on all tables</li>
+<li>Remove call to create_table_constraints from check_partition function. create_table_constraints was being called twice as it also gets called from update_partition_stats</li>
+<li>Add NOT NULL constraint to collections table (FIXES #224)</li>
+<li>Fix issue with indexes not getting created as the pg_admin role using SECURITY DEFINER</li>
+</ul>
+<h3 id="changed_5">Changed<a class="headerlink" href="#changed_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Revert pydantic requirement back to '&gt;=1.7' and use basesettings conditionally from pydantic or pydantic.v1 to allow compatibility with pydantic 2 as well as with stac-fastapi that requires pydantic &lt;2</li>
+</ul>
+<h2 id="v081"><a href="https://github.com/stac-utils/pgstac/compare/v0.8.0...v0.8.1">v0.8.1</a><a class="headerlink" href="#v081" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_13">Fixed<a class="headerlink" href="#fixed_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue with CI building/pushing docker images</li>
+</ul>
+<h2 id="v080"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.10...v0.8.0">v0.8.0</a><a class="headerlink" href="#v080" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_14">Fixed<a class="headerlink" href="#fixed_14" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Revert an optimisation which limited the number of results from a search query to the number of item IDs specified in the query.
+This fixes an issue where items with the same ID that are in multiple collections could be left out of search results.</li>
+</ul>
+<h3 id="changed_6">Changed<a class="headerlink" href="#changed_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>update <code>pydantic</code> requirement to <code>~=2.0</code></li>
+<li>update docker and ci workflows to build binary wheels for rust additions to pypgstac</li>
+<li>split docker into database service and python/rust container</li>
+<li>Modify scripts to auto-generate unreleased migration</li>
+<li>Add pre commit tasks to generate migration and to rebuild and compile pypgstac with maturin for rust</li>
+<li>Add private jsonb column to items and collections table to hold private metadata that should not be returned as part of a stac item</li>
+<li>Add generated columns to collections with the bounding box as a geometry and the datetime and end_datetime from the extents (this is to help with forthcoming work on collections search)</li>
+<li>Add PLRust to the Docker postgres image for forthcoming work to add optional PLRust functions for expensive json manipulation (including hydration)</li>
+<li>Remove default queryable for eo:cloud_cover</li>
+</ul>
+<h2 id="v0710"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.9...v0.7.10">v0.7.10</a><a class="headerlink" href="#v0710" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_15">Fixed<a class="headerlink" href="#fixed_15" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Return an empty jsonb array from all_collections() when the collections table is empty, instead of NULL. Fixes #186.</li>
+<li>Add delete trigger to collections to clean up partition_stats records and remove any partitions. Fixes #185</li>
+<li>Fixes boolean casting in get_setting_bool function</li>
+</ul>
+<h2 id="v079"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.8...v0.7.9">v0.7.9</a><a class="headerlink" href="#v079" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_16">Fixed<a class="headerlink" href="#fixed_16" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Update docker image to use postgis 3.3.3</li>
+</ul>
+<h2 id="v078"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.7...v0.7.8">v0.7.8</a><a class="headerlink" href="#v078" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_17">Fixed<a class="headerlink" href="#fixed_17" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue with search_query not returning all fields on first use of a query. Fixes #182</li>
+</ul>
+<h2 id="v077"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.6...v0.7.7">v0.7.7</a><a class="headerlink" href="#v077" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_18">Fixed<a class="headerlink" href="#fixed_18" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix migrations for 0.7.4-&gt;0.7.5 and 0.7.5-&gt;0.7.6 to use the partition_view rather than the materialized view to avoid issue with refreshing the materialized view when run in the same statement that is accessing the view. Fixes #180.</li>
+</ul>
+<h3 id="added_5">Added<a class="headerlink" href="#added_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add a short cirucit for id searches that sets the limit to be no more than the number of ids in the filter.</li>
+<li>Add 'timing' configuration variable that adds a "timing" element to the return object with the amount of time that it took to return a search.</li>
+<li>Reduce locking when updating statistics in the search table. Use skip locked to skip updating last_used and count when there is a lock being held.</li>
+</ul>
+<h2 id="v076"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.5...v0.7.6">v0.7.6</a><a class="headerlink" href="#v076" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_19">Fixed<a class="headerlink" href="#fixed_19" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue with checking for existing collections in queryable trigger function that prevented adding scoped queryable entries.</li>
+</ul>
+<h2 id="v075"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.4...v0.7.5">v0.7.5</a><a class="headerlink" href="#v075" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_20">Fixed<a class="headerlink" href="#fixed_20" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Default sort not getting set when sortby not included in query with token (Fixes <a href="https://github.com/stac-utils/pgstac/issues/177">#177</a>)</li>
+<li>Fixes regression in performance between with changes for partition structure at v0.7.0. Changes the normal view for partitions and partition_steps into indexed materialized views. Adds refreshing of the views to existing triggers to make sure they stay up to date.</li>
+</ul>
+<h2 id="v074"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.3...v0.7.4">v0.7.4</a><a class="headerlink" href="#v074" title="Permanent link">&para;</a></h2>
+<h3 id="added_6">Added<a class="headerlink" href="#added_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add --v and --vv options to scripts/test to change logging to notice / log when running tests.</li>
+<li>Add framework for option to cache expensive item formatting/hydrating calls. Note: this only provides functionality to add and read from the cached calls, but does not have any wiring to remove any entries from the cache.</li>
+<li>Update the costs for json formatting functions to 5000 to help the query planner choose to prefer using indexes on json fields.</li>
+</ul>
+<h3 id="fixed_21">Fixed<a class="headerlink" href="#fixed_21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix bug in foreign key and unique collection detection in queryables trigger function, update tests to catch.</li>
+<li>Add collection id to tokens to ensure uniqueness and improve speed when looking up token values. Update tests to use the new keys. Old item id only tokens are still valid, but new results will all contain the new keys.</li>
+<li>Improve performance when looking for whether next/prev links should be added.</li>
+<li>Update Search function to remove the use of cursors and temp tables.</li>
+<li>Update get_token_filter to remove the use of temp tables.</li>
+</ul>
+<h2 id="v073"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.2...v0.7.3">v0.7.3</a><a class="headerlink" href="#v073" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_22">Fixed<a class="headerlink" href="#fixed_22" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Use IF EXISTS when dropping constraints to avoid race conditions</li>
+<li>Rework function that finds indexes that need to be added to be added and to find functionally identical indexes better.</li>
+</ul>
+<h2 id="v072"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.1...v0.7.2">v0.7.2</a><a class="headerlink" href="#v072" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_23">Fixed<a class="headerlink" href="#fixed_23" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Use version_parser for parsing versions in pypgstac</li>
+<li>Fix issue with dropping functions/procedures in 0.6.13-&gt;0.7.0 migrations</li>
+<li>Fix issue with CREATE OR REPLACE TRIGGER on PG 13</li>
+<li>Fix issue identifying duplicate indexes in maintain_partition_queries function</li>
+<li>Ensure that pgstac_read role has read permissions to all partitions</li>
+<li>Fix issue (and add tests) caused by bug in psycopg datetime types not being able to translate 'infinity', '-infinity'</li>
+</ul>
+<h2 id="v071"><a href="https://github.com/stac-utils/pgstac/compare/v0.7.0...v0.7.1">v0.7.1</a><a class="headerlink" href="#v071" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_24">Fixed<a class="headerlink" href="#fixed_24" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix permission issue when running incremental migrations.</li>
+<li>Make sure that pypgstac migrate runs in a single transaction</li>
+<li>Don't try to use concurrently when building indexes by default (this was tripping things up when using with pg_cron)</li>
+<li>Don't short circuit search for requests with ids (Fixes #159)</li>
+<li>Fix for issue with pagination when sorting by columns with nulls (Fixes #161 Fixes #152)</li>
+<li>Fixes issue where duplicate datetime,end_datetime index was being built.</li>
+<li>Fix bug in pypgstac loader when using delsert option</li>
+</ul>
+<h3 id="added_7">Added<a class="headerlink" href="#added_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add trigger to detect duplicate configurations for name/collection combination in queryables</li>
+<li>Add trigger to ensure collections added to queryables exist</li>
+<li>Add tests for queryables triggers</li>
+<li>Add more tests for different pagination scenarios</li>
+</ul>
+<h2 id="v070"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.13...v0.7.0">v0.7.0</a><a class="headerlink" href="#v070" title="Permanent link">&para;</a></h2>
+<h3 id="added_8">Added<a class="headerlink" href="#added_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Reorganize code base to create clearer separation between pgstac sql code and pypgstac.</li>
+<li>Move Python tooling to use hatch with all python project configuration in pyproject.toml</li>
+<li>Rework testing framework to not rely on pypgstac or migrations. This allows to run tests on any code updates without creating a version first. If a new version has been staged, the tests will still run through all incremental migrations to make sure they pass as well.</li>
+<li>Add pre-commit to run formatting as well as the tests appropriate for which files have changed.</li>
+<li>Add a query queue to allow for deferred processing of steps that do not change the ability to get results, but enhance performance. The query queue allows to use pg_cron or similar to run tasks that are placed in the queue.</li>
+<li>Modify triggers to allow the use of the query queue for building indexes, adding constraints that are used solely for constraint exclusion, and updating partition and collection spatial and temporal extents. The use of the queue is controlled by the new configuration parameter "use_queue" which can be set as the pgstac.use_queue GUC or by setting in the pgstac_settings table.</li>
+<li>Reorganize how partitions are created and updated to maintain more metadata about partition extents and better tie the constraints to the actual temporal extent of a partition.</li>
+<li>Add "partitions" view that shows stats about number of records, the partition range, constraint ranges, actual date range and spatial extent of each partition.</li>
+<li>Add ability to automatically update the extent object on a collection using the partition metadata via triggers. This is controlled by the new configuration parameter "update_collection_extent" which can be set as the pgstac.update_collection_extent GUC or by setting in the pgstac_settings table. This can be combined with "use_queue" to defer the processing.</li>
+<li>Add many new tests.</li>
+<li>Migrations now make sure that all objects in the pgstac schema are owned by the pgstac_admin role. Functions marked as "SECURITY DEFINER" have been moved to the lower level functions responsible for creating/altering partitions and adding records to the search/search_wheres tables. This should open the door for approaches to using Row Level Security.</li>
+<li>Allow pypgstac loader to load data on pgstac databases that have the same major version even if minor version differs. [162] (<a class="magiclink magiclink-github magiclink-issue" href="https://github.com/stac-utils/pgstac/issues/162" title="GitHub Issue: stac-utils/pgstac #162">stac-utils/pgstac#162</a>) Cherry picked from <a class="magiclink magiclink-github magiclink-pull" href="https://github.com/stac-utils/pgstac/pull/164" title="GitHub Pull Request: stac-utils/pgstac #164">stac-utils/pgstac!164</a>.</li>
+</ul>
+<h3 id="fixed_25">Fixed<a class="headerlink" href="#fixed_25" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Allow empty strings in datetime intervals</li>
+<li>Set search_path and application_name upon connection rather than as kwargs for compatibility with RDS [156] (<a class="magiclink magiclink-github magiclink-issue" href="https://github.com/stac-utils/pgstac/issues/156" title="GitHub Issue: stac-utils/pgstac #156">stac-utils/pgstac#156</a>)</li>
+</ul>
+<h2 id="v0613"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.12...v0.6.13">v0.6.13</a><a class="headerlink" href="#v0613" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_26">Fixed<a class="headerlink" href="#fixed_26" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue with sorting and paging where in some circumstances the aggregation of data changed the expected order</li>
+</ul>
+<h2 id="v0612"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.11...v0.6.12">v0.6.12</a><a class="headerlink" href="#v0612" title="Permanent link">&para;</a></h2>
+<h3 id="added_9">Added<a class="headerlink" href="#added_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add ability to merge enum, min, and max from queryables where collections have different values.</li>
+<li>Add tooling in pypgstac and pgstac to add stac_extension definitions to the database.</li>
+<li>Modify missing_queryables function to try to use stac_extension definitions to populate queryable definitions from the stac_extension schemas.</li>
+<li>Add validate_constraints procedure</li>
+<li>Add analyze_items procedure</li>
+<li>Add check_pgstac_settings function to check system and pgstac settings.</li>
+</ul>
+<h3 id="fixed_27">Fixed<a class="headerlink" href="#fixed_27" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue with upserts in the trigger for using the items_staging tables</li>
+<li>Fix for generating token query for sorting. [152] (<a class="magiclink magiclink-github magiclink-pull" href="https://github.com/stac-utils/pgstac/pull/152" title="GitHub Pull Request: stac-utils/pgstac #152">stac-utils/pgstac!152</a>)</li>
+</ul>
+<h2 id="v0611"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.10...v0.6.11">v0.6.11</a><a class="headerlink" href="#v0611" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_28">Fixed<a class="headerlink" href="#fixed_28" title="Permanent link">&para;</a></h3>
+<ul>
+<li>update pypgstac requirements to support python 3.11 <a href="https://github.com/stac-utils/pgstac/pull/142">142</a></li>
+<li>rename pgstac setting <code>default-filter-lang</code> to <code>default_filter_lang</code> to allow pgstac on postgresql&gt;=14</li>
+</ul>
+<h2 id="v0610"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.9...v0.6.10">v0.6.10</a><a class="headerlink" href="#v0610" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_29">Fixed<a class="headerlink" href="#fixed_29" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Makes sure that passing in a non-existing collection does not return a queryable object.</li>
+</ul>
+<h2 id="v069"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.8...v0.6.9">v0.6.9</a><a class="headerlink" href="#v069" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_30">Fixed<a class="headerlink" href="#fixed_30" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Set cursor_tuple_fraction to 1 in search function to let query planner know to expect the entire table result within the search function to be returned. The default cursor_tuple_fraction of .1 within that function was at times creating bad query plans leading to slow queries.</li>
+</ul>
+<h2 id="v068"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.7...v0.6.8">v0.6.8</a><a class="headerlink" href="#v068" title="Permanent link">&para;</a></h2>
+<h3 id="added_10">Added<a class="headerlink" href="#added_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add get_queryables function to return a composite queryables json for either a single collection (text), a list of collections(text[]), or for the full repository (null::text).</li>
+<li>Add missing_queryables(collection text, tablesample int) function to help identify if there are any properties in a collection without entries in the queryables table. The tablesample parameter is an int &lt;=100 that is the approximate percentage of the collection to scan to look for missing queryables rather than reading every item.</li>
+<li>Add missing_queryables(tablesample int) function that scans all collections using a sample of records to identify missing queryables.</li>
+</ul>
+<h2 id="v067"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.6...v0.6.7">v0.6.7</a><a class="headerlink" href="#v067" title="Permanent link">&para;</a></h2>
+<h3 id="added_11">Added<a class="headerlink" href="#added_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add get_queryables function to return a composite queryables json for either a single collection (text), a list of collections(text[]), or for the full repository (null::text).</li>
+<li>Add missing_queryables(collection text, tablesample int) function to help identify if there are any properties in a collection without entries in the queryables table. The tablesample parameter is an int &lt;=100 that is the approximate percentage of the collection to scan to look for missing queryables rather than reading every item.</li>
+<li>Add missing_queryables(tablesample int) function that scans all collections using a sample of records to identify missing queryables.</li>
+</ul>
+<h2 id="v066"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.5...v0.6.6">v0.6.6</a><a class="headerlink" href="#v066" title="Permanent link">&para;</a></h2>
+<h3 id="added_12">Added<a class="headerlink" href="#added_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add support for array operators in CQL2 (a_equals, a_contains, a_contained_by, a_overlaps).</li>
+<li>Add check in loader to make sure that pypgstac and pgstac versions match before loading data <a href="https://github.com/stac-utils/pgstac/issues/123">#123</a></li>
+</ul>
+<h2 id="v065"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.4...v0.6.5">v0.6.5</a><a class="headerlink" href="#v065" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_31">Fixed<a class="headerlink" href="#fixed_31" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix for type casting when using the "in" operator <a href="https://github.com/stac-utils/pgstac/issues/122">#122</a></li>
+<li>Fix failure of pypgstac load for large items <a href="https://github.com/stac-utils/pgstac/pull/121">#121</a></li>
+</ul>
+<h2 id="v064"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.3...v0.6.4">v0.6.4</a><a class="headerlink" href="#v064" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_32">Fixed<a class="headerlink" href="#fixed_32" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed casts for numeric data when a property is not in the queryables table to use the type from the incoming json filter</li>
+<li>Fixed issue loader grouping an unordered iterable by partition, speeding up loads of items with mixed partitions <a href="https://github.com/stac-utils/pgstac/pull/116">#116</a></li>
+</ul>
+<h2 id="v063"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.2...v0.6.3">v0.6.3</a><a class="headerlink" href="#v063" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_33">Fixed<a class="headerlink" href="#fixed_33" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed content_hydrate argument ordering which caused incorrect behavior in database hydration <a href="https://github.com/stac-utils/pgstac/pull/115">#115</a></li>
+</ul>
+<h3 id="added_13">Added<a class="headerlink" href="#added_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Skip partition updates when unnecessary, which can drastically improve large ingest performance into existing partitions. <a href="https://github.com/stac-utils/pgstac/pull/114">#114</a></li>
+</ul>
+<h2 id="v062"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.1...v0.6.2">v0.6.2</a><a class="headerlink" href="#v062" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_34">Fixed<a class="headerlink" href="#fixed_34" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Ensure special keys are not in content when loaded <a href="https://github.com/stac-utils/pgstac/pull/112/files">#112</a></li>
+</ul>
+<h2 id="v061"><a href="https://github.com/stac-utils/pgstac/compare/v0.6.0...v0.6.1">v0.6.1</a><a class="headerlink" href="#v061" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_35">Fixed<a class="headerlink" href="#fixed_35" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix issue where using equality operator against an array was only comparing the first element of the array</li>
+</ul>
+<h2 id="v060"><a href="https://github.com/stac-utils/pgstac/compare/v0.5.1...v0.6.0">v0.6.0</a><a class="headerlink" href="#v060" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_36">Fixed<a class="headerlink" href="#fixed_36" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix function signatures for transactional functions (delete_item etc) to make sure that they are marked as volatile</li>
+<li>Fix function for getting start/end dates from a stac item</li>
+</ul>
+<h3 id="changed_7">Changed<a class="headerlink" href="#changed_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Update hydration/dehydration logic to make sure that it matches hydration/dehydration in pypgstac</li>
+<li>Update fields logic in pgstac to only use full paths and to match logic in stac-fastapi</li>
+<li>Always include id and collection on features regardless of fields setting</li>
+</ul>
+<h3 id="added_14">Added<a class="headerlink" href="#added_14" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add tests to ensure that pgstac and pypgstac hydration logic is equivalent</li>
+<li>Add conf item to search to allow returning results without hydrating. This allows an application using pgstac to shift the CPU load of rehydrating items from the database onto the application server.</li>
+<li>Add "--dehydrated" option to loader to be able to load a dehydrated file (or iterable) of items such as would be output using pg_dump or postgresql copy.</li>
+<li>Add "--chunksize" option to loader that can split the processing of an iterable or file into chunks of n records at a time</li>
+</ul>
+<h2 id="v051"><a href="https://github.com/stac-utils/pgstac/compare/v0.5.0...v0.5.1">v0.5.1</a><a class="headerlink" href="#v051" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_37">Fixed<a class="headerlink" href="#fixed_37" title="Permanent link">&para;</a></h3>
+<h3 id="changed_8">Changed<a class="headerlink" href="#changed_8" title="Permanent link">&para;</a></h3>
+<h3 id="added_15">Added<a class="headerlink" href="#added_15" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add conf item to search to allow returning results without hydrating. This allows an application using pgstac to shift the CPU load of rehydrating items from the database onto the application server.</li>
+</ul>
+<h2 id="v050"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.5...v0.5.0">v0.5.0</a><a class="headerlink" href="#v050" title="Permanent link">&para;</a></h2>
+<p>Version 0.5.0 is a major refactor of how data is stored. It is recommended to start a new database from scratch and to move data over rather than to use the inbuilt migration which will be very slow for larger amounts of data.</p>
+<h3 id="fixed_38">Fixed<a class="headerlink" href="#fixed_38" title="Permanent link">&para;</a></h3>
+<h3 id="changed_9">Changed<a class="headerlink" href="#changed_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p>The partition layout has been changed from being hardcoded to a partition to week to using nested partitions. The first level is by collection, for each collection, there is an attribute partition_trunc which can be set to NULL (no temporal partitions), month, or year.</p>
+</li>
+<li>
+<p>CQL1 and Query Code have been refactored to translate to CQL2 to reduce duplicated code in query parsing.</p>
+</li>
+<li>
+<p>Unused functions have been stripped from the project.</p>
+</li>
+<li>
+<p>Pypgstac has been changed to use Fire rather than Typo.</p>
+</li>
+<li>
+<p>Pypgstac has been changed to use Psycopg3 rather than Asyncpg to enable easier use as both sync and async.</p>
+</li>
+<li>
+<p>Indexing has been reworked to eliminate indexes that from logs were not being used. The global json index on properties has been removed. Indexes on individual properties can be added either globally or per collection using the new queryables table.</p>
+</li>
+<li>
+<p>Triggers for maintaining partitions have been updated to reduce lock contention and to reflect the new data layout.</p>
+</li>
+<li>
+<p>The data pager which optimizes "order by datetime" searches has been updated to get time periods from the new partition layout and partition metadata.</p>
+</li>
+<li>
+<p>Tests have been updated to reflect the many changes.</p>
+</li>
+</ul>
+<h3 id="added_16">Added<a class="headerlink" href="#added_16" title="Permanent link">&para;</a></h3>
+<ul>
+<li>On ingest, the content in an item is compared to the metadata available at the collection level and duplicate information is stripped out (this is primarily data in the item_assets property). Logic is added in to merge this data back in on data usage.</li>
+</ul>
+<h2 id="v045"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.4...v0.4.5">v0.4.5</a><a class="headerlink" href="#v045" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_39">Fixed<a class="headerlink" href="#fixed_39" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixes support for using the intersects parameter at the base of a search (regression from changes in 0.4.4)</li>
+<li>Fixes issue where results for a search on id returned [None] rather than [] (regression from changes in 0.4.4)</li>
+</ul>
+<h3 id="changed_10">Changed<a class="headerlink" href="#changed_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Changes requirement for PostgreSQL to 13+, the triggers used to main partitions are not available to be used on partitions prior to 13 (<a href="https://github.com/stac-utils/pgstac/pull/90">#90</a>)</li>
+<li>Bump requirement for asyncpg to 0.25.0 (<a href="https://github.com/stac-utils/pgstac/pull/82">#82</a>)</li>
+</ul>
+<h3 id="added_17">Added<a class="headerlink" href="#added_17" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Added more tests.</li>
+</ul>
+<h2 id="v044"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.3...v0.4.4">v0.4.4</a><a class="headerlink" href="#v044" title="Permanent link">&para;</a></h2>
+<h3 id="added_18">Added<a class="headerlink" href="#added_18" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Adds support for using ids, collections, datetime, bbox, and intersects parameters separated from the filter-lang (Fixes #85)</li>
+<li>Previously use of these parameters was translated into cql-json and then to SQL, so was not available when using cql2-json</li>
+<li>The deprecated query parameter is still only available when filter-lang is set to cql-json</li>
+</ul>
+<h3 id="changed_11">Changed<a class="headerlink" href="#changed_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add PLPGSQL for item lookups by id so that the query plan for the simple query can be cached</li>
+<li>Use item_by_id function when looking up records used for paging filters</li>
+<li>Add a short circuit to search to use item_by_id lookup when using the ids parameter<ul>
+<li>This short circuit avoids using the query cache for this simple case</li>
+<li>Ordering when using the ids parameter is hard coded to return results in the same order as the array passed in (this avoids the overhead of full parsing and additional overhead to sort)</li>
+</ul>
+</li>
+</ul>
+<h3 id="fixed_40">Fixed<a class="headerlink" href="#fixed_40" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix to make sure that filtering on the search_wheres table leverages the functional index on the hash of the query rather than on the query itself.</li>
+</ul>
+<h2 id="v043"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.2...v0.4.3">v0.4.3</a><a class="headerlink" href="#v043" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_41">Fixed<a class="headerlink" href="#fixed_41" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix for optimization when using equals with json properties. Allow optimization for both "eq" and "=" (was only previously enabled for "eq")</li>
+</ul>
+<h2 id="v042"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.1...v0.4.2">v0.4.2</a><a class="headerlink" href="#v042" title="Permanent link">&para;</a></h2>
+<h3 id="changed_12">Changed<a class="headerlink" href="#changed_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add support for updated CQL2 spec to use timestamp or interval key</li>
+</ul>
+<h3 id="fixed_42">Fixed<a class="headerlink" href="#fixed_42" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix for 0.3.4 -&gt; 0.3.5 migration making sure that partitions get renamed correctly</li>
+</ul>
+<h2 id="v041"><a href="https://github.com/stac-utils/pgstac/compare/v0.4.0...v0.4.1">v0.4.1</a><a class="headerlink" href="#v041" title="Permanent link">&para;</a></h2>
+<h3 id="changed_13">Changed<a class="headerlink" href="#changed_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Update <code>typer</code> to 0.4.0 to avoid clashes with <code>click</code> (<a href="https://github.com/stac-utils/pgstac/pull/76">#76</a>)</li>
+</ul>
+<h3 id="fixed_43">Fixed<a class="headerlink" href="#fixed_43" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fix logic in getting settings to make sure that filter-lang set on query is respected. (<a href="https://github.com/stac-utils/pgstac/pull/77">#77</a>)</li>
+<li>Fix for large queries in the query cache. (<a href="https://github.com/stac-utils/pgstac/pull/71">#71</a>)</li>
+</ul>
+<h2 id="v040"><a href="https://github.com/stac-utils/pgstac/compare/v0.3.4...v0.4.0">v0.4.0</a><a class="headerlink" href="#v040" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_44">Fixed<a class="headerlink" href="#fixed_44" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixes syntax for IN, BETWEEN, ISNULL, and NOT in CQL 1 (<a href="https://github.com/stac-utils/pgstac/pull/69">#69</a>)</li>
+</ul>
+<h3 id="added_19">Added<a class="headerlink" href="#added_19" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Adds support for modifying settings through pgstac_settings table and by passing in 'conf' object in search json to support AWS RDS where custom user configuration settings are not allowed and changing settings on the fly for a given query.</li>
+<li>Adds support for CQL2-JSON (<a href="https://github.com/stac-utils/pgstac/pull/67">#67</a>)</li>
+<li>Adds tests for all examples in <a href="https://github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md">github.com/radiantearth/stac-api-spec/blob/f5da775080ff3ff46d454c2888b6e796ee956faf/fragments/filter/README.md</a></li>
+<li>filter-lang parameter controls which dialect of CQL to use<ul>
+<li>Adds 'default-filter-lang' setting to control what dialect to use when 'filter-lang' is not present</li>
+<li>old style stac 'query' object and top level ids, collections, datetime, bbox, and intersects parameters are only available with cql-json</li>
+</ul>
+</li>
+</ul>
+<h2 id="v034"><a href="https://github.com/stac-utils/pgstac/compare/v0.3.3...v0.3.4">v0.3.4</a><a class="headerlink" href="#v034" title="Permanent link">&para;</a></h2>
+<h3 id="added_20">Added<a class="headerlink" href="#added_20" title="Permanent link">&para;</a></h3>
+<ul>
+<li>add <code>geometrysearch</code>, <code>geojsonsearch</code> and <code>xyzsearch</code> for optimized searches for tiled requets (<a href="https://github.com/stac-utils/pgstac/pull/39">#39</a>)</li>
+<li>add <code>create_items</code> and <code>upsert_items</code> methods for bulk insert (<a href="https://github.com/stac-utils/pgstac/pull/39">#39</a>)</li>
+</ul>
+<h2 id="v033"><a href="https://github.com/stac-utils/pgstac/compare/v0.3.2...v0.3.3">v0.3.3</a><a class="headerlink" href="#v033" title="Permanent link">&para;</a></h2>
+<h3 id="fixed_45">Fixed<a class="headerlink" href="#fixed_45" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed CQL term to be "id", not "ids" (<a href="https://github.com/stac-utils/pgstac/pull/46">#46</a>)</li>
+<li>Make sure featureCollection response has empty features <code>[]</code> not <code>null</code> (<a href="https://github.com/stac-utils/pgstac/pull/46">#46</a>)</li>
+<li>Fixed bugs for <code>sortby</code> and <code>pagination</code> (<a href="https://github.com/stac-utils/pgstac/pull/46">#46</a>)</li>
+<li>Make sure pgtap errors get caught in CI (<a href="https://github.com/stac-utils/pgstac/pull/46">#46</a>)</li>
+</ul>
+<h2 id="v032"><a href="https://github.com/stac-utils/pgstac/compare/v0.3.1...v0.3.2">v0.3.2</a><a class="headerlink" href="#v032" title="Permanent link">&para;</a></h2>
+<h2 id="fixed_46">Fixed<a class="headerlink" href="#fixed_46" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Fixed CQL term to be "collections", not "collection" (<a href="https://github.com/stac-utils/pgstac/pull/43">#43</a>)</li>
+</ul>
+<h2 id="v031"><a href="https://github.com/stac-utils/pgstac/compare/v0.3.0...v0.3.1">v0.3.1</a><a class="headerlink" href="#v031" title="Permanent link">&para;</a></h2>
+<p><em>TODO</em></p>
+<h2 id="v028"><a href="https://github.com/stac-utils/pgstac/compare/ff02c9cee7bbb0a2de21530b0aeb34e823f2e95c...v0.2.8">v0.2.8</a><a class="headerlink" href="#v028" title="Permanent link">&para;</a></h2>
+<h3 id="added_21">Added<a class="headerlink" href="#added_21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Type hints to pypgstac that pass mypy checks (<a href="https://github.com/stac-utils/pgstac/pull/18">#18</a>)</li>
+</ul>
+<h3 id="fixed_47">Fixed<a class="headerlink" href="#fixed_47" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed issue with pypgstac loads which caused some writes to fail (<a href="https://github.com/stac-utils/pgstac/pull/18">#18</a>)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/stac-utils" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://twitter.com/STACspec" target="_blank" rel="noopener" title="twitter.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M459.4 151.7c.3 4.5.3 9.1.3 13.6 0 138.7-105.6 298.6-298.6 298.6-59.5 0-114.7-17.2-161.1-47.1 8.4 1 16.6 1.3 25.3 1.3 49.1 0 94.2-16.6 130.3-44.8-46.1-1-84.8-31.2-98.1-72.8 6.5 1 13 1.6 19.8 1.6 9.4 0 18.8-1.3 27.6-3.6-48.1-9.7-84.1-52-84.1-103v-1.3c14 7.8 30.2 12.7 47.4 13.3-28.3-18.8-46.8-51-46.8-87.4 0-19.5 5.2-37.4 14.3-53C87.4 130.8 165 172.4 252.1 176.9c-1.6-7.8-2.6-15.9-2.6-24C249.5 95.1 296.3 48 354.4 48c30.2 0 57.5 12.7 76.7 33.1 23.7-4.5 46.5-13.3 66.6-25.3-7.8 24.4-24.4 44.8-46.1 57.8 21.1-2.3 41.6-8.1 60.4-16.2-14.3 20.8-32.2 39.3-52.6 54.3"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
