@@ -105,7 +105,7 @@ class PgstacDB:
     def connect(self) -> Connection:
         """Return database connection."""
         pool = self.get_pool()
-        if self.connection is None:
+        if self.connection is None or self.connection.closed or self.connection.broken:
             self.connection = pool.getconn()
             self.connection.autocommit = True
             if self.debug:

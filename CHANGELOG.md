@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 * changed container images to use non-root `user`
+* fix bug where closed and broken db connections are reused.
 
 ### Fixed
 * replace space-separated terms with adjacency operator in free-text search (#387)
