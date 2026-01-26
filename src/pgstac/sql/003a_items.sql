@@ -145,6 +145,12 @@ BEGIN
         fields
     );
 
+    IF (output->'properties' ? 'start_datetime')
+    AND (output->'properties' ? 'end_datetime')
+    AND NOT (output->'properties' ? 'datetime') THEN
+        output := jsonb_set(output, '{properties,datetime}', 'null'::jsonb);
+    END IF;
+
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
