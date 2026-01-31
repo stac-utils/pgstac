@@ -363,9 +363,7 @@ BEGIN
         SELECT * FROM queryable_indexes(part,true)
     ) LOOP
         q := format(
-            'SELECT maintain_index(
-                %L,%L,%L,%L,%L
-            );',
+            'SELECT maintain_index(%L, %L, %L, %L, %L);',
             rec.indexname,
             rec.queryable_idx,
             dropindexes,
