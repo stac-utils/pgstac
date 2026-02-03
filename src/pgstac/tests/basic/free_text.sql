@@ -107,3 +107,9 @@ select collection_search('{"q": "\"bear or stranger\""}');
 select collection_search('{"q": "office"}');
 
 select collection_search('{"q": ["bear", "stranger"]}');
+
+select collection_search('{"q": "large lizard"}');
+
+select collection_search('{"q": "teenagers fight monsters"}');
+
+select collection_search('{"q": "scary  monsters"}');

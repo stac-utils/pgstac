@@ -129,3 +129,12 @@ select collection_search('{"q": "office"}');
 
 select collection_search('{"q": ["bear", "stranger"]}');
  {"links": [], "collections": [{"id": "testcollection_1", "type": "Collection", "title": "Stranger Things", "extent": {"spatial": [[-180, -90, 180, 90]], "temporal": [["2016-01-01T00:00:00+00:00", "2025-12-31T23:59:59+00:00"]]}, "keywords": null, "description": "Some teenagers drop out of school to fight scary monsters", "stac_extensions": []}, {"id": "testcollection_2", "type": "Collection", "title": "The Bear", "extent": {"spatial": [[-180, -90, 180, 90]], "temporal": [["2022-01-01T00:00:00+00:00", "2025-12-31T23:59:59+00:00"]]}, "keywords": ["restaurant", "funny", "sad", "great"], "description": "Another story about why you should not start a restaurant", "stac_extensions": []}], "numberMatched": 2, "numberReturned": 2}
+
+select collection_search('{"q": "large lizard"}');
+ {"links": [], "collections": [{"id": "testcollection_3", "type": "Collection", "title": "Godzilla", "extent": {"spatial": [[-180, -90, 180, 90]], "temporal": [["1954-01-01T00:00:00+00:00", null]]}, "keywords": ["scary", "lizard", "monster"], "description": "A large lizard takes its revenge", "stac_extensions": []}], "numberMatched": 1, "numberReturned": 1}
+
+select collection_search('{"q": "teenagers fight monsters"}');
+ {"links": [], "collections": [], "numberMatched": 0, "numberReturned": 0}
+
+select collection_search('{"q": "scary  monsters"}');
+ {"links": [], "collections": [{"id": "testcollection_1", "type": "Collection", "title": "Stranger Things", "extent": {"spatial": [[-180, -90, 180, 90]], "temporal": [["2016-01-01T00:00:00+00:00", "2025-12-31T23:59:59+00:00"]]}, "keywords": null, "description": "Some teenagers drop out of school to fight scary monsters", "stac_extensions": []}], "numberMatched": 1, "numberReturned": 1}
