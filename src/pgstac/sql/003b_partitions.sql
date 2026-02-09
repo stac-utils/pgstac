@@ -64,6 +64,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STRICT STABLE;
 
+CREATE OR REPLACE FUNCTION get_partition_name(relid regclass) RETURNS text AS $$
+    SELECT (parse_ident(relid::text))[cardinality(parse_ident(relid::text))];
+$$ LANGUAGE SQL STABLE STRICT;
+
 CREATE OR REPLACE VIEW partition_sys_meta AS
 SELECT
     partition,
@@ -94,7 +98,7 @@ FROM
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    JOIN LATERAL (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] AS partition ON TRUE
+    JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
@@ -138,7 +142,7 @@ FROM
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    JOIN LATERAL (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] AS partition ON TRUE
+    JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
@@ -146,32 +150,6 @@ FROM
     JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
     LEFT JOIN pgstac.partition_stats USING (partition)
-WHERE isleaf
-;
-
-
-CREATE OR REPLACE VIEW partitions_view AS
-SELECT
-    (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
-    replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-    END, 'FOR VALUES IN (''',''), ''')','') AS collection,
-    level,
-    c.reltuples,
-    c.relhastriggers,
-    COALESCE(pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
-    COALESCE((pgstac.dt_constraint(edt.oid)).dt, pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
-    COALESCE((pgstac.dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange,
-    dtrange,
-    edtrange,
-    spatial,
-    last_updated
-FROM
-    pg_partition_tree('pgstac.items')
-    JOIN pg_class c ON (relid::regclass = c.oid)
-    JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-    LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    LEFT JOIN pgstac.partition_stats ON ((parse_ident(relid::text))[cardinality(parse_ident(relid::text))]=partition)
 WHERE isleaf
 ;
 
