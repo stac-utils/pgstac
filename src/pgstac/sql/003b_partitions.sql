@@ -20,72 +20,136 @@ CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS 
     ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
-CREATE OR REPLACE FUNCTION dt_constraint(coid oid, OUT dt tstzrange, OUT edt tstzrange) RETURNS RECORD AS $$
+CREATE OR REPLACE FUNCTION get_tstz_constraint(reloid oid, colname text) RETURNS tstzrange AS $$
 DECLARE
-    expr text := pg_get_constraintdef(coid);
-    matches timestamptz[];
+    expr text := NULL;
+    m text[];
+    ts_lower timestamptz := NULL;
+    ts_upper timestamptz := NULL;
+    lower_inclusive text := '[';
+    upper_inclusive text := ']';
+    ts timestamptz;
 BEGIN
-    IF expr LIKE '%NULL%' THEN
-        dt := tstzrange(null::timestamptz, null::timestamptz);
-        edt := tstzrange(null::timestamptz, null::timestamptz);
-        RETURN;
+    SELECT INTO expr
+        string_agg(def, ' AND ')
+    FROM pg_constraint JOIN LATERAL pg_get_constraintdef(oid) AS def ON TRUE
+    WHERE
+        conrelid = reloid
+        AND contype = 'c'
+        AND def LIKE '%' || colname || '%'
+    ;
+
+    IF expr IS NULL THEN
+        RETURN NULL;
     END IF;
-    WITH f AS (SELECT (regexp_matches(expr, E'([0-9]{4}-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]\.?[0-9]*)', 'g'))[1] f)
-    SELECT array_agg(f::timestamptz) INTO matches FROM f;
-    IF cardinality(matches) = 4 THEN
-        dt := tstzrange(matches[1], matches[2],'[]');
-        edt := tstzrange(matches[3], matches[4], '[]');
-        RETURN;
-    ELSIF cardinality(matches) = 2 THEN
-        edt := tstzrange(matches[1], matches[2],'[]');
-        RETURN;
-    END IF;
-    RETURN;
+
+    -- collect all constraints for the specified column
+    FOR m IN SELECT regexp_matches(expr, colname || $expr$\s*([<>=]{1,2})\s*'([0-9 :+\-]+)'$expr$, 'g') LOOP
+        ts := m[2]::timestamptz;
+        IF m[1] IN ('>', '>=')
+        THEN
+            IF ts_lower IS NULL OR ts > ts_lower OR (ts = ts_lower AND m[1] = '>') THEN
+                ts_lower := ts;
+                lower_inclusive := CASE WHEN m[1] = '>' THEN '(' ELSE '[' END;
+            END IF;
+        ELSIF m[1] IN ('<', '<=')
+        THEN
+            IF ts_upper IS NULL OR ts < ts_upper OR (ts = ts_upper AND m[1] = '<') THEN
+                ts_upper := ts;
+                upper_inclusive := CASE WHEN m[1] = '<' THEN ')' ELSE ']' END;
+            END IF;
+        END IF;
+    END LOOP;
+    RETURN tstzrange(ts_lower, ts_upper, lower_inclusive || upper_inclusive);
 END;
-$$ LANGUAGE PLPGSQL STABLE STRICT;
+$$ LANGUAGE plpgsql STRICT STABLE;
+
+CREATE OR REPLACE FUNCTION get_partition_name(relid regclass) RETURNS text AS $$
+    SELECT (parse_ident(relid::text))[cardinality(parse_ident(relid::text))];
+$$ LANGUAGE SQL STABLE STRICT;
 
 CREATE OR REPLACE VIEW partition_sys_meta AS
 SELECT
-    (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
-    replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-    END, 'FOR VALUES IN (''',''), ''')','') AS collection,
+    partition,
+    replace(
+        replace(
+            CASE WHEN level = 1 THEN partition_expr ELSE parent_partition_expr END,
+            'FOR VALUES IN (''',
+            ''
+        ),
+        ''')',
+        ''
+    ) AS collection,
     level,
     c.reltuples,
     c.relhastriggers,
-    COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
-    COALESCE((dt_constraint(edt.oid)).dt, constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
-    COALESCE((dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange
+    partition_dtrange,
+    COALESCE(
+        get_tstz_constraint(c.oid, 'datetime'),
+        partition_dtrange,
+        inf_range
+    ) as constraint_dtrange,
+    COALESCE(
+        get_tstz_constraint(c.oid, 'end_datetime'),
+        inf_range
+    ) as constraint_edtrange
 FROM
     pg_partition_tree('items')
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
+    JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
+    JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
+    JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
+    JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
+    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
+    JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
+    JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
 WHERE isleaf
 ;
 
 CREATE OR REPLACE VIEW partitions_view AS
 SELECT
     (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
-    replace(replace(CASE WHEN level = 1 THEN pg_get_expr(c.relpartbound, c.oid)
-        ELSE pg_get_expr(parent.relpartbound, parent.oid)
-    END, 'FOR VALUES IN (''',''), ''')','') AS collection,
+    replace(
+        replace(
+            CASE WHEN level = 1 THEN partition_expr ELSE parent_partition_expr END,
+            'FOR VALUES IN (''',
+            ''
+        ),
+        ''')',
+        ''
+    ) AS collection,
     level,
     c.reltuples,
     c.relhastriggers,
-    COALESCE(pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as partition_dtrange,
-    COALESCE((pgstac.dt_constraint(edt.oid)).dt, pgstac.constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), tstzrange('-infinity', 'infinity','[]')) as constraint_dtrange,
-    COALESCE((pgstac.dt_constraint(edt.oid)).edt, tstzrange('-infinity', 'infinity','[]')) as constraint_edtrange,
+    partition_dtrange,
+    COALESCE(
+        get_tstz_constraint(c.oid, 'datetime'),
+        partition_dtrange,
+        inf_range
+    ) as constraint_dtrange,
+    COALESCE(
+        get_tstz_constraint(c.oid, 'end_datetime'),
+        inf_range
+    ) as constraint_edtrange,
     dtrange,
     edtrange,
     spatial,
     last_updated
 FROM
-    pg_partition_tree('pgstac.items')
+    pg_partition_tree('items')
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    LEFT JOIN pgstac.partition_stats ON ((parse_ident(relid::text))[cardinality(parse_ident(relid::text))]=partition)
+    JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
+    JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
+    JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
+    JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
+    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
+    JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
+    JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
+    LEFT JOIN pgstac.partition_stats USING (partition)
 WHERE isleaf
 ;
 

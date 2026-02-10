@@ -76,3 +76,31 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and 
 
 --check that collection extents have been updated
 SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%' ORDER BY id;
+
+--check that values for datetimes that are non 4 digit or that have very high precision are ingesting correctly and that partitioning is working for them
+SET pgstac.use_queue=FALSE;
+SELECT get_setting_bool('use_queue');
+
+INSERT INTO test_items (content)
+SELECT jsonb_build_object(
+    'id', 'pgstactest-partitioned-whackyyear',
+    'collection', 'pgstactest-partitioned',
+    'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
+    'properties', jsonb_build_object( 'datetime', '10000-01-01T00:00:00Z')
+);
+INSERT INTO test_items (content)
+SELECT jsonb_build_object(
+    'id', 'pgstactest-partitioned-whackyprecision',
+    'collection', 'pgstactest-partitioned',
+    'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
+    'properties', jsonb_build_object( 'datetime', '2000-01-01T00:00:00.12389878917192387129837Z')
+);
+
+
+INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-oddballs"}', 'month');
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-oddballs"}'::jsonb FROM test_items;
+
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-oddballs';
+
+SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM partitions WHERE collection='pgstactest-partitioned-oddballs';
