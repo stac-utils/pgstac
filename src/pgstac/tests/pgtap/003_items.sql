@@ -52,3 +52,22 @@ SELECT results_eq($$
     $$,
     'Test delete_item function'
 );
+
+-- merge_jsonb and strip_jsonb must preserve JSON null values
+SELECT results_eq(
+    $$ SELECT merge_jsonb(
+        '{"properties": {"datetime": null, "start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
+        '{"properties": {}}'::jsonb
+    )->'properties'->'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'merge_jsonb preserves explicit JSON null values'
+);
+
+SELECT results_eq(
+    $$ SELECT strip_jsonb(
+        '{"properties": {"datetime": null, "start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
+        '{"properties": {}}'::jsonb
+    )->'properties'->'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'strip_jsonb preserves explicit JSON null values'
+);
