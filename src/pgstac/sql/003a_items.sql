@@ -115,21 +115,11 @@ CREATE OR REPLACE FUNCTION content_hydrate(
     _base_item jsonb,
     fields jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb AS $$
-DECLARE
-    output jsonb;
-BEGIN
-    output := merge_jsonb(
-        jsonb_fields(_item, fields),
-        jsonb_fields(_base_item, fields)
+    SELECT merge_jsonb(
+            jsonb_fields(_item, fields),
+            jsonb_fields(_base_item, fields)
     );
-    IF (output->'properties' ? 'start_datetime')
-    AND (output->'properties' ? 'end_datetime')
-    AND NOT (output->'properties' ? 'datetime') THEN
-        output := jsonb_set(output, '{properties,datetime}', 'null'::jsonb);
-    END IF;
-    RETURN output;
-END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 
