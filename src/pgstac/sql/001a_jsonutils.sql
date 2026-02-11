@@ -108,12 +108,7 @@ BEGIN
     THEN
         RETURN j;
     ELSE
-        includes := includes || (
-            CASE WHEN j ? 'collection' THEN
-                '["id","collection"]'
-            ELSE
-                '["id"]'
-            END)::jsonb;
+        includes := includes || '["id","collection"]'::jsonb;
         FOR path IN SELECT explode_dotpaths(includes) LOOP
             outj := jsonb_set_nested(outj, path, j #> path);
         END LOOP;
@@ -151,21 +146,19 @@ CREATE OR REPLACE FUNCTION merge_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     SELECT
     CASE
         WHEN _a = '"𒍟※"'::jsonb THEN NULL
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN _b
+        WHEN _a IS NULL THEN _b
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            merge_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(coalesce(_a,'{}'::jsonb)) as a
-                FULL JOIN
-                    jsonb_each(coalesce(_b,'{}'::jsonb)) as b
-                USING (key)
+                SELECT jsonb_object_agg(key, val)
+                FROM (
+                    SELECT key, merge_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(coalesce(_a,'{}'::jsonb)) as a
+                    FULL JOIN
+                        jsonb_each(coalesce(_b,'{}'::jsonb)) as b
+                    USING (key)
+                ) sub
+                WHERE val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'
@@ -196,18 +189,16 @@ CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
         WHEN _a = _b THEN NULL
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            strip_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(_a) as a
-                FULL JOIN
-                    jsonb_each(_b) as b
-                USING (key)
+                SELECT jsonb_object_agg(key, val)
+                FROM (
+                    SELECT key, strip_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(_a) as a
+                    FULL JOIN
+                        jsonb_each(_b) as b
+                    USING (key)
+                ) sub
+                WHERE val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'

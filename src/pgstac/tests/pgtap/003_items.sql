@@ -53,21 +53,21 @@ SELECT results_eq($$
     'Test delete_item function'
 );
 
--- content_hydrate: STAC spec requires datetime:null when temporal range present
+-- merge_jsonb and strip_jsonb must preserve JSON null values
 SELECT results_eq(
-    $$ SELECT (content_hydrate(
-        '{"properties": {"start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
+    $$ SELECT merge_jsonb(
+        '{"properties": {"datetime": null, "start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
         '{"properties": {}}'::jsonb
-    )->'properties') ? 'datetime' $$,
-    $$ SELECT true $$,
-    'content_hydrate adds datetime key when start/end_datetime present'
+    )->'properties'->'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'merge_jsonb preserves explicit JSON null values'
 );
 
 SELECT results_eq(
-    $$ SELECT content_hydrate(
-        '{"properties": {"datetime": "2026-01-15T12:00:00Z", "start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
+    $$ SELECT strip_jsonb(
+        '{"properties": {"datetime": null, "start_datetime": "2026-01-01T00:00:00Z", "end_datetime": "2026-01-31T23:00:00Z"}}'::jsonb,
         '{"properties": {}}'::jsonb
-    )->'properties'->>'datetime' $$,
-    $$ SELECT '2026-01-15T12:00:00Z' $$,
-    'content_hydrate preserves existing datetime'
+    )->'properties'->'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'strip_jsonb preserves explicit JSON null values'
 );
