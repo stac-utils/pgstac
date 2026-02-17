@@ -43,8 +43,9 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    RAISE DEBUG 'Constraint expression for % on %: %', colname, reloid::regclass, expr;
     -- collect all constraints for the specified column
-    FOR m IN SELECT regexp_matches(expr, colname || $expr$\s*([<>=]{1,2})\s*'([0-9 :+\-]+)'$expr$, 'g') LOOP
+    FOR m IN SELECT regexp_matches(expr, '[ (]' || colname || $expr$\s*([<>=]{1,2})\s*'([0-9 :+\-]+)'$expr$, 'g') LOOP
         ts := m[2]::timestamptz;
         IF m[1] IN ('>', '>=')
         THEN
@@ -60,6 +61,7 @@ BEGIN
             END IF;
         END IF;
     END LOOP;
+    RAISE DEBUG 'Constraint % for %: % %', colname, reloid::regclass, ts_lower, ts_upper;
     RETURN tstzrange(ts_lower, ts_upper, lower_inclusive || upper_inclusive);
 END;
 $$ LANGUAGE plpgsql STRICT STABLE;

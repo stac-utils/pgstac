@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [UNRELEASED]
 
+## [v0.9.10]
+
+### Fixed
+- Improved performance and correctness of partition constraint parsing.
+
 ##[v0.9.9]
 
 ### Changed
@@ -593,6 +598,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.10]: https://github.com/stac-utils/pgstac/compare/v0.9.9...v0.9.10
 [v0.9.9]: https://github.com/stac-utils/pgstac/compare/v0.9.8...v0.9.9
 [v0.9.8]: https://github.com/stac-utils/pgstac/compare/v0.9.7...v0.9.8
 [v0.9.7]: https://github.com/stac-utils/pgstac/compare/v0.9.6...v0.9.7
