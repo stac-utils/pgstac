@@ -95,7 +95,13 @@ SELECT jsonb_build_object(
     'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
     'properties', jsonb_build_object( 'datetime', '2000-01-01T00:00:00.12389878917192387129837Z')
 );
-
+INSERT INTO test_items (content)
+SELECT jsonb_build_object(
+    'id', 'pgstactest-partitioned-startend',
+    'collection', 'pgstactest-partitioned',
+    'geometry', '{"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}'::json,
+    'properties', jsonb_build_object( 'start_datetime', '2000-01-01T00:00:00.12389878917192387129837Z', 'end_datetime', '99999-01-01T00:00:00Z')
+);
 
 INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-oddballs"}', 'month');
 INSERT INTO items_staging(content)
