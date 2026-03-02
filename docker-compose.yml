@@ -20,6 +20,12 @@ services:
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
     command: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U username -d postgis"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
   pypgstac:
     container_name: pypgstac
     image: pypgstac
@@ -35,6 +41,7 @@ services:
       - PGPASSWORD=password
       - PGDATABASE=postgis
     depends_on:
-      - pgstac
+      pgstac:
+        condition: service_healthy
 volumes:
   pgstac-pgdata:

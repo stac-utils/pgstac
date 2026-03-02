@@ -36,7 +36,19 @@ if [[ $BUILD == 1 ]]; then
     docker compose down -v --remove-orphans
     docker compose build $NOCACHE
     docker compose up -d pgstac
-    sleep 4
+    echo "Waiting for PostgreSQL to be ready..."
+    for i in $(seq 1 30); do
+        if docker compose exec -T pgstac pg_isready -U username -d postgis >/dev/null 2>&1; then
+            echo "PostgreSQL is ready."
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "ERROR: PostgreSQL did not become ready in time."
+            docker compose logs pgstac
+            exit 1
+        fi
+        sleep 2
+    done
 fi
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
 echo "PGSTAC_RUNNING=$PGSTAC_RUNNING"
