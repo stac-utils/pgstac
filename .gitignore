@@ -13,3 +13,6 @@ src/pypgstac/python/pypgstac/*.so
 .ipynb_checkpoints
 .venv
 .pytest_cache
+.ruff_cache
+.ty
+.mypy_cache

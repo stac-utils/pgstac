@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -500,10 +500,18 @@ class Loader:
                 ),
             )
             if db_rows:
-                datetime_range_min: datetime = db_rows[0][0] or datetime.min
-                datetime_range_max: datetime = db_rows[0][1] or datetime.max
-                end_datetime_range_min: datetime = db_rows[0][2] or datetime.min
-                end_datetime_range_max: datetime = db_rows[0][3] or datetime.max
+                datetime_range_min: datetime = db_rows[0][0] or datetime.min.replace(
+                    tzinfo=timezone.utc,
+                )
+                datetime_range_max: datetime = db_rows[0][1] or datetime.max.replace(
+                    tzinfo=timezone.utc,
+                )
+                end_datetime_range_min: datetime = db_rows[0][
+                    2
+                ] or datetime.min.replace(tzinfo=timezone.utc)
+                end_datetime_range_max: datetime = db_rows[0][
+                    3
+                ] or datetime.max.replace(tzinfo=timezone.utc)
 
                 partition = Partition(
                     name=partition_name,

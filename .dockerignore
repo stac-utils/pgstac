@@ -8,6 +8,7 @@ venv/*
 */.ruff_cache/*
 */.pytest_cache/*
 */.vscode/*
+*/.ty/*
 */.mypy_cache/*
 */.pgadmin/*
 */.ipynb_checkpoints/*

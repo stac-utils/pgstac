@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v5.0.0
     hooks:
     -   id: trailing-whitespace
     -   id: check-yaml
@@ -19,7 +19,7 @@ repos:
 
 
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 'v0.8.2'
+    rev: 'v0.11.6'
     hooks:
     -   id: ruff
         files: src/pypgstac\/.*\.py$
@@ -30,6 +30,13 @@ repos:
 
 -   repo: local
     hooks:
+    -   id: ty
+        name: ty
+        entry: uvx ty check --config-file ty.toml src/pypgstac/src src/pypgstac/tests
+        language: system
+        types: [python]
+        files: src/pypgstac\/.*\.py$
+        pass_filenames: false
     -   id: dockerbuild
         name: dockerbuild
         entry: scripts/update

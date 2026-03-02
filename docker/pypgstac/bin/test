@@ -47,9 +47,10 @@ function test_formatting(){
 
     echo "Running ruff"
     ruff check src/pypgstac tests
+    ruff format --check src/pypgstac tests
 
-    echo "Running mypy"
-    mypy src/pypgstac
+    echo "Running ty"
+    ty check src/pypgstac
 
     echo "Checking if there are any staged migrations."
     find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
@@ -134,10 +135,7 @@ function test_pypgstac(){
 [[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
 TEMPLATEDB=${1:-pgstac_test_db_template}
     cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e . --no-deps
+    uv pip install --system -e . --no-deps
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
@@ -157,10 +155,7 @@ EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
     cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e .[dev,test,psycopg]
+    uv pip install --system -e .[dev,test,psycopg]
 
     pypgstac migrate --toversion 0.3.0
     pypgstac --version

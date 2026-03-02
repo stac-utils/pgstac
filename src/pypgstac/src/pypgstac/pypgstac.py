@@ -56,7 +56,7 @@ class PgstacCLI:
         """Search PgSTAC."""
         return self._db.search(query)
 
-    def migrate(self, toversion: Optional[str] = None) -> str:
+    def migrate(self, toversion: Optional[str] = None) -> Optional[str]:
         """Migrate PgSTAC Database."""
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)

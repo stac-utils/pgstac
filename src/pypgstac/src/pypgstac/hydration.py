@@ -131,7 +131,7 @@ def apply_marked_keys(
     """
     try:
         marked_keys = [key for key in base_item if key not in full_item.keys()]
-        marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
+        marked_dict = dict.fromkeys(marked_keys, DO_NOT_MERGE_MARKER)
         dehydrated.update(marked_dict)
     except TypeError:
         pass

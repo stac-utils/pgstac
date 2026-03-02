@@ -1,0 +1,10 @@
+[rules]
+unresolved-import = "ignore"
+invalid-base = "ignore"
+no-matching-overload = "ignore"
+invalid-argument-type = "ignore"
+possibly-missing-attribute = "ignore"
+invalid-type-form = "ignore"
+invalid-return-type = "ignore"
+not-subscriptable = "ignore"
+unsupported-operator = "ignore"
