@@ -17,7 +17,13 @@ src/pgstac/migrations/   ← Base + incremental migration files
 src/pgstac/tests/        ← PGTap and basic SQL tests
 src/pypgstac/src/pypgstac/ ← Python package source
 src/pypgstac/tests/        ← pytest tests
+docker/pypgstac/bin/     ← Build/test/utility scripts (pgstac_restore, test, etc.)
 ```
+
+### Documentation Files
+
+- **`CHANGELOG.md`** — the single source of truth for release notes
+- **`docs/src/release-notes.md`** — a **manual copy** of `CHANGELOG.md`, served by mkdocs. Keep them identical; update both when changing either.
 
 ### Database Roles
 
@@ -50,6 +56,17 @@ Key functions: `check_partition()` (create/update), `update_partition_stats()` (
 
 PgSTAC installs into the `pgstac` schema. All connections must have `search_path` set to `pgstac, public`.
 
+### pg_dump / pg_restore Compatibility
+
+PgSTAC functions reference PostGIS functions (e.g. `st_makeenvelope`, `st_geomfromgeojson`) **without schema qualification** because PostGIS may be installed in either `public` or `postgis` schema. `pg_dump` clears `search_path` during restore, breaking these references.
+
+**Rules to maintain dump/restore compatibility:**
+
+- **Do NOT schema-qualify PostGIS function calls** in PgSTAC SQL
+- **Avoid cross-function dependencies in SQL functions used by GENERATED columns** — pg_dump orders functions alphabetically, so `func_a` calling `func_b` may be created before `func_b` exists. Inline the logic instead.
+- Use `pgstac_restore` (in `docker/pypgstac/bin/`) to restore dumps — it installs a temporary event trigger that sets the correct `search_path` before each DDL command
+- Test with `scripts/test --pgdump`
+
 ## Development Workflow
 
 ### Setup
@@ -68,6 +85,7 @@ scripts/test --pgtap            # PGTap SQL tests
 scripts/test --basicsql         # SQL output comparison tests
 scripts/test --migrations       # Full migration chain test
 scripts/test --formatting       # ruff + mypy
+scripts/test --pgdump           # pg_dump/pg_restore round-trip test
 ```
 
 All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuild images first.
@@ -134,6 +152,7 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 2. **Basic SQL**: `.sql` files in `src/pgstac/tests/basic/`, output compared to `.sql.out`
 3. **Pytest**: `src/pypgstac/tests/test_load.py`, `test_benchmark.py`, `test_queryables.py`, `hydration/`
 4. **Migration**: Installs v0.3.0, migrates to latest, runs all test suites against migrated DB
+5. **pg_dump**: Dumps a database with sample data, restores via `pgstac_restore`, verifies counts match
 
 ### Pytest Fixtures (conftest.py)
 
@@ -144,9 +163,10 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 
 1. Changes only in `src/pgstac/sql/` for SQL, `src/pypgstac/` for Python
 2. Tests added if appropriate
-3. CHANGELOG.md updated under `## [UNRELEASED]`
-4. Docs updated if needed
-5. All tests pass: `scripts/test` (or `scripts/runinpypgstac --build test --pypgstac`)
+3. `CHANGELOG.md` updated under `## [UNRELEASED]`
+4. `docs/src/release-notes.md` updated to match `CHANGELOG.md` (they must stay identical)
+5. Docs updated if needed
+6. All tests pass: `scripts/test` (or `scripts/runinpypgstac --build test --pypgstac`)
 
 ## Release Checklist
 
@@ -154,9 +174,10 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 2. Review `.staged` migration, remove suffix
 3. `scripts/test --migrations`
 4. Move CHANGELOG "Unreleased" → new version
-5. Create PR, merge
-6. `git tag vVERSION && git push origin vVERSION`
-7. CI publishes to PyPI + ghcr.io
+5. Copy updated `CHANGELOG.md` to `docs/src/release-notes.md` (keep identical)
+6. Create PR, merge
+7. `git tag vVERSION && git push origin vVERSION`
+8. CI publishes to PyPI + ghcr.io
 
 ## Common Patterns
 

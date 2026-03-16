@@ -17,10 +17,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Add `before_sleep` retry handler to force partition constraint refresh on `CheckViolation`.
 - Materialize `itertools.groupby` generators with `list()` before `load_partition()` to prevent silent data loss on retry.
 - Use safe `item.pop('partition', None)` to avoid `KeyError` on retry.
+- Inline `search_tohash` into `search_hash` to eliminate cross-function dependency that broke pg_dump/pg_restore (pg_dump orders functions alphabetically).
 
 ### Added
+- `pgstac_restore` script for restoring pg_dump backups — installs a temporary event trigger to fix search_path during restore.
 - Race condition tests for sequential and concurrent loader operations with new-Loader-per-item pattern.
 - Search path independence tests verifying `partition_sys_meta`, `partition_stats`, `partitions`, `partitions_view`, and `partition_steps` work identically with and without `pgstac` in `search_path`.
+- pg_dump/pg_restore test (`--pgdump`) validating backup and restore of a pgstac database with sample data.
+- Documentation for pg_dump/pg_restore best practices with PgSTAC.
 
 ## [v0.9.10]
 

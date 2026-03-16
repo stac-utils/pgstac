@@ -147,6 +147,99 @@ EOSQL
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 
+function test_pgdump(){
+    echo "=== Testing pg_dump / pg_restore ==="
+    TEMPLATEDB=${1:-pgstac_test_db_template}
+    DUMPFILE=$(mktemp /tmp/pgstac_dump.XXXXXX)
+    trap 'rm -f "$DUMPFILE"' 0 2 3 15
+
+    # Create source database with sample data
+    psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_dump_src WITH (force);
+CREATE DATABASE pgstac_test_dump_src TEMPLATE $TEMPLATEDB;
+ALTER DATABASE pgstac_test_dump_src SET search_path to pgstac, public;
+ALTER DATABASE pgstac_test_dump_src SET client_min_messages to $CLIENTMESSAGES;
+\connect pgstac_test_dump_src
+\copy collections (content) FROM '$PGSTACDIR/tests/testdata/collections.ndjson';
+\copy items_staging (content) FROM '$PGSTACDIR/tests/testdata/items.ndjson'
+EOSQL
+
+    # Capture counts from source
+    SRC_COLLECTIONS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.collections;" pgstac_test_dump_src)
+    SRC_ITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.items;" pgstac_test_dump_src)
+    SRC_SEARCH=$(psql -X -t -A -c "SELECT count(*) FROM (SELECT * FROM pgstac.search('{}')) s;" pgstac_test_dump_src)
+    SRC_VERSION=$(psql -X -t -A -c "SELECT pgstac.get_version();" pgstac_test_dump_src)
+    echo "Source: ${SRC_COLLECTIONS} collections, ${SRC_ITEMS} items, ${SRC_SEARCH} search results, version ${SRC_VERSION}"
+
+    # Dump with custom format
+    echo "Running pg_dump -Fc ..."
+    pg_dump -Fc --schema=pgstac -f "$DUMPFILE" pgstac_test_dump_src
+    DUMPSIZE=$(stat -c%s "$DUMPFILE" 2>/dev/null || stat -f%z "$DUMPFILE" 2>/dev/null)
+    echo "Dump file size: ${DUMPSIZE} bytes"
+
+    if [ "$DUMPSIZE" -lt 1000 ]; then
+        echo "***FAIL: pg_dump produced suspiciously small file (${DUMPSIZE} bytes)***"
+        exit 1
+    fi
+
+    # Create target database and restore using pgstac_restore.
+    # pgstac_restore detects PostGIS schema on the target, fixes the
+    # search_path that pg_dump clears, and pipes through psql.
+    psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_dump_dst WITH (force);
+CREATE DATABASE pgstac_test_dump_dst;
+ALTER DATABASE pgstac_test_dump_dst SET search_path to pgstac, public;
+ALTER DATABASE pgstac_test_dump_dst SET client_min_messages to $CLIENTMESSAGES;
+EOSQL
+
+    echo "Running pgstac_restore ..."
+    pgstac_restore \
+        -d pgstac_test_dump_dst \
+        --create-extensions \
+        --no-roles \
+        "$DUMPFILE"
+
+    # Verify restored data matches source
+    DST_COLLECTIONS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.collections;" pgstac_test_dump_dst)
+    DST_ITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.items;" pgstac_test_dump_dst)
+    DST_SEARCH=$(psql -X -t -A -c "SELECT count(*) FROM (SELECT * FROM pgstac.search('{}')) s;" pgstac_test_dump_dst)
+    DST_VERSION=$(psql -X -t -A -c "SELECT pgstac.get_version();" pgstac_test_dump_dst)
+    echo "Restored: ${DST_COLLECTIONS} collections, ${DST_ITEMS} items, ${DST_SEARCH} search results, version ${DST_VERSION}"
+
+    FAILED=0
+    if [ "$SRC_COLLECTIONS" != "$DST_COLLECTIONS" ]; then
+        echo "***FAIL: collection count mismatch: source=${SRC_COLLECTIONS} restored=${DST_COLLECTIONS}***"
+        FAILED=1
+    fi
+    if [ "$SRC_ITEMS" != "$DST_ITEMS" ]; then
+        echo "***FAIL: item count mismatch: source=${SRC_ITEMS} restored=${DST_ITEMS}***"
+        FAILED=1
+    fi
+    if [ "$SRC_SEARCH" != "$DST_SEARCH" ]; then
+        echo "***FAIL: search result count mismatch: source=${SRC_SEARCH} restored=${DST_SEARCH}***"
+        FAILED=1
+    fi
+    if [ "$SRC_VERSION" != "$DST_VERSION" ]; then
+        echo "***FAIL: version mismatch: source=${SRC_VERSION} restored=${DST_VERSION}***"
+        FAILED=1
+    fi
+    if [ "$DST_ITEMS" -eq 0 ]; then
+        echo "***FAIL: restored database has 0 items***"
+        FAILED=1
+    fi
+
+    # Cleanup
+    rm -f "$DUMPFILE"
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_dump_src WITH (force);"
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_dump_dst WITH (force);"
+
+    if [ "$FAILED" -eq 1 ]; then
+        echo "***pg_dump/pg_restore test FAILED***"
+        exit 1
+    fi
+    echo "pg_dump/pg_restore test PASSED!"
+}
+
 function test_migrations(){
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);
@@ -181,6 +274,7 @@ PGTAP=0
 BASICSQL=0
 PYPGSTAC=0
 MIGRATIONS=0
+PGDUMP=0
 MESSAGENOTICE=0
 MESSAGELOG=0
 CREATEBASICSQLOUT=0
@@ -242,6 +336,12 @@ while [[ $# -gt 0 ]]
             shift
             ;;
 
+            --pgdump)
+            SETUPDB=1
+            PGDUMP=1
+            shift
+            ;;
+
             --nomigrations)
             SETUPDB=1
             PGTAP=1
@@ -263,7 +363,7 @@ CLIENTMESSAGES='warning'
 [[ $MESSAGEDEBUG -eq 1 ]] && CLIENTMESSAGES='debug1'
 echo $CLIENTMESSAGES
 
-if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) ]]
+if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) && ($PGDUMP -eq 0) ]]
 then
     FORMATTING=1
     SETUPDB=1
@@ -271,6 +371,7 @@ then
     BASICSQL=1
     PYPGSTAC=1
     MIGRATIONS=1
+    PGDUMP=1
 fi
 
 [ $FORMATTING -eq 1 ] && test_formatting
@@ -279,5 +380,6 @@ fi
 [ $BASICSQL -eq 1 ] && test_basicsql
 [ $PYPGSTAC -eq 1 ] && test_pypgstac
 [ $MIGRATIONS -eq 1 ] && test_migrations
+[ $PGDUMP -eq 1 ] && test_pgdump
 
 exit 0

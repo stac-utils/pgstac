@@ -4,14 +4,20 @@ ENV PYTHONBUFFERED=1
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PYTHONPATH="/opt/src/pypgstac:$PYTHONPATH"
 ENV PATH="/opt/docker/pypgstac/bin:$PATH"
+ARG PG_MAJOR=17
 RUN \
     apt-get update \
     && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        postgresql-client \
+        postgresql-client-${PG_MAJOR} \
         python3 python-is-python3 python3-pip python3-venv \
-        build-essential clang clang-11 gcc git gnupg libssl-dev llvm-11 lsb-release make pkg-config \
+        build-essential clang clang-11 gcc git libssl-dev llvm-11 make pkg-config \
     && python3 -m pip install --upgrade pip uv wheel setuptools \
     && apt-get remove -y apt-transport-https \
     && apt-get clean && apt-get -y autoremove \

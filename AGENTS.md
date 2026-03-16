@@ -10,6 +10,8 @@ PostgreSQL SQL developer for PgSTAC. Works exclusively in `src/pgstac/sql/` file
 - `CREATE OR REPLACE FUNCTION`, `IF NOT EXISTS`, `SECURITY DEFINER` for data-modifying functions
 - Grant permissions in `998_idempotent_post.sql`, not inline
 - Use `run_or_queue()` for deferrable operations
+- Do NOT schema-qualify PostGIS calls (PostGIS may be in `public` or `postgis` schema)
+- Avoid cross-function deps in SQL functions used by GENERATED columns — pg_dump orders alphabetically, so inline the logic (see `search_hash` pattern)
 - Test: `scripts/runinpypgstac --build test --pgtap --basicsql`
 
 ---
