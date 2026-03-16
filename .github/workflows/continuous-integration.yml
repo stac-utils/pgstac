@@ -140,4 +140,5 @@ jobs:
       - name: Run tests
         working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
         run: |
+          export PATH=/opt/docker/pypgstac/bin:$PATH
           ./test
