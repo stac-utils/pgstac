@@ -247,6 +247,7 @@ CREATE DATABASE pgstac_test_migration;
 ALTER DATABASE pgstac_test_migration SET search_path to pgstac, public;
 ALTER DATABASE pgstac_test_migration SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
+    local _prev_pgdatabase="${PGDATABASE:-}"
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
     cd $SRCDIR/pypgstac
@@ -266,6 +267,7 @@ EOSQL
     test_basicsql pgstac_test_migration
     test_pypgstac pgstac_test_migration
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);" postgres
+    export PGDATABASE="${_prev_pgdatabase}"
 }
 
 FORMATTING=0
