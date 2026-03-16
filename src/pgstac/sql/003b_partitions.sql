@@ -197,6 +197,7 @@ BEGIN
         $q$,
         _partition
     ) INTO dtrange, edtrange;
+    EXECUTE format('ANALYZE %I;', _partition);
     extent := st_estimatedextent('pgstac', _partition, 'geometry');
     RAISE DEBUG 'Estimated Extent: %', extent;
     INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
@@ -213,9 +214,6 @@ BEGIN
         constraint_dtrange, constraint_edtrange, pv.collection
         INTO cdtrange, cedtrange, collection
     FROM partitions_view pv WHERE partition = _partition;
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
-
 
     RAISE NOTICE 'Checking if we need to modify constraints...';
     RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
@@ -228,9 +226,9 @@ BEGIN
         RAISE NOTICE 'New      % %', dtrange, edtrange;
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
-        REFRESH MATERIALIZED VIEW partitions;
-        REFRESH MATERIALIZED VIEW partition_steps;
     END IF;
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
     RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
         RAISE NOTICE 'updating collection extent for %', collection;
