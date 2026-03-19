@@ -3490,13 +3490,10 @@ BEGIN
 $$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
 ;
 
-CREATE OR REPLACE FUNCTION search_tohash(jsonb) RETURNS jsonb AS $$
-    SELECT $1 - '{token,limit,context,includes,excludes}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
-    SELECT md5(concat(search_tohash($1)::text,$2::text));
+    SELECT md5(concat(($1 - '{token,limit,context,includes,excludes}'::text[])::text,$2::text));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+DROP FUNCTION IF EXISTS search_tohash(jsonb);
 
 CREATE TABLE IF NOT EXISTS searches(
     hash text GENERATED ALWAYS AS (search_hash(search, metadata)) STORED PRIMARY KEY,

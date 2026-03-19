@@ -194,6 +194,8 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
+drop function if exists "pgstac"."search_tohash"(jsonb);
+
 set check_function_bodies = off;
 
 CREATE OR REPLACE FUNCTION pgstac.get_tstz_constraint(reloid oid, colname text)
@@ -244,6 +246,15 @@ BEGIN
     RAISE DEBUG 'Constraint % for %: % %', colname, reloid::regclass, ts_lower, ts_upper;
     RETURN tstzrange(ts_lower, ts_upper, lower_inclusive || upper_inclusive);
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.search_hash(jsonb, jsonb)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT md5(concat(($1 - '{token,limit,context,includes,excludes}'::text[])::text,$2::text));
 $function$
 ;
 

@@ -420,6 +420,18 @@ def test_load_compatible_major_minor_version(loader: Loader) -> None:
         assert mock_version != loader.db.version
 
 
+def test_load_compatible_major_minor_version_with_dev_suffix(loader: Loader) -> None:
+    """Test pypgstac loader accepts dev-suffixed library versions."""
+    with mock.patch(
+        "pypgstac.load.__version__",
+        f"{version_increment(__version__)}-dev",
+    ):
+        loader.load_collections(
+            str(TEST_COLLECTIONS_JSON),
+            insert_mode=Methods.insert,
+        )
+
+
 def test_load_items_nopartitionconstraint_succeeds(loader: Loader) -> None:
     """Test pypgstac items loader."""
     loader.load_collections(

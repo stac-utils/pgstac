@@ -3,6 +3,7 @@
 import contextlib
 import itertools
 import logging
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -42,6 +43,14 @@ from .hydration import dehydrate
 from .version import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_version_for_parse(version: str) -> str:
+    """Extract the numeric semver prefix for version_parser compatibility."""
+    match = re.match(r"^(\d+\.\d+\.\d+)", str(version))
+    if match is not None:
+        return match.group(1)
+    return str(version)
 
 
 @dataclass
@@ -164,8 +173,8 @@ class Loader:
             raise Exception("Failed to detect the target database version.")
 
         if db_version != "unreleased":
-            v1 = V(db_version)
-            v2 = V(__version__)
+            v1 = V(_normalize_version_for_parse(db_version))
+            v2 = V(_normalize_version_for_parse(__version__))
             if (v1.get_major_version(), v1.get_minor_version()) != (
                 v2.get_major_version(),
                 v2.get_minor_version(),
@@ -273,7 +282,9 @@ class Loader:
         reraise=True,
         before_sleep=lambda retry_state: (
             setattr(
-                retry_state.args[1], "requires_update", True,
+                retry_state.args[1],
+                "requires_update",
+                True,
             )
             if retry_state.outcome is not None
             and isinstance(
