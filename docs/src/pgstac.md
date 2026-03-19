@@ -209,6 +209,59 @@ ORDER BY idx_scan ASC
 ;
 ```
 
+### Backup and Restore (pg_dump / pg_restore)
+
+PgSTAC databases can be backed up and restored using standard PostgreSQL `pg_dump` and `pg_restore` tools. The custom format (`-Fc`) is recommended for flexibility and compression.
+
+#### Dumping
+
+Since PgSTAC installs everything into the `pgstac` schema, dump only that schema:
+
+```bash
+pg_dump -Fc --schema=pgstac -f pgstac_backup.dump mydatabase
+```
+
+This captures all tables, functions, views, indexes, and data within the `pgstac` schema.
+
+#### Restoring with `pgstac_restore`
+
+**Important:** `pg_restore` cannot be used directly with PgSTAC dumps. `pg_dump` sets `search_path` to empty during restore for safety, but PgSTAC SQL functions reference PostGIS functions (e.g. `st_makeenvelope`, `st_geomfromgeojson`) without schema qualification. Since PostGIS may be installed in either the `public` or `postgis` schema depending on the deployment, PgSTAC does not schema-qualify these calls. This means a raw `pg_restore` will fail when creating functions and tables that depend on PostGIS.
+
+PgSTAC provides the `pgstac_restore` script to handle this. It installs a temporary event trigger on the target database that sets the correct `search_path` (including the detected PostGIS schema) before each DDL command, then runs `pg_restore` directly:
+
+```bash
+pgstac_restore -d target_database pgstac_backup.dump
+```
+
+The script accepts several options:
+
+- `--create-extensions` — Create PostGIS, btree_gist, and unaccent on the target if they don't exist
+- `--no-roles` — Skip ownership and privilege restoration (use when the target doesn't have `pgstac_admin`/`pgstac_read`/`pgstac_ingest` roles)
+- `-d, --dbname` — Target database name (also reads `PGDATABASE`)
+
+Common restore patterns:
+
+```bash
+# Restore into a fresh database, creating extensions, without requiring pgstac roles
+pgstac_restore -d target_db --create-extensions --no-roles pgstac_backup.dump
+
+# Restore into a database that already has extensions and pgstac roles
+pgstac_restore -d target_db pgstac_backup.dump
+```
+
+After restoring, ensure the `search_path` is set on the target database or role:
+
+```sql
+ALTER DATABASE target_database SET search_path TO pgstac, public;
+```
+
+#### Notes
+
+- Always use `--schema=pgstac` on `pg_dump` to capture only the pgstac schema.
+- Do **not** use `pg_restore` directly — use `pgstac_restore` instead to handle the search_path issue.
+- After restoring, you may want to run `ANALYZE` on the restored database to update planner statistics.
+- Materialized views (`partitions`, `partition_steps`) are included in the dump. If you need to refresh them after restore, run `REFRESH MATERIALIZED VIEW pgstac.partitions; REFRESH MATERIALIZED VIEW pgstac.partition_steps;`.
+
 ### Notification Triggers
 
 You can add notification triggers alongside pgstac to get notified when items are inserted, updated, or deleted.

@@ -1,0 +1,172 @@
+#!/bin/bash
+set -e
+
+function usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] <dumpfile>
+
+Restore a PgSTAC pg_dump (-Fc) backup into a target database.
+
+pg_dump clears the search_path during restore, which breaks PgSTAC
+functions that reference PostGIS functions without schema qualification.
+This script works around that by installing a temporary event trigger
+on the target database that resets search_path before every DDL command,
+then running pg_restore directly (preserving its dependency ordering).
+
+Prerequisites on the target database:
+  - Extensions: postgis, btree_gist, unaccent
+  - Roles (optional): pgstac_admin, pgstac_read, pgstac_ingest
+    (use --no-roles if roles don't exist; implies --no-owner --no-privileges)
+
+Options:
+  -d, --dbname NAME      Target database (default: \$PGDATABASE)
+  -f, --file FILE        Dump file path (also accepted as positional arg)
+  --no-roles             Skip role-dependent options (adds --no-owner --no-privileges)
+  --create-extensions    Create required extensions on target if missing
+  -h, --help             Show this help message
+
+Environment:
+  Standard PG variables (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE)
+  are respected for both psql and pg_restore.
+
+Examples:
+  # Dump
+  pg_dump -Fc --schema=pgstac -f pgstac_backup.dump mydb
+
+  # Restore into an existing database with extensions already installed
+  $(basename "$0") -d target_db pgstac_backup.dump
+
+  # Restore, creating extensions and skipping ownership
+  $(basename "$0") -d target_db --create-extensions --no-roles pgstac_backup.dump
+EOF
+    exit "${1:-0}"
+}
+
+DBNAME="${PGDATABASE:-}"
+DUMPFILE=""
+NO_ROLES=0
+CREATE_EXTENSIONS=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d|--dbname)
+            DBNAME="$2"
+            shift 2
+            ;;
+        -f|--file)
+            DUMPFILE="$2"
+            shift 2
+            ;;
+        --no-roles)
+            NO_ROLES=1
+            shift
+            ;;
+        --create-extensions)
+            CREATE_EXTENSIONS=1
+            shift
+            ;;
+        -h|--help)
+            usage 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+        *)
+            if [ -z "$DUMPFILE" ]; then
+                DUMPFILE="$1"
+            else
+                echo "Unexpected argument: $1" >&2
+                usage 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$DUMPFILE" ]; then
+    echo "Error: dump file is required" >&2
+    usage 1
+fi
+
+if [ ! -f "$DUMPFILE" ]; then
+    echo "Error: dump file not found: $DUMPFILE" >&2
+    exit 1
+fi
+
+if [ -z "$DBNAME" ]; then
+    echo "Error: target database is required (-d or PGDATABASE)" >&2
+    usage 1
+fi
+
+# Create extensions if requested
+if [ "$CREATE_EXTENSIONS" -eq 1 ]; then
+    echo "Creating extensions on ${DBNAME} ..."
+    psql -X -q -v ON_ERROR_STOP=1 -d "$DBNAME" <<EOSQL
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+EOSQL
+fi
+
+# Detect the schema where PostGIS is installed on the target
+POSTGIS_SCHEMA=$(psql -X -t -A -d "$DBNAME" \
+    -c "SELECT nspname FROM pg_extension e JOIN pg_namespace n ON e.extnamespace = n.oid WHERE e.extname = 'postgis';" \
+    2>/dev/null || true)
+
+if [ -z "$POSTGIS_SCHEMA" ]; then
+    echo "Error: PostGIS extension not found on target database '${DBNAME}'." >&2
+    echo "Install PostGIS first or use --create-extensions." >&2
+    exit 1
+fi
+
+# Build the search_path: pgstac + PostGIS schema + public (deduplicated)
+SEARCH_PATH="pgstac, ${POSTGIS_SCHEMA}"
+if [ "$POSTGIS_SCHEMA" != "public" ]; then
+    SEARCH_PATH="${SEARCH_PATH}, public"
+fi
+echo "Using search_path: ${SEARCH_PATH}"
+
+# Build pg_restore flags
+RESTORE_FLAGS=()
+if [ "$NO_ROLES" -eq 1 ]; then
+    RESTORE_FLAGS+=(--no-owner --no-privileges)
+fi
+
+echo "Restoring ${DUMPFILE} into ${DBNAME} ..."
+
+# pg_dump clears search_path during restore, which breaks PgSTAC functions
+# that reference PostGIS without schema qualification. We install a temporary
+# event trigger that resets search_path before every DDL command, then run
+# pg_restore directly.
+
+# Install temporary event trigger to fix search_path
+psql -X -v ON_ERROR_STOP=1 -d "$DBNAME" <<EOSQL
+CREATE OR REPLACE FUNCTION public._pgstac_restore_fix_search_path()
+  RETURNS event_trigger LANGUAGE plpgsql AS \$func\$
+BEGIN
+    PERFORM set_config('search_path', '${SEARCH_PATH}', false);
+END;
+\$func\$;
+
+CREATE EVENT TRIGGER _pgstac_restore_fix_sp ON ddl_command_start
+    EXECUTE FUNCTION public._pgstac_restore_fix_search_path();
+EOSQL
+
+# Restore
+pg_restore \
+    --dbname="$DBNAME" \
+    "${RESTORE_FLAGS[@]}" \
+    "$DUMPFILE" || RESTORE_RC=$?
+
+# Clean up
+psql -X -q -d "$DBNAME" <<EOSQL
+DROP EVENT TRIGGER IF EXISTS _pgstac_restore_fix_sp;
+DROP FUNCTION IF EXISTS public._pgstac_restore_fix_search_path();
+EOSQL
+
+if [ "${RESTORE_RC:-0}" -ne 0 ]; then
+    echo "pg_restore exited with code ${RESTORE_RC} (some warnings may be expected)" >&2
+fi
+
+echo "Restore complete."
