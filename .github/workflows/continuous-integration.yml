@@ -43,7 +43,7 @@ jobs:
           buildpy=false;
           [[ "${{ steps.filter.outputs.pypgstac }}" == "true" ]] && buildpy=true || ref=main;
           echo "pytag=${{ env.REGISTRY }}/${GITHUB_REPOSITORY_OWNER}/pgstac-pyrust:$ref" >>$GITHUB_OUTPUT;
-          echo "buildpy=$buildpg" >>$GITHUB_OUTPUT;
+          echo "buildpy=$buildpy" >>$GITHUB_OUTPUT;
 
   # This builds a base postgres image that has everything installed to be able to run pgstac. This image does not have pgstac itself installed.
   buildpg:
@@ -109,6 +109,7 @@ jobs:
           - "--resolution lowest-direct"
     container:
       image: ${{ needs.changes.outputs.pyrustdocker }}
+      options: --user root
       env:
         PGPASSWORD: postgres
         PGHOST: postgres
@@ -126,6 +127,10 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Ensure PostgreSQL 17 client tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends postgresql-client-17
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
@@ -135,4 +140,5 @@ jobs:
       - name: Run tests
         working-directory: /__w/pgstac/pgstac/docker/pypgstac/bin
         run: |
+          export PATH=/opt/docker/pypgstac/bin:$PATH
           ./test

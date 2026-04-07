@@ -3,6 +3,7 @@
 import contextlib
 import itertools
 import logging
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -42,6 +43,14 @@ from .hydration import dehydrate
 from .version import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_version_for_parse(version: str) -> str:
+    """Extract the numeric semver prefix for version_parser compatibility."""
+    match = re.match(r"^(\d+\.\d+\.\d+)", str(version))
+    if match is not None:
+        return match.group(1)
+    return str(version)
 
 
 @dataclass
@@ -164,8 +173,8 @@ class Loader:
             raise Exception("Failed to detect the target database version.")
 
         if db_version != "unreleased":
-            v1 = V(db_version)
-            v2 = V(__version__)
+            v1 = V(_normalize_version_for_parse(db_version))
+            v2 = V(_normalize_version_for_parse(__version__))
             if (v1.get_major_version(), v1.get_minor_version()) != (
                 v2.get_major_version(),
                 v2.get_minor_version(),
@@ -261,13 +270,29 @@ class Loader:
                     )
 
     @retry(
-        stop=stop_after_attempt(5),
+        stop=stop_after_attempt(10),
         wait=wait_random_exponential(multiplier=1, max=120),
         retry=(
             retry_if_exception_type(psycopg.errors.CheckViolation)
             | retry_if_exception_type(psycopg.errors.DeadlockDetected)
+            | retry_if_exception_type(psycopg.errors.SerializationFailure)
+            | retry_if_exception_type(psycopg.errors.LockNotAvailable)
+            | retry_if_exception_type(psycopg.errors.ObjectInUse)
         ),
         reraise=True,
+        before_sleep=lambda retry_state: (
+            setattr(
+                retry_state.args[1],
+                "requires_update",
+                True,
+            )
+            if retry_state.outcome is not None
+            and isinstance(
+                retry_state.outcome.exception(),
+                psycopg.errors.CheckViolation,
+            )
+            else None
+        ),
     )
     def load_partition(
         self,
@@ -306,7 +331,9 @@ class Loader:
                     )
                 partition.requires_update = False
             else:
-                logger.debug(f"Partition {partition.name} does not require an update.")
+                logger.debug(
+                    f"Partition {partition.name} does not require an update.",
+                )
 
             with conn.transaction():
                 t = time.perf_counter()
@@ -326,7 +353,7 @@ class Loader:
                         ).format(sql.Identifier(partition.name)),
                     ) as copy:
                         for item in items:
-                            item.pop("partition")
+                            item.pop("partition", None)
                             copy.write_row(
                                 (
                                     item["id"],
@@ -363,7 +390,7 @@ class Loader:
                         """,
                     ) as copy:
                         for item in items:
-                            item.pop("partition")
+                            item.pop("partition", None)
                             copy.write_row(
                                 (
                                     item["id"],
@@ -494,7 +521,7 @@ class Loader:
                             as end_datetime_range_min,
                         nullif(upper(constraint_edtrange),'infinity')
                             as end_datetime_range_max
-                    FROM partitions WHERE partition=%s;
+                    FROM partition_sys_meta WHERE partition=%s;
                     """,
                     [partition_name],
                 ),
@@ -615,7 +642,7 @@ class Loader:
             chunk = list(chunkin)
             chunk.sort(key=lambda x: x["partition"])
             for k, g in itertools.groupby(chunk, lambda x: x["partition"]):
-                self.load_partition(self._partition_cache[k], g, insert_mode)
+                self.load_partition(self._partition_cache[k], list(g), insert_mode)
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
