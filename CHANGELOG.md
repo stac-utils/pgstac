@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
-## [UNRELEASED]
+## [v0.9.11]
 
 ### Fixed
 - Fix timestamp regex in partition constraint parsing to handle fractional seconds (microseconds), preventing incorrect `(-infinity, infinity)` constraint bounds.
@@ -616,6 +616,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.11]: https://github.com/stac-utils/pgstac/compare/v0.9.10...v0.9.11
 [v0.9.10]: https://github.com/stac-utils/pgstac/compare/v0.9.9...v0.9.10
 [v0.9.9]: https://github.com/stac-utils/pgstac/compare/v0.9.8...v0.9.9
 [v0.9.8]: https://github.com/stac-utils/pgstac/compare/v0.9.7...v0.9.8
