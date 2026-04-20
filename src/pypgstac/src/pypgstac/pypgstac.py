@@ -297,7 +297,7 @@ class PgstacCLI:
                     cur.execute("SELECT maintain_partitions();")
 
 
-def cli() -> fire.Fire:
+def cli() -> None:
     """Wrap fire call for CLI."""
     fire.Fire(PgstacCLI)
 

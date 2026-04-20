@@ -61,4 +61,4 @@ if [[ "${PGSTAC_DEBUG:-0}" == "1" ]]; then
     POSITIONAL=(--debug "${POSITIONAL[@]}")
 fi
 
-$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" makemigration "${POSITIONAL[@]}"
+$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" --cpfiles makemigration "${POSITIONAL[@]}"

@@ -34,4 +34,4 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" format
+$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" --cpfiles format

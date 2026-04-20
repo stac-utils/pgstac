@@ -1,11 +1,13 @@
 """Utilities to help migrate pgstac schema."""
+
 import glob
 import logging
 import os
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, cast
 
+from psycopg.abc import QueryNoTemplate
 from smart_open import open
 
 from . import __version__
@@ -36,7 +38,8 @@ class MigrationPath:
     def parse_filename(self, filename: str) -> List[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", "",
+            "pgstac.",
+            "",
         )
         return filename.split("-")
 
@@ -87,16 +90,16 @@ class MigrationPath:
             return [f"pgstac.{path[0]}.sql"]
         files = []
         for idx in range(len(path) - 1):
-            f = f"pgstac.{path[idx]}-{path[idx+1]}.sql"
+            f = f"pgstac.{path[idx]}-{path[idx + 1]}.sql"
             f = f.replace("--init", "")
-            files.append(f"pgstac.{path[idx]}-{path[idx+1]}.sql")
+            files.append(f"pgstac.{path[idx]}-{path[idx + 1]}.sql")
         return files
 
 
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
-    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -118,7 +121,7 @@ class Migrate:
         if toversion is None:
             toversion = __version__
         files = []
-        if re.search(r"-dev$",toversion):
+        if re.search(r"-dev$", toversion):
             logger.info("using unreleased version")
             toversion = "unreleased"
 
@@ -126,7 +129,7 @@ class Migrate:
             map(
                 int,
                 [
-                    self.db.pg_version[i:i + 2]
+                    self.db.pg_version[i : i + 2]
                     for i in range(0, len(self.db.pg_version), 2)
                 ],
             ),
@@ -154,7 +157,8 @@ class Migrate:
             for file in files:
                 logger.debug(f"Running migration file {file}.")
                 migration_sql = get_sql(file)
-                cur.execute(migration_sql)
+                # Migration SQL is loaded from trusted local migration files.
+                cur.execute(cast(QueryNoTemplate, migration_sql))
                 logger.debug(cur.statusmessage)
                 logger.debug(cur.rowcount)
 
@@ -171,5 +175,6 @@ class Migrate:
                 )
 
         logger.debug(f"New Version: {newversion}")
-
+        if newversion is None:
+            raise Exception("Migration failed to report a new version.")
         return newversion

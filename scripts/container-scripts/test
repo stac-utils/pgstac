@@ -53,6 +53,12 @@ END
 EOSQL
 }
 
+function refresh_collation_versions(){
+    # Newer container libc versions can make template collation metadata stale.
+    psql -X -q -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+    psql -X -q -d postgres -c "ALTER DATABASE postgis REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+}
+
 function test_formatting(){
     cd $SRCDIR/pypgstac
 
@@ -389,7 +395,7 @@ then
 fi
 
 [ $FORMATTING -eq 1 ] && test_formatting
-[ $SETUPDB -eq 1 ] && setuptestdb
+[ $SETUPDB -eq 1 ] && refresh_collation_versions && setuptestdb
 [ $PGTAP -eq 1 ] && test_pgtap
 [ $BASICSQL -eq 1 ] && test_basicsql
 [ $PYPGSTAC -eq 1 ] && test_pypgstac

@@ -154,10 +154,12 @@ def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
                     raise
     elif isinstance(file, Iterable):
         for line in file:
-            if isinstance(line, Dict):
+            if isinstance(line, dict):
                 yield line
-            else:
+            elif isinstance(line, (str, bytes, bytearray, memoryview)):
                 yield orjson.loads(line)
+            else:
+                raise TypeError("Unsupported json input type in iterable.")
 
 
 class Loader:

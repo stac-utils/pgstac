@@ -4,11 +4,13 @@ import atexit
 import logging
 import time
 from types import TracebackType
-from typing import Any, Generator, List, Optional, Tuple, Type, Union
+from typing import Any, Generator, Optional, Tuple, Type, Union
 
 import orjson
 import psycopg
-from psycopg import Connection, sql
+from psycopg import Connection, rows, sql
+from psycopg.abc import Params, QueryNoTemplate
+from psycopg.types import json as psycopg_json
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -189,9 +191,9 @@ class PgstacDB:
     )
     def query(
         self,
-        query: Union[str, sql.Composed],
-        args: Optional[List[Any]] = None,
-        row_factory: psycopg.rows.BaseRowFactory = psycopg.rows.tuple_row,
+        query: QueryNoTemplate,
+        args: Optional[Params] = None,
+        row_factory: rows.BaseRowFactory = rows.tuple_row,
     ) -> Generator:
         """Query the database with parameters."""
         conn = self.connect()
@@ -279,7 +281,7 @@ class PgstacDB:
                     map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
                 raise Exception(
-                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}"
+                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}",
                 )  # noqa: E501
             return version
         else:
@@ -294,12 +296,12 @@ class PgstacDB:
         cleaned_args = []
         for arg in args:
             if isinstance(arg, dict):
-                cleaned_args.append(psycopg.types.json.Jsonb(arg))
+                cleaned_args.append(psycopg_json.Jsonb(arg))
             else:
                 cleaned_args.append(arg)
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
-    def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
+    def search(self, query: Union[dict, str, psycopg_json.Jsonb] = "{}") -> str:
         """Search PgSTAC."""
         return dumps(next(self.func("search", query))[0])

@@ -3,6 +3,7 @@ FROM rust:1-slim-trixie AS pyrustbase
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
 ENV PIP_ROOT_USER_ACTION=ignore
+ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV PYTHONPATH="/opt/src/pypgstac:$PYTHONPATH"
 ENV PATH="/opt/pgstac/container-scripts:$PATH"
 ENV UV_CACHE_DIR=/root/.cache/uv
@@ -12,6 +13,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
+        adduser \
         ca-certificates \
         curl \
         postgresql-client-${PG_MAJOR} \
@@ -49,6 +51,7 @@ USER user
 FROM python:3.13-slim-trixie AS pypgstac-runtime
 ENV PYTHONWRITEBYTECODE=1
 ENV PYTHONBUFFERED=1
+ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV PATH="/opt/pgstac/container-scripts:$PATH"
 ENV UV_CACHE_DIR=/root/.cache/uv
 ARG PG_MAJOR=17
