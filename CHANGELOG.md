@@ -9,9 +9,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased]
 
 ### Added
-- `scripts/container-scripts/` directory containing the in-container script payload
-  (previously `docker/pypgstac/bin/`); Dockerfiles now `COPY scripts/container-scripts`
-  explicitly.
 - `scripts/makemigration` host wrapper for the in-container `makemigration` helper.
 - `.env.example` documenting all supported environment variables for local development.
 - All host-facing scripts (`test`, `format`, `migrate`, `server`, `stageversion`,
@@ -68,9 +65,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Removed
 - PL/Rust support: `pgstacbase-plrust` and `pgstac-plrust` Docker targets removed; the
   pgstac image no longer builds or ships PL/Rust or the Rust toolchain. (Closes #339)
-- `docker/pgstac/dbinit/docker-entrypoint.sh`, `pgstac-rust-preinit.sh`, and
-  `pgstac-rust.sh` deleted (were PL/Rust entrypoint scripts).
-- `docker/pypgstac/bin/` deleted (scripts moved to `scripts/container-scripts/`).
 - `flake8`, `black`, and `mypy` removed from dev dependencies.
 
 ### Fixed
