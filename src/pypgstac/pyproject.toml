@@ -40,12 +40,10 @@ test = [
     "types-cachetools==5.5.*",
 ]
 dev = [
-    "flake8==7.1.1",
-    "black>=24.10.0",
-    "mypy>=1.13.0",
     "types-setuptools",
-    "ruff==0.8.2",
-    "pre-commit",
+    "ruff==0.15.11",
+    "ty==0.0.31",
+    "pre-commit==3.5.0",
 ]
 psycopg = ["psycopg[binary]>=3.1.0", "psycopg-pool>=3.1.0"]
 migrations = ["psycopg2-binary", "migra"]
@@ -102,7 +100,7 @@ select = [
     "COM", # flake8-commas
 ]
 ignore = [
-    # "E501",  # line too long, handled by black
+    # "E501",  # line too long, handled by formatter
     "B008", # do not perform function calls in argument defaults
     "C901", # too complex
     "B905",
@@ -110,12 +108,6 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["pypgstac"]
-
-[tool.mypy]
-strict_optional = true
-ignore_missing_imports = true
-disallow_untyped_defs = true
-namespace_packages = true
 
 [tool.pydocstyle]
 select = "D1"
