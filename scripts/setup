@@ -9,10 +9,24 @@ fi
 
 function usage() {
     echo -n \
-        "Usage: $(basename "$0")
+        "Usage: $(basename "$0") [--help]
 Sets up this project for development.
 "
 }
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 

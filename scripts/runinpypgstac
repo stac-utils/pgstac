@@ -1,56 +1,141 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
+source "$SCRIPT_DIR/pgstacenv"
 set -e
 
 if [[ "${CI}" ]]; then
     set -x
 fi
+
 function usage() {
-    echo -n \
-        "Usage: $(basename "$0") <--build> <--no-cache> <script>
-        script options: format, test, makemigration, stageversion
-        "
-exit 1
+    cat <<EOF
+Usage: $(basename "$0") [options] <command> [command args...]
+
+Run a command inside the pypgstac development container.
+
+Options:
+  --build                 Equivalent to --build-policy always.
+  --build-policy POLICY   One of: always, missing, never.
+  --no-cache              Rebuild images without Docker layer cache.
+  --cpfiles               Copy /opt/src back to the host after the command runs.
+  -h, --help              Show this help text.
+
+Examples:
+  $(basename "$0") --build test --pypgstac
+  $(basename "$0") --build-policy missing format
+  $(basename "$0") --build-policy always --cpfiles stageversion 0.9.11
+EOF
 }
 
-[ "$#" -eq 0 ] && usage
+function ensure_images_exist() {
+    docker image inspect pgstac >/dev/null 2>&1 && docker image inspect pypgstac >/dev/null 2>&1
+}
 
-ARGS=($@)
+function wait_for_pgstac() {
+    local attempts=60
+    local status=""
+    local container_id=""
+
+    while [[ $attempts -gt 0 ]]; do
+        container_id=$(docker compose ps -q pgstac 2>/dev/null || true)
+        status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+
+        if [[ "$status" == "healthy" || "$status" == "running" ]]; then
+            return 0
+        fi
+
+        attempts=$((attempts - 1))
+        sleep 1
+    done
+
+    echo "Timed out waiting for pgstac to become ready." >&2
+    return 1
+}
+
+[ "$#" -eq 0 ] && usage && exit 1
+
 CONTAINER_ARGS=()
-for ARG in "${ARGS[@]}"
-do
-    if [[ $ARG == "--no-cache" ]]; then
-        BUILD=1
-        NOCACHE="--no-cache"
-    elif [[ $ARG == "--build" ]]; then
-        BUILD=1
-    elif [[ $ARG == "--cpfiles" ]]; then
-        CPFILES=1
-    else
-        CONTAINER_ARGS+=($ARG)
-    fi
+BUILD_POLICY="${PGSTAC_BUILD_POLICY:-missing}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build)
+            BUILD_POLICY="always"
+            shift
+            ;;
+        --build-policy)
+            BUILD_POLICY="$2"
+            shift 2
+            ;;
+        --no-cache)
+            NOCACHE="--no-cache"
+            shift
+            ;;
+        --cpfiles)
+            CPFILES=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
 done
-if [[ $BUILD == 1 ]]; then
-    echo "Building docker images..."
-    docker compose down -v --remove-orphans
-    docker compose build $NOCACHE
-    docker compose up -d pgstac
-    sleep 4
+
+CONTAINER_ARGS=("$@")
+
+if [[ ${#CONTAINER_ARGS[@]} -eq 0 ]]; then
+    usage
+    exit 1
 fi
+
+case "$BUILD_POLICY" in
+    always|missing|never)
+        ;;
+    *)
+        echo "Invalid build policy: $BUILD_POLICY" >&2
+        usage
+        exit 1
+        ;;
+esac
+
+if [[ -n "$NOCACHE" && "$BUILD_POLICY" == "never" ]]; then
+    echo "--no-cache cannot be used with --build-policy never." >&2
+    exit 1
+fi
+
+if [[ "$BUILD_POLICY" == "always" || ( "$BUILD_POLICY" == "missing" && ! ensure_images_exist ) ]]; then
+    echo "Building docker images..."
+    ensure_env_file
+    docker compose build ${NOCACHE}
+fi
+
+ensure_env_file
 PGSTAC_RUNNING=$(docker compose ps pgstac --status running -q)
 echo "PGSTAC_RUNNING=$PGSTAC_RUNNING"
+
+if [[ -z "$PGSTAC_RUNNING" ]]; then
+    docker compose up -d pgstac
+    wait_for_pgstac
+fi
+
 if [[ $CPFILES == 1 ]]; then
-    echo "Checking if pypgstacworker is running"
-    docker ps | grep pypgstacworker && echo "Killing pypgstacworker" && docker kill pypgstacworker || echo "pypgstac worker not running"
     echo "Running pypgstac worker"
-    docker compose run -d --rm --name pypgstacworker pypgstac /bin/bash
+    WORKER_ID=$(docker compose run -d --rm pypgstac tail -f /dev/null)
     echo "Executing ${CONTAINER_ARGS[@]} in pypgstac worker"
-    docker compose exec pypgstac "${CONTAINER_ARGS[@]}"
+    docker exec "$WORKER_ID" "${CONTAINER_ARGS[@]}"
     echo "copying datafiles to host"
-    docker cp pypgstacworker:/opt/src $SCRIPT_DIR/..
+    docker cp "$WORKER_ID":/opt/src $SCRIPT_DIR/..
     echo "killing pypgstac worker"
-    docker kill pypgstacworker
+    docker kill "$WORKER_ID" >/dev/null
 else
     echo "Running ${CONTAINER_ARGS[@]} in pypgstacworker"
     docker compose run -T --rm pypgstac "${CONTAINER_ARGS[@]}"

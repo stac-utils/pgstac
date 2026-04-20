@@ -1,4 +1,55 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
-$SCRIPT_DIR/runinpypgstac --build --cpfiles stageversion "$@"
+
+function usage() {
+	cat <<EOF
+Usage: $(basename "$0") [options] [version]
+
+Run the in-container stageversion script and copy generated files back to the host.
+
+Options:
+  --build-policy POLICY   One of: always, missing, never. Default: always.
+  --no-cache              Rebuild without Docker layer cache.
+  -h, --help              Show this help text.
+
+Environment:
+  PGSTAC_VERSION          Default version if no positional version is provided.
+  PGSTAC_BUILD_POLICY     Default build policy.
+EOF
+}
+
+BUILD_POLICY="${PGSTAC_BUILD_POLICY:-always}"
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--build-policy)
+			BUILD_POLICY="$2"
+			shift 2
+			;;
+		--no-cache)
+			NO_CACHE="--no-cache"
+			shift
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			POSITIONAL+=("$1")
+			shift
+			;;
+	esac
+done
+
+if [[ ${#POSITIONAL[@]} -eq 0 && -n "${PGSTAC_VERSION:-}" ]]; then
+	POSITIONAL=("$PGSTAC_VERSION")
+fi
+
+RUN_ARGS=(--build-policy "$BUILD_POLICY")
+[[ -n "$NO_CACHE" ]] && RUN_ARGS+=("$NO_CACHE")
+RUN_ARGS+=(--cpfiles stageversion)
+RUN_ARGS+=("${POSITIONAL[@]}")
+
+$SCRIPT_DIR/runinpypgstac "${RUN_ARGS[@]}"
