@@ -1,7 +1,8 @@
 services:
   pgstac:
-    container_name: pgstac
     image: pgstac
+    env_file:
+      - .env
     build:
       context: .
       network: host
@@ -9,20 +10,29 @@ services:
       target: pgstac
     platform: linux/amd64
     environment:
-      - POSTGRES_USER=username
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=postgis
-      - PGUSER=username
-      - PGPASSWORD=password
-      - PGDATABASE=postgis
+      - POSTGRES_USER=${POSTGRES_USER:-username}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=${POSTGRES_DB:-postgis}
+      - PGHOST=/var/run/postgresql
+      - PGPORT=5432
+      - PGUSER=${PGUSER:-username}
+      - PGPASSWORD=${PGPASSWORD:-password}
+      - PGDATABASE=${PGDATABASE:-postgis}
     ports:
-      - "5439:5432"
+      - "${PGPORT:-5439}:5432"
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
     command: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /var/run/postgresql -p 5432 -U ${PGUSER:-username} -d ${PGDATABASE:-postgis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
   pypgstac:
-    container_name: pypgstac
     image: pypgstac
+    env_file:
+      - .env
     build:
       context: .
       network: host
@@ -31,10 +41,12 @@ services:
     platform: linux/amd64
     environment:
       - PGHOST=pgstac
-      - PGUSER=username
-      - PGPASSWORD=password
-      - PGDATABASE=postgis
+      - PGPORT=5432
+      - PGUSER=${PGUSER:-username}
+      - PGPASSWORD=${PGPASSWORD:-password}
+      - PGDATABASE=${PGDATABASE:-postgis}
     depends_on:
-      - pgstac
+      pgstac:
+        condition: service_healthy
 volumes:
   pgstac-pgdata:
