@@ -17,17 +17,6 @@ repos:
     -   id: check-executables-have-shebangs
     -   id: check-symlinks
 
-
--   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 'v0.15.11'
-    hooks:
-    -   id: ruff
-        files: ^src/pypgstac/(src/pypgstac|tests)/.*\.py$
-        args: [--fix, --exit-non-zero-on-fix]
-    -   id: ruff-format
-        files: ^src/pypgstac/(src/pypgstac|tests)/.*\.py$
-
-
 -   repo: local
     hooks:
     -   id: dockerbuild
@@ -55,7 +44,7 @@ repos:
         pass_filenames: false
         verbose: true
         fail_fast: true
-        always_run: true
+        files: ^(src/pypgstac/(src/pypgstac|tests)/.*\.py|src/pypgstac/pyproject\.toml)$
     -   id: pypgstac
         name: pypgstac
         entry: scripts/test

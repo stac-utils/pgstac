@@ -61,7 +61,7 @@ function test_formatting(){
     ruff format --check src/pypgstac tests
 
     echo "Running ty"
-    ty check src/pypgstac
+    ty check
 
     echo "Checking if there are any staged migrations."
     find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }

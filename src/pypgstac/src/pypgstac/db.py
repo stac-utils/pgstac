@@ -1,4 +1,5 @@
 """Base library for database interaction with PgSTAC."""
+
 import atexit
 import logging
 import time
@@ -10,12 +11,7 @@ import psycopg
 from psycopg import Connection, sql
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-
-try:
-    from pydantic.v1 import BaseSettings  # type:ignore
-except ImportError:
-    from pydantic import BaseSettings  # type:ignore
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 logger = logging.getLogger(__name__)
@@ -46,7 +42,7 @@ class Settings(BaseSettings):
     db_num_workers: int = 1
     db_retries: int = 3
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
@@ -280,9 +276,11 @@ class PgstacDB:
         if isinstance(version, str):
             if int(version) < 130000:
                 major, minor, patch = tuple(
-                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                    map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
-                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
+                raise Exception(
+                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}"
+                )  # noqa: E501
             return version
         else:
             if self.connection is not None:
