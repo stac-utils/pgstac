@@ -1,0 +1,64 @@
+#!/bin/bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR/..
+
+function usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options]
+
+Run the in-container makemigration helper.
+
+Options:
+  -f, --from VERSION      Source base version.
+  -t, --to VERSION        Target base version.
+  -o, --overwrite         Replace an existing migration file.
+  -d, --debug             Print the generated migra SQL before wrapping it.
+  --build-policy POLICY   One of: always, missing, never. Default: always.
+  -h, --help              Show this help text.
+
+Environment:
+  PGSTAC_FROM_VERSION     Default source version.
+  PGSTAC_TO_VERSION       Default target version.
+  PGSTAC_OVERWRITE        Set to 1 to imply --overwrite.
+  PGSTAC_DEBUG            Set to 1 to imply --debug.
+  PGSTAC_BUILD_POLICY     Default build policy.
+EOF
+}
+
+BUILD_POLICY="${PGSTAC_BUILD_POLICY:-always}"
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build-policy)
+            BUILD_POLICY="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ -n "${PGSTAC_FROM_VERSION:-}" ]]; then
+    POSITIONAL=(-f "$PGSTAC_FROM_VERSION" "${POSITIONAL[@]}")
+fi
+
+if [[ -n "${PGSTAC_TO_VERSION:-}" ]]; then
+    POSITIONAL=(-t "$PGSTAC_TO_VERSION" "${POSITIONAL[@]}")
+fi
+
+if [[ "${PGSTAC_OVERWRITE:-0}" == "1" ]]; then
+    POSITIONAL=(--overwrite "${POSITIONAL[@]}")
+fi
+
+if [[ "${PGSTAC_DEBUG:-0}" == "1" ]]; then
+    POSITIONAL=(--debug "${POSITIONAL[@]}")
+fi
+
+$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" makemigration "${POSITIONAL[@]}"

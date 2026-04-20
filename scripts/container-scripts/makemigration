@@ -1,6 +1,6 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-SRCDIR=$SCRIPT_DIR/../../../src
+SRCDIR=${PGSTAC_REPO_DIR:-/opt/src}
 cd $SRCDIR
 
 SHORT=f:,t:,o,d,h
@@ -29,8 +29,23 @@ do
       shift 1
       ;;
     -h | --help)
-      "Help"
-      exit 2
+      cat <<EOF
+Usage: $(basename "$0") -f VERSION -t VERSION [options]
+
+Options:
+  -f, --from VERSION    Source base version.
+  -t, --to VERSION      Target base version.
+  -o, --overwrite       Replace an existing migration file.
+  -d, --debug           Print the generated migra SQL before wrapping it.
+  -h, --help            Show this help text.
+
+Environment:
+  PGSTAC_FROM_VERSION   Default source version.
+  PGSTAC_TO_VERSION     Default target version.
+  PGSTAC_OVERWRITE      Set to 1 to imply --overwrite.
+  PGSTAC_DEBUG          Set to 1 to imply --debug.
+EOF
+      exit 0
       ;;
     --)
       shift;
@@ -43,6 +58,16 @@ do
 done
 
 # make sure that from and to exist
+
+FROM=${FROM:-${PGSTAC_FROM_VERSION:-}}
+TO=${TO:-${PGSTAC_TO_VERSION:-}}
+[[ "${PGSTAC_OVERWRITE:-0}" == "1" ]] && OVERWRITE=1
+[[ "${PGSTAC_DEBUG:-0}" == "1" ]] && DEBUG=1
+
+if [[ -z "$FROM" || -z "$TO" ]]; then
+  echo "Both --from and --to are required." >&2
+  exit 1
+fi
 
 
 
@@ -72,13 +97,8 @@ fi
 MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM-$TO.sql
 if [[ -f "$MIGRATIONSQL" ]]; then
   if [[ "$OVERWRITE" != 1 ]]; then
-    echo "$MIGRATIONSQL Already exists."
-    select yn in "Yes" "No"; do
-      case $yn in
-        Yes ) break;;
-        No ) exit 1;;
-      esac
-    done
+    echo "ERROR: $MIGRATIONSQL already exists. Use --overwrite to replace." >&2
+    exit 1
   else
     echo "Removing existing $MIGRATIONSQL"
     rm $MIGRATIONSQL

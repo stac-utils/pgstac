@@ -1,19 +1,41 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-SRCDIR=$SCRIPT_DIR/../../../src
+SRCDIR=${PGSTAC_REPO_DIR:-/opt/src}
 cd $SRCDIR
 BASEDIR=$SRCDIR
 SQLDIR=$BASEDIR/pgstac/sql
 PYPGSTACDIR=$BASEDIR/pypgstac
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
 
+function usage() {
+        cat <<EOF
+Usage: $(basename "$0") [version]
+
+Create a new base migration, update pypgstac version metadata, and generate the
+incremental migration via makemigration.
+
+Environment:
+    PGSTAC_VERSION   Default version when no positional version is provided.
+EOF
+}
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+        usage
+        exit 0
+fi
+
 
 # Remove any existing unreleased migrations
 find $MIGRATIONSDIR -name "*unreleased*" -exec rm {} \;
 
 # Get Version
-if [[ ! -z "$1" ]]; then
+if [[ -n "$1" ]]; then
     VERSION=$1
+elif [[ -n "${PGSTAC_VERSION:-}" ]]; then
+    VERSION=$PGSTAC_VERSION
+fi
+
+if [[ -n "$VERSION" ]]; then
     if echo "$VERSION" | grep -E "^[0-9]+[.][0-9]+[.][0-9]+$"; then
         echo "STAGING VERSION: $VERSION"
     else
