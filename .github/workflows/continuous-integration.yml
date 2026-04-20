@@ -131,7 +131,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends postgresql-client-17
-      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
         run: uv pip install ${{ matrix.flags }} .[dev,test,psycopg]
