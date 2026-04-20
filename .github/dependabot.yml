@@ -5,11 +5,50 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 5
     groups:
-      minor-and-patch:
+      actions-all:
         applies-to: version-updates
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      docker-base-images:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directory: "/src/pypgstac"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      python-dev-tooling:
+        applies-to: version-updates
+        patterns:
+          - "ruff"
+          - "ty"
+          - "pre-commit"
+          - "types-*"
+      python-runtime:
+        applies-to: version-updates
+        patterns:
+          - "cachetools"
+          - "fire"
+          - "hydraters"
+          - "orjson"
+          - "plpygis"
+          - "pydantic"
+          - "python-dateutil"
+          - "smart-open"
+          - "tenacity"
+          - "version-parser"
+          - "psycopg*"
