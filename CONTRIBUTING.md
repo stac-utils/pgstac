@@ -1,10 +1,10 @@
 # Development - Contributing
 
-PgSTAC uses a dockerized development environment. However,
-it still needs a local install of pypgstac to allow an editable
-install inside the docker container. This is installed automatically
-if you have set up a virtual environment for the project. Otherwise
-you'll need to install a local copy yourself by running `scripts/install`.
+PgSTAC uses a dockerized development environment.
+
+Local-only planning notes now live under `.plans/` and are intentionally gitignored.
+If you keep local execution settings, start from `.env.example` and write overrides to
+`.env`.
 
 To build the docker images and set up the test database, use:
 
@@ -22,10 +22,33 @@ To run tests, use:
 scripts/test
 ```
 
+To set up pre-commit using the project uv workflow:
+
+```bash
+uv tool install pre-commit==3.5.0
+pre-commit install
+```
+
+Useful options:
+
+```bash
+scripts/test --fast
+scripts/test --pypgstac
+scripts/test --build-policy always
+```
+
+`scripts/test` defaults to `PGSTAC_BUILD_POLICY=always` so the container image reflects
+your current checkout. If you intentionally want to reuse an existing image, set
+`PGSTAC_BUILD_POLICY=missing` or pass `--build-policy missing`.
+
 To rebuild docker images:
 ```bash
 scripts/update
 ```
+
+Container-only helper scripts now live in `scripts/container-scripts/` and are copied
+into the `pypgstac` image during build. Top-level `scripts/` remain the host-facing
+entrypoint surface.
 
 To drop into a console, use
 ```bash
@@ -45,6 +68,12 @@ scripts/migrate
 To stage code and configurations and create template migrations for a version release, use
 ```bash
 scripts/stageversion [version]
+```
+
+To generate only the incremental migration, use:
+
+```bash
+scripts/makemigration --from 0.9.10 --to 0.9.11
 ```
 
 Examples:
@@ -71,7 +100,7 @@ PyPgSTAC tests are pytest tests, and they are located in `/src/pypgstac/tests`
 
 All tests can be found in tests/pgtap.sql and are run using `scripts/test`.
 
-Individual tests can be run with any combination of the following flags `--formatting --basicsql --pgtap --migrations --pypgstac`. If pre-commit is installed, tests will be run on commit based on which files have changed.
+Individual tests can be run with any combination of the following flags `--formatting --basicsql --pgtap --migrations --pypgstac`. The `--formatting` suite runs Ruff lint/format checks and Ty type checks. If pre-commit is installed, tests will be run on commit based on which files have changed.
 
 
 ### To make a PR
