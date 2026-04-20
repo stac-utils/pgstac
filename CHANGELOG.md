@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   on first run) and `first_available_pgport` (avoids port collisions on shared machines).
 - `scripts/test` expanded from a 3-line wrapper to a full-featured test runner supporting
   `--fast`, `--watch`, `--build-policy`, `--no-strict`, and stale-image detection.
-- PostgreSQL 16, 17, and 18-beta added to the CI and Docker build matrix.
-- Daily scheduled CI run (`cron: '23 4 * * *'`) to catch upstream base-image CVEs without
-  requiring a code change.
+- PostgreSQL 16, 17, and 18-beta added to the CI and Docker build matrix. (Closes #334)
+- Weekly scheduled CI run (`cron: '23 4 * * 0'`) to catch upstream base-image CVEs without
+  requiring a code change. (Closes #202)
 - `workflow_dispatch` trigger for manual CI runs.
 - `pg_tle` v1.5.2 built and pre-loaded in the `pgstacbase` image; database init runs
   `CREATE EXTENSION IF NOT EXISTS pg_tle`.
@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
 - `docker/pgstac/Dockerfile` and `docker/pypgstac/Dockerfile` base images updated from
-  `bullseye` to `trixie`.
+  `bullseye` to `trixie`. (Closes #231)
 - All Docker `RUN` layers now use BuildKit cache mounts for apt, uv, and git caches,
   significantly reducing incremental rebuild times.
 - `docker-compose.yml`: adds `env_file: .env`, explicit `PGHOST`/`PGPORT` defaults,
@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `--build` flag; `PGSTAC_BUILD_POLICY` env var provides a persistent default.
 - Dev tooling: `flake8`, `black`, and `mypy` removed in favour of `ruff==0.15.11` and
   `ty==0.0.31`. `pre-commit` pinned to `3.5.0`. `pre-commit-hooks` updated to v5.0.0.
+- `pypgstac` package floor raised to Python 3.11; metadata now advertises 3.11-3.14.
+- `pypgstac` settings now use `pydantic-settings` (`BaseSettings` from
+  `pydantic_settings`) and require `pydantic>=2,<3`.
+- `cachetools` upper bound removed (`cachetools>=5.3.0`) since `pypgstac` only uses
+  `cachetools.func.lru_cache`; no known incompatible API changes affect this usage.
+- `pypgstac` developer tooling config now consistently targets Ruff + ty:
+  removes stale mypy config, pins Ruff to `0.15.11` to match pre-commit,
+  and adds minimal `[tool.ty]` project settings.
+- Formatting/type-check pipeline now uses `scripts/test --formatting` as the
+  single pre-commit entry point (removing duplicate direct Ruff pre-commit hooks)
+  and aligns Ruff line-length handling with the formatter (`E501` ignored;
+  explicit `line-length = 88`).
 - GitHub Actions updated: `dorny/paths-filter` v2→v3, `docker/build-push-action`
   v4→v6, `astral-sh/setup-uv` v8.0.0→v8.1.0; all SHA pins refreshed.
 - Dependabot groups reworked: `actions-all` (replaces `minor-and-patch`), new
@@ -55,7 +67,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Removed
 - PL/Rust support: `pgstacbase-plrust` and `pgstac-plrust` Docker targets removed; the
-  pgstac image no longer builds or ships PL/Rust or the Rust toolchain.
+  pgstac image no longer builds or ships PL/Rust or the Rust toolchain. (Closes #339)
 - `docker/pgstac/dbinit/docker-entrypoint.sh`, `pgstac-rust-preinit.sh`, and
   `pgstac-rust.sh` deleted (were PL/Rust entrypoint scripts).
 - `docker/pypgstac/bin/` deleted (scripts moved to `scripts/container-scripts/`).
@@ -66,6 +78,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   constants (instead of naive `datetime.min` / `datetime.max`) to avoid
   `TypeError: can't compare offset-naive and offset-aware datetimes`.
 
+
+## [v0.9.11]
 
 
 ### Fixed
