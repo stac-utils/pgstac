@@ -134,6 +134,7 @@ jobs:
         PGHOST: postgres
         PGDATABASE: postgres
         PGUSER: postgres
+        UV_CACHE_DIR: /tmp/.uv-cache
     services:
       postgres:
         env:
@@ -158,9 +159,13 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
-        run: uv pip install ${{ matrix.flags }} .[dev,test,psycopg]
-        env:
-          UV_SYSTEM_PYTHON: 1
+        run: |
+          export UV_CACHE_DIR=/tmp/.uv-cache
+          export XDG_CACHE_HOME=/tmp/.cache
+          mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME"
+          uv --cache-dir "$UV_CACHE_DIR" venv /tmp/ci-venv
+          uv --cache-dir "$UV_CACHE_DIR" pip install --python /tmp/ci-venv/bin/python ${{ matrix.flags }} .[dev,test,psycopg]
+          echo "/tmp/ci-venv/bin" >> "$GITHUB_PATH"
       - name: Run tests
         working-directory: /__w/pgstac/pgstac
         run: scripts/container-scripts/test

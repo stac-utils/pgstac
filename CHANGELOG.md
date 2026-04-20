@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `load.py`: Use timezone-aware `MIN_DATETIME_UTC` / `MAX_DATETIME_UTC` sentinel
   constants (instead of naive `datetime.min` / `datetime.max`) to avoid
   `TypeError: can't compare offset-naive and offset-aware datetimes`.
+- CI `lowest-direct` dependency install: avoid uv cache permission failures by using
+  a writable temp cache path in the test job install step.
+- `pypgstac` dependency floor for `orjson` raised to `>=3.11.0` to avoid selecting
+  the broken `3.9.0` sdist under `--resolution lowest-direct`.
+- `pydantic` minimum raised to `>=2.10` so `--resolution lowest-direct` on Python 3.13
+  does not resolve to `pydantic-core==2.0.1`, which fails to build.
 
 
 ## [v0.9.11]
