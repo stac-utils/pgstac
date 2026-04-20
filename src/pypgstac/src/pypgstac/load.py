@@ -7,7 +7,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -43,6 +43,9 @@ from .hydration import dehydrate
 from .version import __version__
 
 logger = logging.getLogger(__name__)
+
+MIN_DATETIME_UTC = datetime.min.replace(tzinfo=timezone.utc)
+MAX_DATETIME_UTC = datetime.max.replace(tzinfo=timezone.utc)
 
 
 def _normalize_version_for_parse(version: str) -> str:
@@ -527,10 +530,10 @@ class Loader:
                 ),
             )
             if db_rows:
-                datetime_range_min: datetime = db_rows[0][0] or datetime.min
-                datetime_range_max: datetime = db_rows[0][1] or datetime.max
-                end_datetime_range_min: datetime = db_rows[0][2] or datetime.min
-                end_datetime_range_max: datetime = db_rows[0][3] or datetime.max
+                datetime_range_min: datetime = db_rows[0][0] or MIN_DATETIME_UTC
+                datetime_range_max: datetime = db_rows[0][1] or MAX_DATETIME_UTC
+                end_datetime_range_min: datetime = db_rows[0][2] or MIN_DATETIME_UTC
+                end_datetime_range_max: datetime = db_rows[0][3] or MAX_DATETIME_UTC
 
                 partition = Partition(
                     name=partition_name,
