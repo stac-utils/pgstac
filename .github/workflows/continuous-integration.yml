@@ -149,7 +149,12 @@ jobs:
       - name: Ensure PostgreSQL client tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends postgresql-client-${{ matrix.pg_major }}
+          pg_client_pkg="postgresql-client-${{ matrix.pg_major }}"
+          if apt-cache show "$pg_client_pkg" >/dev/null 2>&1; then
+            apt-get install -y --no-install-recommends "$pg_client_pkg"
+          else
+            apt-get install -y --no-install-recommends postgresql-client
+          fi
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Install pypgstac
         working-directory: /__w/pgstac/pgstac/src/pypgstac
