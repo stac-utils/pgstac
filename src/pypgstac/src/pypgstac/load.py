@@ -44,8 +44,8 @@ from .version import __version__
 
 logger = logging.getLogger(__name__)
 
-MIN_DATETIME_UTC = datetime.min.replace(tzinfo=timezone.utc)
-MAX_DATETIME_UTC = datetime.max.replace(tzinfo=timezone.utc)
+MIN_DATETIME_UTC = datetime.min.replace(tzinfo=UTC)
+MAX_DATETIME_UTC = datetime.max.replace(tzinfo=UTC)
 
 
 def _normalize_version_for_parse(version: str) -> str:
