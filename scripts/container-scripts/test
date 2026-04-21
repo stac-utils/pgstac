@@ -3,7 +3,17 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 REPO_DIR=${PGSTAC_REPO_DIR:-/opt/src}
 export PATH="$SCRIPT_DIR:$PATH"
-export SRCDIR=$REPO_DIR
+if [[ -d "$REPO_DIR/pgstac" && -d "$REPO_DIR/pypgstac" ]]; then
+    export SRCDIR="$REPO_DIR"
+elif [[ -d "$REPO_DIR/src/pgstac" && -d "$REPO_DIR/src/pypgstac" ]]; then
+    export SRCDIR="$REPO_DIR/src"
+elif [[ -d "$SCRIPT_DIR/../../src/pgstac" && -d "$SCRIPT_DIR/../../src/pypgstac" ]]; then
+    export SRCDIR="$(cd "$SCRIPT_DIR/../../src" && pwd)"
+else
+    echo "Unable to find pgstac/pypgstac sources under '$REPO_DIR'." >&2
+    echo "Set PGSTAC_REPO_DIR to either a directory containing pgstac/ and pypgstac/ or a repository root containing src/pgstac and src/pypgstac." >&2
+    exit 1
+fi
 export PGSTACDIR=$SRCDIR/pgstac
 
 if [[ "${CI}" ]]; then
