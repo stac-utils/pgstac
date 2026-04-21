@@ -7,7 +7,6 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterator, List, Optional, cast
 
-from psycopg.abc import QueryNoTemplate
 from smart_open import open
 
 from . import __version__
@@ -158,7 +157,7 @@ class Migrate:
                 logger.debug(f"Running migration file {file}.")
                 migration_sql = get_sql(file)
                 # Migration SQL is loaded from trusted local migration files.
-                cur.execute(cast(QueryNoTemplate, migration_sql))
+                cur.execute(cast(Any, migration_sql))
                 logger.debug(cur.statusmessage)
                 logger.debug(cur.rowcount)
 

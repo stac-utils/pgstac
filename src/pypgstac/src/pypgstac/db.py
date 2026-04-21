@@ -3,13 +3,14 @@
 import atexit
 import logging
 import time
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Generator, Optional, Tuple, Type, Union
 
 import orjson
 import psycopg
 from psycopg import Connection, rows, sql
-from psycopg.abc import Params, QueryNoTemplate
+from psycopg.abc import Params
 from psycopg.types import json as psycopg_json
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
@@ -44,7 +45,7 @@ class Settings(BaseSettings):
     db_num_workers: int = 1
     db_retries: int = 3
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=Path(".env"), extra="ignore")
 
 
 settings = Settings()
@@ -191,7 +192,7 @@ class PgstacDB:
     )
     def query(
         self,
-        query: QueryNoTemplate,
+        query: Any,
         args: Optional[Params] = None,
         row_factory: rows.BaseRowFactory = rows.tuple_row,
     ) -> Generator:
