@@ -1,10 +1,12 @@
 """Utilities to help migrate pgstac schema."""
+
 import glob
 import logging
 import os
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any, cast
 
 from smart_open import open
 
@@ -33,10 +35,11 @@ class MigrationPath:
         self.f = f
         self.t = t
 
-    def parse_filename(self, filename: str) -> List[str]:
+    def parse_filename(self, filename: str) -> list[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", "",
+            "pgstac.",
+            "",
         )
         return filename.split("-")
 
@@ -45,7 +48,7 @@ class MigrationPath:
         path = self.path.rstrip("/")
         return glob.iglob(f"{path}/*.sql")
 
-    def build_graph(self) -> Dict:
+    def build_graph(self) -> dict[str, list[str]]:
         """Build a graph to get from one version to another."""
         graph = defaultdict(list)
         for file in self.get_files():
@@ -56,10 +59,10 @@ class MigrationPath:
                 graph["init"].append(parts[0])
         return graph
 
-    def build_path(self) -> Optional[List[str]]:
+    def build_path(self) -> list[str] | None:
         """Create the path of ordered files needed to migrate."""
         graph = self.build_graph()
-        explored: List = []
+        explored: list[str] = []
         q = [[self.f]]
 
         while q:
@@ -76,7 +79,7 @@ class MigrationPath:
                 explored.append(node)
         return None
 
-    def migrations(self) -> List[str]:
+    def migrations(self) -> list[str]:
         """Return the list of migrations needed in order."""
         path = self.build_path()
         if path is None:
@@ -87,16 +90,16 @@ class MigrationPath:
             return [f"pgstac.{path[0]}.sql"]
         files = []
         for idx in range(len(path) - 1):
-            f = f"pgstac.{path[idx]}-{path[idx+1]}.sql"
+            f = f"pgstac.{path[idx]}-{path[idx + 1]}.sql"
             f = f.replace("--init", "")
-            files.append(f"pgstac.{path[idx]}-{path[idx+1]}.sql")
+            files.append(f"pgstac.{path[idx]}-{path[idx + 1]}.sql")
         return files
 
 
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
-    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -113,12 +116,12 @@ class Migrate:
         self.db = db
         self.schema = schema
 
-    def run_migration(self, toversion: Optional[str] = None) -> str:
+    def run_migration(self, toversion: str | None = None) -> str:
         """Migrate a pgstac database to current version."""
         if toversion is None:
             toversion = __version__
         files = []
-        if re.search(r"-dev$",toversion):
+        if re.search(r"-dev$", toversion):
             logger.info("using unreleased version")
             toversion = "unreleased"
 
@@ -126,7 +129,7 @@ class Migrate:
             map(
                 int,
                 [
-                    self.db.pg_version[i:i + 2]
+                    self.db.pg_version[i : i + 2]
                     for i in range(0, len(self.db.pg_version), 2)
                 ],
             ),
@@ -154,7 +157,8 @@ class Migrate:
             for file in files:
                 logger.debug(f"Running migration file {file}.")
                 migration_sql = get_sql(file)
-                cur.execute(migration_sql)
+                # Migration SQL is loaded from trusted local migration files.
+                cur.execute(cast(Any, migration_sql))
                 logger.debug(cur.statusmessage)
                 logger.debug(cur.rowcount)
 
@@ -171,5 +175,6 @@ class Migrate:
                 )
 
         logger.debug(f"New Version: {newversion}")
-
+        if newversion is None:
+            raise Exception("Migration failed to report a new version.")
         return newversion

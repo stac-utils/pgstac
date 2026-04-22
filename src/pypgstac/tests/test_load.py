@@ -496,6 +496,7 @@ def test_valid_srid(loader: Loader) -> None:
         SELECT st_srid(geometry) from items LIMIT 1;
     """,
     )
+    assert isinstance(srid, int)
     assert srid > 0
 
 
@@ -600,10 +601,10 @@ def test_load_items_concurrent_new_loader_per_item(db: PgstacDB) -> None:
     # Report any errors from threads
     if errors:
         error_msgs = [f"Item {idx}: {type(e).__name__}: {e}" for idx, e in errors]
-        pytest.fail(
-            f"{len(errors)}/{num_items} concurrent loads failed:\n"
-            + "\n".join(error_msgs),
+        message = f"{len(errors)}/{num_items} concurrent loads failed:\n" + "\n".join(
+            error_msgs,
         )
+        assert not errors, message
 
     count = db.query_one("SELECT count(*) FROM items;")
     assert count == num_items, (

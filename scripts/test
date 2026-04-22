@@ -1,3 +1,109 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-$SCRIPT_DIR/runinpypgstac --build test "$@"
+
+function usage() {
+	cat <<EOF
+Usage: $(basename "$0") [options] [test suite flags]
+
+Host wrapper for the in-container PgSTAC test runner.
+
+Options:
+  --fast                  Run formatting plus non-migration test suites.
+  --watch                 Re-run tests when files change.
+  --build-policy POLICY   One of: always, missing, never.
+  --no-strict             Allow stale-image shortcuts and watch fallback.
+  -h, --help              Show this help text.
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --fast
+  $(basename "$0") --pypgstac --build-policy always
+EOF
+}
+
+FAST="${PGSTAC_FAST:-0}"
+WATCH="${PGSTAC_WATCH:-0}"
+STRICT="${PGSTAC_STRICT:-1}"
+BUILD_POLICY="${PGSTAC_BUILD_POLICY:-always}"
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--fast)
+			FAST=1
+			shift
+			;;
+		--watch)
+			WATCH=1
+			shift
+			;;
+		--build-policy)
+			BUILD_POLICY="$2"
+			shift 2
+			;;
+		--no-strict)
+			STRICT=0
+			shift
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			POSITIONAL+=("$1")
+			shift
+			;;
+	esac
+done
+
+if [[ ${#POSITIONAL[@]} -eq 0 && $FAST -eq 1 ]]; then
+	POSITIONAL=(--formatting --nomigrations)
+fi
+
+function has_rebuild_sensitive_changes() {
+	local changed
+
+	changed=$(git -C "$SCRIPT_DIR/.." status --short -- scripts docker src 2>/dev/null || true)
+	[[ -n "$changed" ]]
+}
+
+if [[ "$BUILD_POLICY" != "always" && $STRICT -eq 1 ]]; then
+	if [[ $WATCH -eq 1 ]]; then
+		echo "Watch mode requires --build-policy always unless --no-strict is set." >&2
+		exit 1
+	fi
+
+	if has_rebuild_sensitive_changes; then
+		echo "Refusing to run tests with build-policy '$BUILD_POLICY' while scripts/docker/src changes are present." >&2
+		echo "Use --build-policy always or --no-strict if you intentionally want to reuse an existing image." >&2
+		exit 1
+	fi
+fi
+
+RUN_ARGS=(--build-policy "$BUILD_POLICY" test)
+RUN_ARGS+=("${POSITIONAL[@]}")
+
+function run_once() {
+	"$SCRIPT_DIR/runinpypgstac" "${RUN_ARGS[@]}"
+}
+
+if [[ $WATCH -eq 1 ]]; then
+	if ! command -v inotifywait >/dev/null 2>&1; then
+		if [[ $STRICT -eq 1 ]]; then
+			echo "Watch mode requires inotifywait (from inotify-tools)." >&2
+			exit 1
+		fi
+
+		echo "Watch mode requested but inotifywait is unavailable; running tests once because --no-strict was set." >&2
+		run_once
+		exit $?
+	fi
+
+	while true; do
+		run_once || true
+		echo "Waiting for file changes..."
+		inotifywait -qq -r -e close_write,create,delete,move "$SCRIPT_DIR/.."/scripts "$SCRIPT_DIR/.."/docker "$SCRIPT_DIR/.."/src "$SCRIPT_DIR/.."/.github "$SCRIPT_DIR/.."/CONTRIBUTING.md "$SCRIPT_DIR/.."/CLAUDE.md
+	done
+fi
+
+run_once

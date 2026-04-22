@@ -9,3 +9,28 @@ set -e
 if [[ "${CI}" ]]; then
     set -x
 fi
+
+function first_available_pgport() {
+    local port
+
+    for port in 5439 5440 5441 5442 5443 5444 5445; do
+        if ! ss -ltn "( sport = :$port )" 2>/dev/null | tail -n +2 | grep -q .; then
+            echo "$port"
+            return 0
+        fi
+    done
+
+    echo 5439
+}
+
+function ensure_env_file() {
+    if [[ ! -f .env && -f .env.example ]]; then
+        cp .env.example .env
+        local selected_port
+        selected_port=$(first_available_pgport)
+        if [[ "$selected_port" != "5439" ]]; then
+            sed -i "s/^PGPORT=.*/PGPORT=${selected_port}/" .env
+        fi
+        echo "Created .env from .env.example"
+    fi
+}

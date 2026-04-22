@@ -1,6 +1,7 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
+source "$SCRIPT_DIR/pgstacenv"
 set -e
 
 if [[ "${CI}" ]]; then
@@ -8,13 +9,17 @@ if [[ "${CI}" ]]; then
 fi
 
 function usage() {
-    echo $1
+    if [[ -n "$1" ]]; then
+        echo "$1" >&2
+        echo >&2
+    fi
 
     echo -n \
-        "Usage: $(basename "$0") [--detach]
+        "Usage: $(basename "$0") [--detach] [--no-cache] [--help]
 Runs the development database.
 
 --detach: Run in detached mode.
+--no-cache: Rebuild container images from scratch before startup.
 "
 }
 
@@ -25,15 +30,22 @@ while [[ "$#" > 0 ]]; do case $1 in
         DETACH_ARG="--detach"
         shift
         ;;
-    --help)
-        usage
-        exit 0
+    --no-cache)
+        NO_CACHE="--no-cache"
         shift
         ;;
-    *) break ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage "Unknown option: $1"
+        exit 1
+        ;;
     esac; done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    docker compose build
+    ensure_env_file
+    docker compose build ${NO_CACHE}
     docker compose up ${DETACH_ARG} $@
 fi

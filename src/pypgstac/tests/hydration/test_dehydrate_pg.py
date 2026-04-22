@@ -36,7 +36,9 @@ class TestDehydratePG(TDehydrate):
         os.environ["PGDATABASE"] = origdb
 
     def dehydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Dehydrate item using pgstac."""
         with self.db() as db:

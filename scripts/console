@@ -1,6 +1,7 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
+source "$SCRIPT_DIR/pgstacenv"
 set -e
 
 if [[ "${CI}" ]]; then
@@ -9,7 +10,7 @@ fi
 
 function usage() {
     echo -n \
-        "Usage: $(basename "$0") [--db]
+        "Usage: $(basename "$0") [--db] [--help]
 Start a console in the dev container
 
 --db: Instead, start a psql console in the database container.
@@ -21,14 +22,19 @@ while [[ "$#" > 0 ]]; do case $1 in
         DB_CONSOLE=1
         shift
         ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
     *)
-        usage "Unknown parameter passed: $1"
-        shift
-        shift
+        echo "Unknown parameter passed: $1" >&2
+        usage
+        exit 1
         ;;
     esac; done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    ensure_env_file
 
     docker compose up -d
 
@@ -39,6 +45,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
         exit 0
     fi
 
-    docker compose exec pgstac /bin/bash
+    docker compose exec pypgstac /bin/bash
 
 fi

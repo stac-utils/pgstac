@@ -1,6 +1,7 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR/..
+source "$SCRIPT_DIR/pgstacenv"
 set -e
 
 if [[ "${CI}" ]]; then
@@ -20,14 +21,15 @@ Builds the docker containers for this project.
 NO_CACHE="";
 while [[ "$#" > 0 ]]; do case $1 in
     --no-cache) NO_CACHE="--no-cache"; shift;;
-    --help) usage; exit 0; shift;;
-  *) usage "Unknown parameter passed: $1"; shift; shift;;
+        -h|--help) usage; exit 0;;
+    *) echo "Unknown parameter passed: $1" >&2; usage; exit 1;;
 esac; done
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
     echo "==Building images..."
 
+    ensure_env_file
     docker compose build ${NO_CACHE}
 
 fi

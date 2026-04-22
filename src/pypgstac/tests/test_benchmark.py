@@ -82,7 +82,7 @@ def search_hashes(loader: Loader) -> Dict[float, str]:
         }
 
         loader.load_collections(
-            [collection],
+            iter([collection]),
             insert_mode=Methods.insert,
         )
         loader.load_items(
@@ -145,6 +145,8 @@ def test1(
                         True,  # skipcovered
                     ),
                 )
-                _ = cursor.fetchone()[0]
+                row = cursor.fetchone()
+                assert row is not None
+                _ = row[0]
 
     _ = benchmark(xyzsearch_test)
