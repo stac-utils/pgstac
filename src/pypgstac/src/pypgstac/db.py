@@ -3,9 +3,10 @@
 import atexit
 import logging
 import time
+from collections.abc import Generator
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Generator, Optional, Tuple, Type, Union
+from typing import Any
 
 import orjson
 import psycopg
@@ -56,9 +57,9 @@ class PgstacDB:
 
     def __init__(
         self,
-        dsn: Optional[str] = "",
-        pool: Optional[ConnectionPool] = None,
-        connection: Optional[Connection] = None,
+        dsn: str | None = "",
+        pool: ConnectionPool | None = None,
+        connection: Connection | None = None,
         commit_on_exit: bool = True,
         debug: bool = False,
         use_queue: bool = False,
@@ -178,9 +179,9 @@ class PgstacDB:
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
         """Exit used for context."""
         self.disconnect()
@@ -193,7 +194,7 @@ class PgstacDB:
     def query(
         self,
         query: Any,
-        args: Optional[Params] = None,
+        args: Params | None = None,
         row_factory: rows.BaseRowFactory = rows.tuple_row,
     ) -> Generator:
         """Query the database with parameters."""
@@ -222,7 +223,7 @@ class PgstacDB:
                 conn.rollback()
             raise e
 
-    def query_one(self, *args: Any, **kwargs: Any) -> Union[Tuple, str, None]:
+    def query_one(self, *args: Any, **kwargs: Any) -> tuple[Any, ...] | str | None:
         """Return results from a query that returns a single row."""
         try:
             r = next(self.query(*args, **kwargs))
@@ -245,7 +246,7 @@ class PgstacDB:
             return f"Error Running Queued Queries: {e}"
 
     @property
-    def version(self) -> Optional[str]:
+    def version(self) -> str | None:
         """Get the current version number from a pgstac database."""
         try:
             version = self.query_one(
@@ -303,6 +304,6 @@ class PgstacDB:
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
-    def search(self, query: Union[dict, str, psycopg_json.Jsonb] = "{}") -> str:
+    def search(self, query: dict | str | psycopg_json.Jsonb = "{}") -> str:
         """Search PgSTAC."""
         return dumps(next(self.func("search", query))[0])

@@ -7,20 +7,16 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import (
     Any,
     BinaryIO,
-    Dict,
     Generator,
     Iterable,
     Iterator,
-    Optional,
     TextIO,
-    Tuple,
-    Union,
 )
 
 import orjson
@@ -67,7 +63,7 @@ class Partition:
     requires_update: bool
 
 
-def chunked_iterable(iterable: Iterable, size: Optional[int] = 10000) -> Iterable:
+def chunked_iterable(iterable: Iterable, size: int | None = 10000) -> Iterable:
     """Chunk an iterable."""
     it = iter(iterable)
     while True:
@@ -102,7 +98,7 @@ def open_std(
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
-    fh: Union[TextIO, BinaryIO]
+    fh: TextIO | BinaryIO
     if (
         filename is None
         or filename == "-"
@@ -126,7 +122,7 @@ def open_std(
                 pass
 
 
-def read_json(file: Union[Path, str, Iterator[Any]] = "stdin") -> Iterable:
+def read_json(file: Path | str | Iterator[Any] = "stdin") -> Iterable:
     """Load data from an ndjson or json file."""
     if file is None:
         file = "stdin"
@@ -166,11 +162,11 @@ class Loader:
     """Utilities for loading data."""
 
     db: PgstacDB
-    _partition_cache: Dict[str, Partition]
+    _partition_cache: dict[str, Partition]
 
     def __init__(self, db: PgstacDB):
         self.db = db
-        self._partition_cache: Dict[str, Partition] = {}
+        self._partition_cache: dict[str, Partition] = {}
 
     def check_version(self) -> None:
         db_version = self.db.version
@@ -192,7 +188,7 @@ class Loader:
                 )
 
     @lru_cache(maxsize=128)
-    def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
+    def collection_json(self, collection_id: str) -> tuple[dict[str, Any], int, str]:
         """Get collection."""
         res = self.db.query_one(
             "SELECT base_item, key, partition_trunc FROM collections WHERE id=%s",
@@ -211,8 +207,8 @@ class Loader:
 
     def load_collections(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
-        insert_mode: Optional[Methods] = Methods.insert,
+        file: Path | str | Iterator[Any] = "stdin",
+        insert_mode: Methods | None = Methods.insert,
     ) -> None:
         """Load a collections json or ndjson file."""
         self.check_version()
@@ -302,8 +298,8 @@ class Loader:
     def load_partition(
         self,
         partition: Partition,
-        items: Iterable[Dict[str, Any]],
-        insert_mode: Optional[Methods] = Methods.insert,
+        items: Iterable[dict[str, Any]],
+        insert_mode: Methods | None = Methods.insert,
     ) -> None:
         """Load items data for a single partition."""
         conn = self.db.connect()
@@ -489,7 +485,7 @@ class Loader:
             f"Copying data for {partition} took {time.perf_counter() - t} seconds",
         )
 
-    def _partition_update(self, item: Dict[str, Any]) -> str:
+    def _partition_update(self, item: dict[str, Any]) -> str:
         """Update the cached partition with the item information and return the name.
 
         This method will mark the partition as dirty if the bounds of the partition
@@ -510,7 +506,7 @@ class Loader:
 
         partition_name: str = p
 
-        partition: Optional[Partition] = None
+        partition: Partition | None = None
 
         if partition_name not in self._partition_cache:
             # Read the partition information from the database if it exists
@@ -580,7 +576,7 @@ class Loader:
 
         return partition_name
 
-    def read_dehydrated(self, file: Union[Path, str] = "stdin") -> Generator:
+    def read_dehydrated(self, file: Path | str = "stdin") -> Generator:
         if file is None:
             file = "stdin"
         if isinstance(file, str):
@@ -616,7 +612,7 @@ class Loader:
 
     def read_hydrated(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
+        file: Path | str | Iterator[Any] = "stdin",
     ) -> Generator:
         for line in read_json(file):
             item = self.format_item(line)
@@ -625,10 +621,10 @@ class Loader:
 
     def load_items(
         self,
-        file: Union[Path, str, Iterator[Any]] = "stdin",
-        insert_mode: Optional[Methods] = Methods.insert,
-        dehydrated: Optional[bool] = False,
-        chunksize: Optional[int] = 10000,
+        file: Path | str | Iterator[Any] = "stdin",
+        insert_mode: Methods | None = Methods.insert,
+        dehydrated: bool | None = False,
+        chunksize: int | None = 10000,
     ) -> None:
         """Load items json records."""
         self.check_version()
@@ -651,10 +647,10 @@ class Loader:
 
         logger.debug(f"Adding data to database took {time.perf_counter() - t} seconds.")
 
-    def format_item(self, _item: Union[Path, str, Dict[str, Any]]) -> Dict[str, Any]:
+    def format_item(self, _item: Path | str | dict[str, Any]) -> dict[str, Any]:
         """Format an item to insert into a record."""
-        out: Dict[str, Any] = {}
-        item: Dict[str, Any]
+        out: dict[str, Any] = {}
+        item: dict[str, Any]
         if not isinstance(_item, dict):
             try:
                 item = orjson.loads(str(_item).replace("\\\\", "\\"))
@@ -667,11 +663,11 @@ class Loader:
 
         out["id"] = item.get("id")
         out["collection"] = item.get("collection")
-        properties: Dict[str, Any] = item.get("properties", {})
+        properties: dict[str, Any] = item.get("properties", {})
 
-        dt: Optional[str] = properties.get("datetime")
-        edt: Optional[str] = properties.get("end_datetime")
-        sdt: Optional[str] = properties.get("start_datetime")
+        dt: str | None = properties.get("datetime")
+        edt: str | None = properties.get("end_datetime")
+        sdt: str | None = properties.get("start_datetime")
 
         if edt is not None and sdt is not None:
             out["datetime"] = sdt

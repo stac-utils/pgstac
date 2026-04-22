@@ -1,7 +1,7 @@
 """Hydrate data in pypgstac rather than on the database."""
 
 from copy import deepcopy
-from typing import Any, Dict, Mapping, cast
+from typing import Any, Mapping, cast
 
 from hydraters import hydrate
 
@@ -9,7 +9,7 @@ from hydraters import hydrate
 DO_NOT_MERGE_MARKER = "𒍟※"
 
 
-def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+def hydrate_py(base_item: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     """Hydrate item in-place with base_item properties.
 
     This will not perform a deep copy; values of the original item will be referenced
@@ -19,7 +19,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
-    def merge(b: Dict[str, Any], i: Dict[str, Any]) -> None:
+    def merge(b: dict[str, Any], i: dict[str, Any]) -> None:
         for key, _ in b.items():
             if key in i:
                 if isinstance(b[key], dict) and isinstance(i.get(key), dict):
@@ -52,7 +52,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
     return item
 
 
-def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str, Any]:
+def dehydrate(base_item: dict[str, Any], full_item: dict[str, Any]) -> dict[str, Any]:
     """
     Get a recursive difference between a base item and an incoming item to dehydrate.
 
@@ -65,7 +65,7 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
     def strip(
         base_value: Mapping[str, Any],
         item_value: Mapping[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         out: dict = {}
         for key, value in item_value.items():
             if base_value is None or key not in base_value:
@@ -124,7 +124,7 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
 def apply_marked_keys(
     base_item: Mapping[str, Any],
     full_item: Mapping[str, Any],
-    dehydrated: Dict[str, Any],
+    dehydrated: dict[str, Any],
 ) -> None:
     """Mark keys.
 

@@ -5,7 +5,8 @@ import logging
 import os
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Optional, cast
+from collections.abc import Iterator
+from typing import Any, cast
 
 from smart_open import open
 
@@ -34,7 +35,7 @@ class MigrationPath:
         self.f = f
         self.t = t
 
-    def parse_filename(self, filename: str) -> List[str]:
+    def parse_filename(self, filename: str) -> list[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
             "pgstac.",
@@ -47,7 +48,7 @@ class MigrationPath:
         path = self.path.rstrip("/")
         return glob.iglob(f"{path}/*.sql")
 
-    def build_graph(self) -> Dict:
+    def build_graph(self) -> dict[str, list[str]]:
         """Build a graph to get from one version to another."""
         graph = defaultdict(list)
         for file in self.get_files():
@@ -58,10 +59,10 @@ class MigrationPath:
                 graph["init"].append(parts[0])
         return graph
 
-    def build_path(self) -> Optional[List[str]]:
+    def build_path(self) -> list[str] | None:
         """Create the path of ordered files needed to migrate."""
         graph = self.build_graph()
-        explored: List = []
+        explored: list[str] = []
         q = [[self.f]]
 
         while q:
@@ -78,7 +79,7 @@ class MigrationPath:
                 explored.append(node)
         return None
 
-    def migrations(self) -> List[str]:
+    def migrations(self) -> list[str]:
         """Return the list of migrations needed in order."""
         path = self.build_path()
         if path is None:
@@ -115,7 +116,7 @@ class Migrate:
         self.db = db
         self.schema = schema
 
-    def run_migration(self, toversion: Optional[str] = None) -> str:
+    def run_migration(self, toversion: str | None = None) -> str:
         """Migrate a pgstac database to current version."""
         if toversion is None:
             toversion = __version__

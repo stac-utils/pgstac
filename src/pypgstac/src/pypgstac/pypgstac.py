@@ -2,7 +2,6 @@
 
 import logging
 import sys
-from typing import Optional
 
 import fire
 import orjson
@@ -18,7 +17,7 @@ class PgstacCLI:
 
     def __init__(
         self,
-        dsn: Optional[str] = "",
+        dsn: str | None = "",
         version: bool = False,
         debug: bool = False,
         usequeue: bool = False,
@@ -39,7 +38,7 @@ class PgstacCLI:
         return "0.1.9"
 
     @property
-    def version(self) -> Optional[str]:
+    def version(self) -> str | None:
         """Get PgSTAC version installed on database."""
         return self._db.version
 
@@ -56,7 +55,7 @@ class PgstacCLI:
         """Search PgSTAC."""
         return self._db.search(query)
 
-    def migrate(self, toversion: Optional[str] = None) -> str:
+    def migrate(self, toversion: str | None = None) -> str:
         """Migrate PgSTAC Database."""
         migrator = Migrate(self._db)
         return migrator.run_migration(toversion=toversion)
@@ -65,9 +64,9 @@ class PgstacCLI:
         self,
         table: Tables,
         file: str,
-        method: Optional[Methods] = Methods.insert,
-        dehydrated: Optional[bool] = False,
-        chunksize: Optional[int] = 10000,
+        method: Methods | None = Methods.insert,
+        dehydrated: bool | None = False,
+        chunksize: int | None = 10000,
     ) -> None:
         """Load collections or items into PgSTAC."""
         loader = Loader(db=self._db)
@@ -123,9 +122,9 @@ class PgstacCLI:
     def load_queryables(
         self,
         file: str,
-        collection_ids: Optional[list[str]] = None,
-        delete_missing: Optional[bool] = False,
-        index_fields: Optional[list[str]] = None,
+        collection_ids: list[str] | None = None,
+        delete_missing: bool | None = False,
+        index_fields: list[str] | None = None,
     ) -> None:
         """Load queryables from a JSON file.
 
