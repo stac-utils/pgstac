@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pypgstac.db import PgstacDB
-from pypgstac.load import Loader
+from pypgstac.load import Loader, Methods
 from pypgstac.pypgstac import PgstacCLI
 
 HERE = Path(__file__).parent
@@ -223,7 +223,8 @@ def test_maintain_partitions_called_only_with_index_fields(mock_connect):
 
     # Check that maintain_partitions was called
     maintain_calls = [
-        call_args for call_args in mock_cursor.execute.call_args_list
+        call_args
+        for call_args in mock_cursor.execute.call_args_list
         if "maintain_partitions" in str(call_args)
     ]
     assert len(maintain_calls) == 1
@@ -236,7 +237,8 @@ def test_maintain_partitions_called_only_with_index_fields(mock_connect):
 
     # Check that maintain_partitions was not called
     maintain_calls = [
-        call_args for call_args in mock_cursor.execute.call_args_list
+        call_args
+        for call_args in mock_cursor.execute.call_args_list
         if "maintain_partitions" in str(call_args)
     ]
     assert len(maintain_calls) == 0
@@ -250,7 +252,7 @@ def test_load_queryables_with_collections(db: PgstacDB, loader: Loader) -> None:
     # Load test collections first
     loader.load_collections(
         str(TEST_COLLECTIONS_JSON),
-        insert_mode="insert",
+        insert_mode=Methods.insert,
     )
 
     # Get collection IDs from the database
@@ -425,13 +427,14 @@ def test_load_queryables_delete_missing(db: PgstacDB) -> None:
 
 
 def test_load_queryables_delete_missing_with_collections(
-    db: PgstacDB, loader: Loader,
+    db: PgstacDB,
+    loader: Loader,
 ) -> None:
     """Test loading queryables with delete_missing=True and specific collections."""
     # Load test collections first
     loader.load_collections(
         str(TEST_COLLECTIONS_JSON),
-        insert_mode="insert",
+        insert_mode=Methods.insert,
     )
 
     # Get collection IDs from the database

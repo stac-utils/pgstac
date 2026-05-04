@@ -17,7 +17,8 @@ src/pgstac/migrations/   ← Base + incremental migration files
 src/pgstac/tests/        ← PGTap and basic SQL tests
 src/pypgstac/src/pypgstac/ ← Python package source
 src/pypgstac/tests/        ← pytest tests
-docker/pypgstac/bin/     ← Build/test/utility scripts (pgstac_restore, test, etc.)
+scripts/                 ← Host-facing entrypoint scripts
+scripts/container-scripts/ ← Scripts copied into the pypgstac container image
 ```
 
 ### Documentation Files
@@ -64,7 +65,7 @@ PgSTAC functions reference PostGIS functions (e.g. `st_makeenvelope`, `st_geomfr
 
 - **Do NOT schema-qualify PostGIS function calls** in PgSTAC SQL
 - **Avoid cross-function dependencies in SQL functions used by GENERATED columns** — pg_dump orders functions alphabetically, so `func_a` calling `func_b` may be created before `func_b` exists. Inline the logic instead.
-- Use `pgstac_restore` (in `docker/pypgstac/bin/`) to restore dumps — it installs a temporary event trigger that sets the correct `search_path` before each DDL command
+- Use `pgstac_restore` (via `scripts/container-scripts/pgstac_restore` in the image) to restore dumps — it installs a temporary event trigger that sets the correct `search_path` before each DDL command
 - Test with `scripts/test --pgdump`
 
 ## Development Workflow
@@ -84,7 +85,7 @@ scripts/test --pypgstac         # pytest only
 scripts/test --pgtap            # PGTap SQL tests
 scripts/test --basicsql         # SQL output comparison tests
 scripts/test --migrations       # Full migration chain test
-scripts/test --formatting       # ruff + mypy
+scripts/test --formatting       # ruff + ty
 scripts/test --pgdump           # pg_dump/pg_restore round-trip test
 ```
 
@@ -114,7 +115,7 @@ This runs inside Docker and:
 
 ### How makemigration Works
 
-`makemigration` (in `docker/pypgstac/bin/makemigration`) generates incremental migrations by diffing schemas:
+`makemigration` (copied from `scripts/container-scripts/makemigration` into the image) generates incremental migrations by diffing schemas:
 
 1. Creates two temp databases: `migra_from`, `migra_to`
 2. Loads old base migration into `migra_from`

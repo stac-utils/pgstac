@@ -1,21 +1,21 @@
 """Base library for database interaction with PgSTAC."""
+
 import atexit
 import logging
 import time
+from collections.abc import Generator
+from pathlib import Path
 from types import TracebackType
-from typing import Any, Generator, List, Optional, Tuple, Type, Union
+from typing import Any
 
 import orjson
 import psycopg
-from psycopg import Connection, sql
+from psycopg import Connection, rows, sql
+from psycopg.abc import Params
+from psycopg.types import json as psycopg_json
 from psycopg.types.json import set_json_dumps, set_json_loads
 from psycopg_pool import ConnectionPool
-
-try:
-    from pydantic.v1 import BaseSettings  # type:ignore
-except ImportError:
-    from pydantic import BaseSettings  # type:ignore
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     db_num_workers: int = 1
     db_retries: int = 3
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    model_config = SettingsConfigDict(env_file=Path(".env"), extra="ignore")
 
 
 settings = Settings()
@@ -57,9 +57,9 @@ class PgstacDB:
 
     def __init__(
         self,
-        dsn: Optional[str] = "",
-        pool: Optional[ConnectionPool] = None,
-        connection: Optional[Connection] = None,
+        dsn: str | None = "",
+        pool: ConnectionPool | None = None,
+        connection: Connection | None = None,
         commit_on_exit: bool = True,
         debug: bool = False,
         use_queue: bool = False,
@@ -179,9 +179,9 @@ class PgstacDB:
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
         """Exit used for context."""
         self.disconnect()
@@ -193,9 +193,9 @@ class PgstacDB:
     )
     def query(
         self,
-        query: Union[str, sql.Composed],
-        args: Optional[List[Any]] = None,
-        row_factory: psycopg.rows.BaseRowFactory = psycopg.rows.tuple_row,
+        query: Any,
+        args: Params | None = None,
+        row_factory: rows.BaseRowFactory = rows.tuple_row,
     ) -> Generator:
         """Query the database with parameters."""
         conn = self.connect()
@@ -223,7 +223,7 @@ class PgstacDB:
                 conn.rollback()
             raise e
 
-    def query_one(self, *args: Any, **kwargs: Any) -> Union[Tuple, str, None]:
+    def query_one(self, *args: Any, **kwargs: Any) -> tuple[Any, ...] | str | None:
         """Return results from a query that returns a single row."""
         try:
             r = next(self.query(*args, **kwargs))
@@ -246,7 +246,7 @@ class PgstacDB:
             return f"Error Running Queued Queries: {e}"
 
     @property
-    def version(self) -> Optional[str]:
+    def version(self) -> str | None:
         """Get the current version number from a pgstac database."""
         try:
             version = self.query_one(
@@ -280,9 +280,11 @@ class PgstacDB:
         if isinstance(version, str):
             if int(version) < 130000:
                 major, minor, patch = tuple(
-                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                    map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
-                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
+                raise Exception(
+                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}",
+                )  # noqa: E501
             return version
         else:
             if self.connection is not None:
@@ -296,12 +298,12 @@ class PgstacDB:
         cleaned_args = []
         for arg in args:
             if isinstance(arg, dict):
-                cleaned_args.append(psycopg.types.json.Jsonb(arg))
+                cleaned_args.append(psycopg_json.Jsonb(arg))
             else:
                 cleaned_args.append(arg)
         base_query = sql.SQL("SELECT * FROM {}({});").format(func, placeholders)
         return self.query(base_query, cleaned_args)
 
-    def search(self, query: Union[dict, str, psycopg.types.json.Jsonb] = "{}") -> str:
+    def search(self, query: dict | str | psycopg_json.Jsonb = "{}") -> str:
         """Search PgSTAC."""
         return dumps(next(self.func("search", query))[0])

@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v5.0.0
     hooks:
     -   id: trailing-whitespace
     -   id: check-yaml
@@ -16,17 +16,6 @@ repos:
     -   id: check-merge-conflict
     -   id: check-executables-have-shebangs
     -   id: check-symlinks
-
-
--   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 'v0.8.2'
-    hooks:
-    -   id: ruff
-        files: src/pypgstac\/.*\.py$
-        args: [--fix, --exit-non-zero-on-fix]
-    -   id: ruff-format
-        files: src/pypgstac\/.*\.py$
-
 
 -   repo: local
     hooks:
@@ -55,7 +44,7 @@ repos:
         pass_filenames: false
         verbose: true
         fail_fast: true
-        always_run: true
+        files: ^(src/pypgstac/(src/pypgstac|tests)/.*\.py|src/pypgstac/pyproject\.toml)$
     -   id: pypgstac
         name: pypgstac
         entry: scripts/test

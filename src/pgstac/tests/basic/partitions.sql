@@ -109,4 +109,7 @@ SELECT content || '{"collection":"pgstactest-partitioned-oddballs"}'::jsonb FROM
 
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-oddballs';
 
-SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM partitions WHERE collection='pgstactest-partitioned-oddballs';
+SELECT collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange
+FROM partitions
+WHERE collection='pgstactest-partitioned-oddballs'
+ORDER BY partition_dtrange;

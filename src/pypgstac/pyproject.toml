@@ -1,9 +1,9 @@
 [project]
 name = "pypgstac"
-version = "0.9.11"
+version = "0.9.11-dev"
 description = "Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "David Bitner", email = "bitner@dbspatial.com" }]
 keywords = ["STAC", "Postgresql", "PgSTAC"]
@@ -12,18 +12,19 @@ classifiers = [
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "cachetools>=5.3.0,<6.1",
+    "cachetools>=5.3.0",
     "fire>=0.7.0",
     "hydraters>=0.1.0",
-    "orjson>=3.9.0",
+    "orjson>=3.11.0",
     "plpygis>=0.5.0",
-    "pydantic>=1.10,<3",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2,<3",
     "python-dateutil>=2.8.0",
     "smart-open>=5.0",
     "tenacity>=8.1.0",
@@ -37,15 +38,13 @@ test = [
     "pytest-benchmark==5.1.*",
     "pytest-cov==6.0.*",
     "pystac[validation]==1.*",
-    "types-cachetools==5.5.*",
+    "types-cachetools>=5.5",
 ]
 dev = [
-    "flake8==7.1.1",
-    "black>=24.10.0",
-    "mypy>=1.13.0",
     "types-setuptools",
-    "ruff==0.8.2",
-    "pre-commit",
+    "ruff==0.15.11",
+    "ty==0.0.31",
+    "pre-commit==3.5.0",
 ]
 psycopg = ["psycopg[binary]>=3.1.0", "psycopg-pool>=3.1.0"]
 migrations = ["psycopg2-binary", "migra"]
@@ -79,30 +78,29 @@ parallel = true
 [tool.coverage.report]
 exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
 
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
 [tool.ruff.lint]
 select = [
     "E", # pycodestyle errors
     "W", # pycodestyle warnings
     "F", # pyflakes
     "I", # isort
-    "C", # flake8-comprehensions
     "B", # flake8-bugbear
-    # "D",  # pydocstyle
     "C4",  # flake8-comprehensions
     "T20", # flake8-print
-    # "PT", # flake8-pytest-style
     "Q", # flake8-quotes
-    # "SIM", # flake8-simplify
     "DTZ", # flake8-datetimez
     "ERA", # eradicate
     "PLC",
     "PLE",
-    # "PLR",
     "PLW",
     "COM", # flake8-commas
 ]
 ignore = [
-    # "E501",  # line too long, handled by black
+    "E501", # line too long, handled by formatter
     "B008", # do not perform function calls in argument defaults
     "C901", # too complex
     "B905",
@@ -111,11 +109,11 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["pypgstac"]
 
-[tool.mypy]
-strict_optional = true
-ignore_missing_imports = true
-disallow_untyped_defs = true
-namespace_packages = true
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src/pypgstac", "tests"]
 
 [tool.pydocstyle]
 select = "D1"

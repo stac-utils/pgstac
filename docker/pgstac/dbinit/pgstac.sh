@@ -5,6 +5,7 @@ MAINTENANCE_WORK_MEM=$(( $SYSMEM/8 ))
 WORK_MEM=$(( $SHARED_BUFFERS/50 ))
 
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+CREATE EXTENSION IF NOT EXISTS pg_tle;
 ALTER SYSTEM SET search_path TO pgstac, public;
 ALTER SYSTEM SET client_min_messages TO WARNING;
 ALTER SYSTEM SET shared_buffers='${SHARED_BUFFERS}kB';

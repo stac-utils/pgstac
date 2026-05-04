@@ -1,7 +1,7 @@
 """Hydrate data in pypgstac rather than on the database."""
 
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Mapping, cast
 
 from hydraters import hydrate
 
@@ -9,7 +9,7 @@ from hydraters import hydrate
 DO_NOT_MERGE_MARKER = "𒍟※"
 
 
-def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+def hydrate_py(base_item: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     """Hydrate item in-place with base_item properties.
 
     This will not perform a deep copy; values of the original item will be referenced
@@ -19,7 +19,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
     # Merge will mutate i, but create deep copies of values in the base item
     # This will prevent the base item values from being mutated, e.g. by
     # filtering out fields in `filter_fields`.
-    def merge(b: Dict[str, Any], i: Dict[str, Any]) -> None:
+    def merge(b: dict[str, Any], i: dict[str, Any]) -> None:
         for key, _ in b.items():
             if key in i:
                 if isinstance(b[key], dict) and isinstance(i.get(key), dict):
@@ -52,7 +52,7 @@ def hydrate_py(base_item: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any
     return item
 
 
-def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str, Any]:
+def dehydrate(base_item: dict[str, Any], full_item: dict[str, Any]) -> dict[str, Any]:
     """
     Get a recursive difference between a base item and an incoming item to dehydrate.
 
@@ -62,7 +62,10 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
     collection item-assets to contain keys that may not be present on individual items.
     """
 
-    def strip(base_value: Dict[str, Any], item_value: Dict[str, Any]) -> Dict[str, Any]:
+    def strip(
+        base_value: Mapping[str, Any],
+        item_value: Mapping[str, Any],
+    ) -> dict[str, Any]:
         out: dict = {}
         for key, value in item_value.items():
             if base_value is None or key not in base_value:
@@ -81,8 +84,10 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
                     out[key] = []
                     for bv, v in zip(base_value[key], value):
                         if isinstance(bv, dict) and isinstance(v, dict):
-                            dehydrated = strip(bv, v)
-                            apply_marked_keys(bv, v, dehydrated)
+                            bv_mapping = cast(Mapping[str, Any], bv)
+                            v_mapping = cast(Mapping[str, Any], v)
+                            dehydrated = strip(bv_mapping, v_mapping)
+                            apply_marked_keys(bv_mapping, v_mapping, dehydrated)
                             out[key].append(dehydrated)
                         else:
                             out[key].append(v)
@@ -96,7 +101,7 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
                 # Don't keep empty values
                 continue
 
-            if isinstance(value, dict):
+            if isinstance(value, dict) and isinstance(base_value[key], Mapping):
                 # After dehdrating a dict, mark any keys that are present on the
                 # base item but not in the incoming item as `do-not-merge` during
                 # rehydration
@@ -117,9 +122,9 @@ def dehydrate(base_item: Dict[str, Any], full_item: Dict[str, Any]) -> Dict[str,
 
 
 def apply_marked_keys(
-    base_item: Dict[str, Any],
-    full_item: Dict[str, Any],
-    dehydrated: Dict[str, Any],
+    base_item: Mapping[str, Any],
+    full_item: Mapping[str, Any],
+    dehydrated: dict[str, Any],
 ) -> None:
     """Mark keys.
 
@@ -130,8 +135,8 @@ def apply_marked_keys(
     This modifies the dehydrated item in-place.
     """
     try:
-        marked_keys = [key for key in base_item if key not in full_item.keys()]
-        marked_dict = {k: DO_NOT_MERGE_MARKER for k in marked_keys}
+        marked_keys = [key for key in base_item if key not in full_item]
+        marked_dict = dict.fromkeys(marked_keys, DO_NOT_MERGE_MARKER)
         dehydrated.update(marked_dict)
     except TypeError:
         pass
