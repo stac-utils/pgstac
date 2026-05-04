@@ -149,12 +149,25 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Ensure PostgreSQL client tools
         run: |
+          set -euo pipefail
           apt-get update
-          pg_client_pkg="postgresql-client-${{ matrix.pg_major }}"
-          if apt-cache show "$pg_client_pkg" >/dev/null 2>&1; then
-            apt-get install -y --no-install-recommends "$pg_client_pkg"
-          else
-            apt-get install -y --no-install-recommends postgresql-client
+          apt-get install -y --no-install-recommends gnupg ca-certificates curl
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg
+          . /etc/os-release
+          echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+          apt-get update
+          apt-get install -y --no-install-recommends "postgresql-client-${{ matrix.pg_major }}"
+
+          client_major="$(pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')"
+          server_major="$(psql -X -tA -h postgres -d postgres -c 'show server_version' | sed -E 's/^([0-9]+).*/\1/')"
+          if [[ "$client_major" != "${{ matrix.pg_major }}" ]]; then
+            echo "Expected pg_dump major ${{ matrix.pg_major }}, got ${client_major}" >&2
+            exit 1
+          fi
+          if [[ "$client_major" != "$server_major" ]]; then
+            echo "pg_dump major (${client_major}) does not match postgres major (${server_major})" >&2
+            exit 1
           fi
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Install pypgstac

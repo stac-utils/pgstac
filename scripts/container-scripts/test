@@ -181,6 +181,14 @@ function test_pgdump(){
     DUMPFILE=$(mktemp /tmp/pgstac_dump.XXXXXX)
     trap 'rm -f "$DUMPFILE"' 0 2 3 15
 
+    CLIENT_MAJOR=$(pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')
+    SERVER_MAJOR=$(psql -X -tA -d postgres -c 'show server_version' | sed -E 's/^([0-9]+).*/\1/')
+    if [ "$CLIENT_MAJOR" -lt "$SERVER_MAJOR" ]; then
+        echo "***FAIL: pg_dump major (${CLIENT_MAJOR}) is older than server major (${SERVER_MAJOR})***"
+        echo "Install postgresql-client-${SERVER_MAJOR} (or newer) in the test container."
+        exit 1
+    fi
+
     # Create source database with sample data
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_dump_src WITH (force);
