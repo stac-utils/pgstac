@@ -1,13 +1,11 @@
-"""Compatibility wrappers over pgstac-migrate."""
+"""Compatibility helpers for callers that still import legacy migration types."""
+
+from __future__ import annotations
 
 import glob
 import os
 from collections import defaultdict
 from collections.abc import Iterator
-from importlib import import_module
-
-from .db import PgstacDB
-from .version import __version__
 
 MIGRATION_PREFIX = "pgstac--"
 
@@ -100,33 +98,3 @@ class MigrationPath:
         for idx in range(start_idx, len(path) - 1):
             files.append(incremental_migration_filename(path[idx], path[idx + 1]))
         return files
-
-
-def _pgstac_migrate_api():
-    """Import the pgstac-migrate API lazily for editor and source-tree compatibility."""
-    return import_module("pgstac_migrate.api")
-
-
-class Migrate:
-    """Compatibility wrapper around pgstac-migrate."""
-
-    def __init__(self, db: PgstacDB, schema: str = "pgstac"):
-        """Prepare for migration."""
-        self.db = db
-        self.schema = schema
-
-    def run_migration(self, toversion: str | None = None) -> str:
-        """Migrate a pgstac database to current version."""
-        if self.schema != "pgstac":
-            raise ValueError("pgstac-migrate only supports the pgstac schema.")
-
-        self.db.disconnect()
-        result = _pgstac_migrate_api().migrate(
-            target=toversion or __version__,
-            conninfo=self.db.dsn or None,
-        )
-        self.db.disconnect()
-
-        if result.final_version is None:
-            raise RuntimeError("Migration failed to report a new version.")
-        return result.final_version

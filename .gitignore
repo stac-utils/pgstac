@@ -16,3 +16,5 @@ src/pypgstac/python/pypgstac/*.so
 .plans/
 .env
 src/pgstacrust/target/
+src/pgstac-migrate/dist/
+src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst

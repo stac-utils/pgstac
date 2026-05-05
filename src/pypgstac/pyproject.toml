@@ -22,6 +22,7 @@ dependencies = [
     "fire>=0.7.0",
     "hydraters>=0.1.0",
     "orjson>=3.11.0",
+    "pgstac-migrate>=0.9.11.dev0,<0.10",
     "plpygis>=0.5.0",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2,<3",
@@ -47,7 +48,7 @@ dev = [
     "pre-commit==3.5.0",
 ]
 psycopg = ["psycopg[binary]>=3.1.0", "psycopg-pool>=3.1.0"]
-migrations = ["psycopg2-binary", "migra"]
+migrations = []
 docs = [
     "jupyter",
     "pandas",
@@ -121,3 +122,6 @@ match = "(?!test).*.py"
 
 [tool.pytest.ini_options]
 addopts = "-vv --benchmark-skip"
+
+[tool.uv.sources]
+pgstac-migrate = { path = "../pgstac-migrate", editable = true }
