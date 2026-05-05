@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   ecosystems with grouped update policies).
 
 ### Changed
+- Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
 - `docker/pgstac/Dockerfile` and `docker/pypgstac/Dockerfile` base images updated from

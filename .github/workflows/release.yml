@@ -226,3 +226,29 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: /home/runner/work/pgstac/pgstac/src/pypgstac/dist
+
+  releasepgstacmigratetopypi:
+    name: Release pgstac-migrate to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pgstac-migrate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.x"
+      - name: Install build
+        working-directory: /home/runner/work/pgstac/pgstac/src/pgstac-migrate
+        run: python -m pip install build
+      - name: Build
+        working-directory: /home/runner/work/pgstac/pgstac/src/pgstac-migrate
+        run: python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: /home/runner/work/pgstac/pgstac/src/pgstac-migrate/dist
