@@ -66,6 +66,7 @@ EOSQL
 function refresh_collation_versions(){
     # Newer container libc versions can make template collation metadata stale.
     psql -X -q -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+    psql -X -q -d postgres -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
     psql -X -q -d postgres -c "ALTER DATABASE postgis REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
 }
 

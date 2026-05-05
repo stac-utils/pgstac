@@ -105,6 +105,7 @@ ignore = [
     "B008", # do not perform function calls in argument defaults
     "C901", # too complex
     "B905",
+    "COM812", # conflicts with ruff format
 ]
 
 [tool.ruff.lint.isort]
