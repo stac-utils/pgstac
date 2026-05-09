@@ -671,21 +671,20 @@ CREATE OR REPLACE FUNCTION merge_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     SELECT
     CASE
         WHEN _a = '"𒍟※"'::jsonb THEN NULL
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN _b
+        WHEN _a IS NULL THEN _b
+        WHEN jsonb_typeof(_a) = 'null' THEN coalesce(_b, 'null'::jsonb)
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            merge_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(coalesce(_a,'{}'::jsonb)) as a
-                FULL JOIN
-                    jsonb_each(coalesce(_b,'{}'::jsonb)) as b
-                USING (key)
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, merge_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(coalesce(_a,'{}'::jsonb)) as a
+                    FULL JOIN
+                        jsonb_each(coalesce(_b,'{}'::jsonb)) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'
@@ -716,18 +715,16 @@ CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
         WHEN _a = _b THEN NULL
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            strip_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(_a) as a
-                FULL JOIN
-                    jsonb_each(_b) as b
-                USING (key)
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, strip_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(_a) as a
+                    FULL JOIN
+                        jsonb_each(_b) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'

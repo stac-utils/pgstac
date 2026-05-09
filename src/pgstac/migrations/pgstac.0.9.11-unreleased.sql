@@ -194,6 +194,96 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- BEGIN migra calculated SQL
+set check_function_bodies = off;
+
+CREATE OR REPLACE FUNCTION pgstac.merge_jsonb(_a jsonb, _b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT
+    CASE
+        WHEN _a = '"𒍟※"'::jsonb THEN NULL
+        WHEN _a IS NULL THEN _b
+        WHEN jsonb_typeof(_a) = 'null' THEN coalesce(_b, 'null'::jsonb)
+        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
+            (
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, merge_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(coalesce(_a,'{}'::jsonb)) as a
+                    FULL JOIN
+                        jsonb_each(coalesce(_b,'{}'::jsonb)) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
+            )
+        WHEN
+            jsonb_typeof(_a) = 'array'
+            AND jsonb_typeof(_b) = 'array'
+            AND jsonb_array_length(_a) = jsonb_array_length(_b)
+        THEN
+            (
+                SELECT jsonb_agg(m) FROM
+                    ( SELECT
+                        merge_jsonb(
+                            jsonb_array_elements(_a),
+                            jsonb_array_elements(_b)
+                        ) as m
+                    ) as l
+            )
+        ELSE _a
+    END
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.strip_jsonb(_a jsonb, _b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT
+    CASE
+
+        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
+        WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
+        WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
+        WHEN _a = _b THEN NULL
+        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
+            (
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, strip_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(_a) as a
+                    FULL JOIN
+                        jsonb_each(_b) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
+            )
+        WHEN
+            jsonb_typeof(_a) = 'array'
+            AND jsonb_typeof(_b) = 'array'
+            AND jsonb_array_length(_a) = jsonb_array_length(_b)
+        THEN
+            (
+                SELECT jsonb_agg(m) FROM
+                    ( SELECT
+                        strip_jsonb(
+                            jsonb_array_elements(_a),
+                            jsonb_array_elements(_b)
+                        ) as m
+                    ) as l
+            )
+        ELSE _a
+    END
+    ;
+$function$
+;
+
 -- END migra calculated SQL
 DO $$
   BEGIN

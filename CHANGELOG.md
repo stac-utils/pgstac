@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   the broken `3.9.0` sdist under `--resolution lowest-direct`.
 - `pydantic` minimum raised to `>=2.10` so `--resolution lowest-direct` on Python 3.13
   does not resolve to `pydantic-core==2.0.1`, which fails to build.
+- Preserve `"datetime": null` and other explicit JSON null values during dehydration and hydration. Previously, `merge_jsonb` and `strip_jsonb` used PostgreSQL's recursive `jsonb_strip_nulls()` which removed null-valued keys at all depths of the JSON tree, producing STAC-invalid items when `start_datetime`/`end_datetime` were used (the STAC spec requires `"datetime": null` to be explicitly present). Replaced `jsonb_strip_nulls()` with a non-recursive filter that only removes SQL NULL entries (sentinel-marked keys and equal-to-base values) without stripping legitimate JSON nulls.
 
 
 ## [v0.9.11]

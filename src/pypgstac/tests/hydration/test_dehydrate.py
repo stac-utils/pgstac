@@ -243,3 +243,40 @@ class TestDehydrate:
             "triple": DO_NOT_MERGE_MARKER,
             "unique": "value",
         }
+
+    def test_null_datetime_preserved_in_dehydration(self) -> None:
+        """Test that datetime: null survives dehydration.
+
+        Per the STAC spec, items with start_datetime/end_datetime must have
+        datetime explicitly set to null. Dehydration must not strip this null.
+        """
+        base_item = {
+            "type": "Feature",
+            "stac_version": "1.1.0",
+            "collection": "test-collection",
+        }
+        item = {
+            "type": "Feature",
+            "stac_version": "1.1.0",
+            "collection": "test-collection",
+            "properties": {
+                "datetime": None,
+                "start_datetime": "2024-01-01T00:00:00Z",
+                "end_datetime": "2024-01-02T00:00:00Z",
+            },
+        }
+        dehydrated = self.dehydrate(base_item, item)
+        assert "properties" in dehydrated
+        assert "datetime" in dehydrated["properties"], (
+            "datetime key must survive dehydration"
+        )
+        assert dehydrated["properties"]["datetime"] is None, (
+            "datetime must be null after dehydration, not absent"
+        )
+
+    def test_nested_null_values_preserved_in_dehydration(self) -> None:
+        """Test that null values in nested objects survive dehydration."""
+        base_item = {"a": "first"}
+        item = {"a": "first", "b": {"c": None, "d": "value"}}
+        dehydrated = self.dehydrate(base_item, item)
+        assert dehydrated == {"b": {"c": None, "d": "value"}}

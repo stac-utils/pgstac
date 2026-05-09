@@ -243,3 +243,44 @@ class TestHydrate:
         dehydrated = {"value": {"a": "b"}}
         hydrated = self.hydrate(base_item, dehydrated)
         assert hydrated == {"value": {"a": "b"}}
+
+    def test_null_datetime_preserved(self) -> None:
+        """Test that datetime: null is preserved during hydration.
+
+        Per the STAC spec, items with start_datetime/end_datetime must have
+        datetime explicitly set to null. This null must survive the
+        dehydration/hydration round-trip.
+        """
+        base_item = {
+            "type": "Feature",
+            "stac_version": "1.1.0",
+            "collection": "test-collection",
+        }
+        dehydrated = {
+            "properties": {
+                "datetime": None,
+                "start_datetime": "2024-01-01T00:00:00Z",
+                "end_datetime": "2024-01-02T00:00:00Z",
+            },
+        }
+        hydrated = self.hydrate(base_item, dehydrated)
+        assert "datetime" in hydrated["properties"], (
+            "datetime key must be present in hydrated properties"
+        )
+        assert hydrated["properties"]["datetime"] is None, (
+            "datetime must be null, not absent"
+        )
+
+    def test_nested_null_values_preserved(self) -> None:
+        """Test that null values inside nested objects are preserved."""
+        base_item = {"a": "first"}
+        dehydrated = {"b": {"c": None, "d": "value"}}
+        hydrated = self.hydrate(base_item, dehydrated)
+        assert hydrated == {"a": "first", "b": {"c": None, "d": "value"}}
+
+    def test_null_overrides_base_value(self) -> None:
+        """Test that a sentinel-encoded null overrides a base item value."""
+        base_item = {"a": "first", "b": "second"}
+        dehydrated = {"b": DO_NOT_MERGE_MARKER}
+        hydrated = self.hydrate(base_item, dehydrated)
+        assert "b" not in hydrated
