@@ -34,18 +34,18 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-    "morecantile==6.2.*",
-    "pytest==8.3.*",
-    "pytest-benchmark==5.1.*",
-    "pytest-cov==6.0.*",
+    "morecantile>=6.2,<7.1",
+    "pytest>=8.3,<9.1",
+    "pytest-benchmark>=5.1,<5.3",
+    "pytest-cov>=6.0,<7.2",
     "pystac[validation]==1.*",
     "types-cachetools>=5.5",
 ]
 dev = [
     "types-setuptools",
-    "ruff==0.15.11",
-    "ty==0.0.31",
-    "pre-commit==3.5.0",
+    "ruff==0.15.12",
+    "ty==0.0.35",
+    "pre-commit==4.6.0",
 ]
 psycopg = ["psycopg[binary]>=3.1.0", "psycopg-pool>=3.1.0"]
 migrations = []
