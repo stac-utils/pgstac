@@ -18,3 +18,4 @@ src/pypgstac/python/pypgstac/*.so
 src/pgstacrust/target/
 src/pgstac-migrate/dist/
 src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst
+src/pypgstac/uv.lock

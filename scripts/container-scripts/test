@@ -173,6 +173,7 @@ CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
     uv run --extra dev --extra test --extra psycopg pytest tests $VERBOSE
+    uv run --extra dev --extra test --extra psycopg pytest ../pgstac-migrate/tests $VERBOSE
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 

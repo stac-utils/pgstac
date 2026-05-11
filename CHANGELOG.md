@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased]
 
 ### Added
+- New `pgstac-migrate` package under `src/pgstac-migrate/` with a standalone
+  CLI, Python API, and tests for migration planning and execution.
+- `src/pgstac/pyproject.toml` `tool.pgpkg` project metadata for canonical SQL +
+  migration staging.
 - `scripts/makemigration` host wrapper for the in-container `makemigration` helper.
 - `.env.example` documenting all supported environment variables for local development.
 - All host-facing scripts (`test`, `format`, `migrate`, `server`, `stageversion`,
@@ -31,6 +35,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   ecosystems with grouped update policies).
 
 ### Changed
+- `pypgstac migrate` now delegates runtime migration planning and apply logic to
+  `pgstac-migrate`; `src/pypgstac/src/pypgstac/migrate.py` remains as a
+  compatibility wrapper.
+- Migration filenames are now canonicalized to
+  `pgstac--<version>.sql` / `pgstac--<from>--<to>.sql` in
+  `src/pgstac/migrations/` and `src/pypgstac/src/pypgstac/migrations/`.
+- `scripts/container-scripts/stageversion` and
+  `scripts/container-scripts/makemigration` now shell through `pgpkg`
+  (`uv run --no-project --with "pgpkg>=0.1,<0.2"` and
+  `uv run --no-project --with "pgpkg[diff]>=0.1,<0.2"`) with optional
+  `PGPKG_REPO_DIR` override support.
+- `scripts/runinpypgstac` now supports a `PGPKG_LOCAL_REPO_DIR` mount override
+  for local pgpkg development while keeping the default flow PyPI-first.
 - Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
@@ -69,6 +86,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `flake8`, `black`, and `mypy` removed from dev dependencies.
 
 ### Fixed
+- `scripts/container-scripts/test` now refreshes collation metadata for the
+  `postgres` database during setup to avoid noisy warning output.
 - `load.py`: Use timezone-aware `MIN_DATETIME_UTC` / `MAX_DATETIME_UTC` sentinel
   constants (instead of naive `datetime.min` / `datetime.max`) to avoid
   `TypeError: can't compare offset-naive and offset-aware datetimes`.

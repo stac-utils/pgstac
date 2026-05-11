@@ -1,8 +1,11 @@
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 
 from pypgstac.db import PgstacDB
 from pypgstac.migrate import Migrate
+from pypgstac.migrate import MigrationPath as PypgstacMigrationPath
+from pypgstac.pypgstac import PgstacCLI
 
 
 def test_run_migration_delegates_to_pgstac_migrate(monkeypatch) -> None:
@@ -58,3 +61,32 @@ def test_run_migration_defaults_to_package_version(monkeypatch) -> None:
         "target": "0.9.11-dev",
         "conninfo": None,
     }
+
+
+def test_cli_migrate_delegates_to_migrate_wrapper(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_migration(self, toversion=None):
+        captured["toversion"] = toversion
+        return "0.9.11"
+
+    monkeypatch.setattr(Migrate, "run_migration", fake_run_migration)
+
+    result = PgstacCLI(dsn="postgresql:///example").migrate("0.9.11")
+
+    assert result == "0.9.11"
+    assert captured == {"toversion": "0.9.11"}
+
+
+def test_migration_path_matches_pgstac_migrate_compat(tmp_path: Path) -> None:
+    compat = import_module("pgstac_migrate.compat")
+
+    (tmp_path / "pgstac--0.9.10.sql").write_text("-- base\n")
+    (tmp_path / "pgstac--0.9.11.sql").write_text("-- base\n")
+    (tmp_path / "pgstac--0.9.10--0.9.11.sql").write_text("-- step\n")
+
+    left = PypgstacMigrationPath(str(tmp_path), "0.9.10", "0.9.11").migrations()
+    right = compat.MigrationPath(str(tmp_path), "0.9.10", "0.9.11").migrations()
+
+    assert left == ["pgstac--0.9.10--0.9.11.sql"]
+    assert left == right

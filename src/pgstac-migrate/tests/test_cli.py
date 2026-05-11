@@ -1,5 +1,6 @@
 from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,3 +56,46 @@ def test_plan_renders_known_incremental_step(capsys) -> None:
     assert exit_code == 0
     assert "0.9.10 -> 0.9.11" in captured.out
     assert "pgstac--0.9.10--0.9.11.sql" in captured.out
+
+
+def test_migrate_delegates_to_api(monkeypatch, capsys) -> None:
+    cli_module = import_module("pgstac_migrate.cli")
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_migrate_database(**kwargs):
+        captured_kwargs.update(kwargs)
+        return SimpleNamespace(
+            bootstrapped_from="0.9.10",
+            applied_steps=[("0.9.10", "0.9.11")],
+            final_version="0.9.11",
+        )
+
+    monkeypatch.setattr(cli_module, "migrate_database", fake_migrate_database)
+
+    exit_code = run_cli(
+        [
+            "migrate",
+            "--to",
+            "0.9.11",
+            "--dry-run",
+            "--dsn",
+            "postgresql:///example",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert captured_kwargs == {
+        "target": "0.9.11",
+        "dry_run": True,
+        "conninfo": "postgresql:///example",
+        "host": None,
+        "port": None,
+        "dbname": None,
+        "user": None,
+        "password": None,
+    }
+    assert "bootstrapped to 0.9.10" in output
+    assert "applied 0.9.10 -> 0.9.11" in output
+    assert "final version: 0.9.11" in output
+    assert "(dry-run: rolled back)" in output
