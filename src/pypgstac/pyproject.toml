@@ -35,7 +35,7 @@ dependencies = [
 test = [
     "morecantile==6.2.*",
     "pytest==8.3.*",
-    "pytest-benchmark==5.1.*",
+    "pytest-benchmark>=5.1,<5.3",
     "pytest-cov==6.0.*",
     "pystac[validation]==1.*",
     "types-cachetools>=5.5",
