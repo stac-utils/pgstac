@@ -122,7 +122,7 @@ Individual tests can be run with any combination of the following flags `--forma
 6) Once the PR has been merged, start the release process.
 7) Create a git tag `git tag v0.2.8` using new version number
 8) Push the git tag `git push origin v0.2.8`
-9) The CI process will push pypgstac to PyPi, create a docker image on ghcr.io, and create a release on github.
+9) The CI process will push `pypgstac` and `pgstac-migrate` to PyPI, create docker images on ghcr.io, and create a release on GitHub. Register PyPI trusted publishers for both projects before the first tagged release.
 
 
 ### Get Involved
