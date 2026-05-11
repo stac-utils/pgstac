@@ -197,6 +197,26 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+  CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
+    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+  $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+drop index if exists "pgstac"."search_wheres_where";
+
+CREATE UNIQUE INDEX search_wheres_where_md5_compat ON pgstac.search_wheres USING btree (md5(_where));
+
+CREATE UNIQUE INDEX search_wheres_where ON pgstac.search_wheres USING btree (pgstac_hash(_where));
+
+set check_function_bodies = off;
+
+CREATE OR REPLACE FUNCTION pgstac.pgstac_hash(data text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+  $function$
+;
 DO $$
   BEGIN
     INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES

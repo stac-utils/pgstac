@@ -89,7 +89,6 @@ CREATE OR REPLACE FUNCTION age_ms(a timestamptz, b timestamptz DEFAULT clock_tim
     SELECT abs(extract(epoch from age(a,b)) * 1000);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
     SELECT t2s(coalesce(
             get_setting('queue_timeout'),

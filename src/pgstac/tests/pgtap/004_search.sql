@@ -70,6 +70,15 @@ SELECT results_eq($$
 
 SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
 
+SELECT ok(
+    position('pgstac_hash' IN pg_get_indexdef('search_wheres_where'::regclass)) > 0,
+    'search_wheres unique index is keyed by pgstac_hash(_where)'
+);
+SELECT ok(
+    position('md5' IN pg_get_indexdef('search_wheres_where'::regclass)) = 0,
+    'search_wheres unique index no longer uses md5(_where)'
+);
+
 
 SELECT results_eq($$
     SELECT BTRIM(stac_search_to_where($q$

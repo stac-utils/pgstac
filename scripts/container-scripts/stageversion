@@ -83,6 +83,7 @@ cd $PGSTACDIR
 echo "Setting pypgstac version to $PYVERSION"
 cat <<EOD > $PYPGSTACDIR/src/pypgstac/version.py
 """Version."""
+
 __version__ = "${PYVERSION}"
 EOD
 sed -i "s/^version[ ]*=[ ]*.*$/version = \"${PYVERSION}\"/" $PYPGSTACDIR/pyproject.toml

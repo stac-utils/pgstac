@@ -56,10 +56,6 @@ FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
 
-CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
             content->>'id' as id,
@@ -67,10 +63,16 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content->>'collection' as collection,
             stac_datetime(content) as datetime,
             stac_end_datetime(content) as end_datetime,
-            content_slim(content) as content,
+            strip_jsonb(
+                content - '{id,geometry,collection,type}'::text[],
+                collection_base_item(content->>'collection')
+            ) - '{id,geometry,collection,type}'::text[] as content,
             null::jsonb as private
     ;
 $$ LANGUAGE SQL STABLE;
+CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE

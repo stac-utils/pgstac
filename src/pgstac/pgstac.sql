@@ -196,6 +196,10 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+  CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
+    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+  $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 -- END FRAGMENT: 000_idempotent_pre.sql
 
 -- BEGIN FRAGMENT: 001_core.sql
@@ -289,7 +293,6 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 CREATE OR REPLACE FUNCTION age_ms(a timestamptz, b timestamptz DEFAULT clock_timestamp()) RETURNS float AS $$
     SELECT abs(extract(epoch from age(a,b)) * 1000);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
     SELECT t2s(coalesce(
@@ -2119,10 +2122,6 @@ FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
 
-CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
             content->>'id' as id,
@@ -2130,10 +2129,16 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content->>'collection' as collection,
             stac_datetime(content) as datetime,
             stac_end_datetime(content) as end_datetime,
-            content_slim(content) as content,
+            strip_jsonb(
+                content - '{id,geometry,collection,type}'::text[],
+                collection_base_item(content->>'collection')
+            ) - '{id,geometry,collection,type}'::text[] as content,
             null::jsonb as private
     ;
 $$ LANGUAGE SQL STABLE;
+CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
+    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -3525,7 +3530,6 @@ $$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
 CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
     SELECT md5(concat(($1 - '{token,limit,context,includes,excludes}'::text[])::text,$2::text));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-DROP FUNCTION IF EXISTS search_tohash(jsonb);
 
 CREATE TABLE IF NOT EXISTS searches(
     hash text GENERATED ALWAYS AS (search_hash(search, metadata)) STORED PRIMARY KEY,
@@ -3552,7 +3556,8 @@ CREATE TABLE IF NOT EXISTS search_wheres(
 );
 
 CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
-CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((md5(_where)));
+CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((pgstac_hash(_where)));
+CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where_md5_compat ON search_wheres ((md5(_where)));
 
 CREATE OR REPLACE FUNCTION where_stats(
     inwhere text,
@@ -3565,7 +3570,7 @@ DECLARE
     explain_json jsonb;
     partitions text[];
     sw search_wheres%ROWTYPE;
-    inwhere_hash text := md5(inwhere);
+    inwhere_hash text := pgstac_hash(inwhere);
     _context text := lower(context(conf));
     _stats_ttl interval := context_stats_ttl(conf);
     _estimated_cost_threshold float := context_estimated_cost(conf);
@@ -3588,9 +3593,9 @@ BEGIN
     IF NOT ro THEN
         -- If there is a lock where another process is
         -- updating the stats, wait so that we don't end up calculating a bunch of times.
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+        SELECT * INTO sw FROM search_wheres WHERE pgstac_hash(_where)=inwhere_hash FOR UPDATE;
     ELSE
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
+        SELECT * INTO sw FROM search_wheres WHERE pgstac_hash(_where)=inwhere_hash;
     END IF;
 
     -- If there is a cached row, figure out if we need to update
@@ -3607,7 +3612,7 @@ BEGIN
             UPDATE search_wheres SET
                 lastused = now(),
                 usecount = search_wheres.usecount + 1
-            WHERE md5(_where) = inwhere_hash
+            WHERE pgstac_hash(_where) = inwhere_hash
             RETURNING * INTO sw;
         END IF;
         RAISE DEBUG 'Returning cached counts. %', sw;
@@ -3659,7 +3664,7 @@ BEGIN
                 sw.time_to_estimate,
                 null,
                 null
-            ) ON CONFLICT ((md5(_where)))
+            ) ON CONFLICT ((pgstac_hash(_where)))
             DO UPDATE SET
                 lastused = EXCLUDED.lastused,
                 usecount = search_wheres.usecount + 1,
@@ -3707,7 +3712,7 @@ BEGIN
             sw.time_to_estimate,
             sw.total_count,
             sw.time_to_count
-        ) ON CONFLICT ((md5(_where)))
+        ) ON CONFLICT ((pgstac_hash(_where)))
         DO UPDATE SET
             lastused = EXCLUDED.lastused,
             usecount = search_wheres.usecount + 1,
