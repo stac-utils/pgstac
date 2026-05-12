@@ -12,7 +12,7 @@ Options:
   -f, --from VERSION      Source base version.
   -t, --to VERSION        Target base version.
   -o, --overwrite         Replace an existing migration file.
-  -d, --debug             Print the generated migra SQL before wrapping it.
+  -d, --debug             Print the generated wrapped migration SQL after creation.
   --build-policy POLICY   One of: always, missing, never. Default: always.
   -h, --help              Show this help text.
 

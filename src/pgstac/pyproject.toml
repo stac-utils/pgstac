@@ -1,0 +1,6 @@
+[tool.pgpkg]
+project_name = "pgstac"
+prefix = "pgstac"
+sql_dir = "sql"
+migrations_dir = "migrations"
+version_source = "pgstac_migrate.version_source:PgstacVersionSource"

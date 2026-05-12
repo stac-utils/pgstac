@@ -11,10 +11,12 @@ PgSTAC is a PostgreSQL extension (SQL functions + schema) for Spatio-Temporal As
 ## Architecture
 
 ```
+src/pgstac/pyproject.toml ← pgpkg project config for SQL + migration artifacts
 src/pgstac/sql/          ← ALL SQL source files (edit ONLY here)
 src/pgstac/pgstac.sql    ← Assembled output (DO NOT edit directly)
 src/pgstac/migrations/   ← Base + incremental migration files
 src/pgstac/tests/        ← PGTap and basic SQL tests
+src/pgstac-migrate/      ← Standalone pgstac-migrate wrapper package + baked artifact
 src/pypgstac/src/pypgstac/ ← Python package source
 src/pypgstac/tests/        ← pytest tests
 scripts/                 ← Host-facing entrypoint scripts
@@ -95,6 +97,8 @@ All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuil
 
 - **pgstac** container: PostgreSQL 17 + PostGIS 3 + extensions, port 5439→5432
 - **pypgstac** container: Python + Rust build tools, runs scripts
+- `scripts/runinpypgstac` uses the published-package path by default; set `PGPKG_LOCAL_REPO_DIR` to mount a local `pgpkg` checkout at `/pgpkg` and export `PGPKG_REPO_DIR` when `stageversion` or `makemigration` should run against a local checkout
+- When no local checkout is mounted, the in-container `stageversion` / `makemigration` helpers resolve `pgpkg>=0.1.1,<0.2` from PyPI with `uv run --no-project --with ...`
 - Credentials: `username` / `password`, database: `postgis`
 
 ## Migration Process
@@ -108,21 +112,20 @@ scripts/stageversion 0.9.11
 This runs inside Docker and:
 1. Removes old `*unreleased*` migration files
 2. Writes `SELECT set_version('0.9.11');` to `999_version.sql`
-3. Concatenates all `sql/*.sql` → `migrations/pgstac.0.9.11.sql` (base migration)
-4. Copies the base migration to `pgstac.sql`
+3. Runs `pgpkg stageversion` against `src/pgstac/pyproject.toml` → `migrations/pgstac--0.9.11.sql`
+4. Uses `--also-write` to keep `pgstac.sql` synchronized with the latest base migration
 5. Updates `version.py` and `pyproject.toml` version strings
-6. Runs `makemigration -f 0.9.10 -t 0.9.11` to generate incremental migration
+6. Runs `makemigration -f 0.9.10 -t 0.9.11` to generate the wrapped incremental migration via `pgpkg`
 
 ### How makemigration Works
 
-`makemigration` (copied from `scripts/container-scripts/makemigration` into the image) generates incremental migrations by diffing schemas:
+`makemigration` (copied from `scripts/container-scripts/makemigration` into the image) now prefers a local checkout via `PGPKG_REPO_DIR`, otherwise it resolves the pinned published package with `uv run --no-project --with "pgpkg[diff]>=0.1.1,<0.2" pgpkg makemigration`:
 
-1. Creates two temp databases: `migra_from`, `migra_to`
-2. Loads old base migration into `migra_from`
-3. Loads new base migration into `migra_to`
-4. Runs `migra --schema pgstac --unsafe` to calculate the SQL diff
-5. Wraps the diff with `000_idempotent_pre.sql`, `998_idempotent_post.sql`, and `set_version()`
-6. Output: `migrations/pgstac.0.9.10-0.9.11.sql`
+1. Uses `src/pgstac/pyproject.toml` to locate the canonical staged base files
+2. Uses `results.temporary_local_db` via `pgpkg` to diff the source and target staged bases
+3. Prepends `000_idempotent_pre.sql`
+4. Appends `998_idempotent_post.sql` and `SELECT set_version(...)`
+5. Writes `migrations/pgstac--0.9.10--0.9.11.sql`
 
 **Important**: The generated migration is created with a `.staged` suffix. You MUST:
 1. Review the `.staged` file for correctness
@@ -132,11 +135,17 @@ This runs inside Docker and:
 ### Running Migrations
 
 ```bash
-pypgstac migrate                    # Migrate to current pypgstac version
-pypgstac migrate --toversion 0.9.10 # Migrate to specific version
+pypgstac migrate                    # Backwards-compatible wrapper over pgstac-migrate
+pypgstac migrate --toversion 0.9.10 # Backwards-compatible wrapper over pgstac-migrate
+uv run --directory src/pgstac-migrate pgstac-migrate build-artifact
+uv run --directory src/pgstac-migrate pgstac-migrate info
+uv run --directory src/pgstac-migrate pgstac-migrate versions
 ```
 
-The `Migrate` class (in `migrate.py`) builds a directed graph of all available migration files and uses BFS to find the shortest path from the current DB version to the target.
+`pgstac-migrate` owns runtime migration planning and apply logic. `pypgstac migrate` delegates to the same Python API for backwards compatibility and does not execute source-tree SQL files directly.
+The source-tree `pgstac-migrate` package prefers the baked artifact at `src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst` and rebuilds it from the source tree when that file is missing.
+`src/pgstac-migrate/pyproject.toml` resolves `pgpkg>=0.1.1,<0.2` from PyPI. The standalone `src/pgstac-migrate/scripts/build_artifact.py` helper does not use that lockfile; it carries its own inline `pgpkg>=0.1.1,<0.2` dependency.
+`src/pypgstac/pyproject.toml` keeps a local `[tool.uv.sources]` override to the sibling `../pgstac-migrate` project so `uv run --directory src/pypgstac ...` resolves the wrapper stack from the source tree, while `pgpkg` resolves from PyPI. In the Docker-backed dev flow, `scripts/runinpypgstac` can mount a local pgpkg checkout at `/pgpkg` and export `PGPKG_REPO_DIR` for container-script testing.
 
 ## Testing Details
 
@@ -178,7 +187,7 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 5. Copy updated `CHANGELOG.md` to `docs/src/release-notes.md` (keep identical)
 6. Create PR, merge
 7. `git tag vVERSION && git push origin vVERSION`
-8. CI publishes to PyPI + ghcr.io
+8. CI publishes `pypgstac` and `pgstac-migrate` to PyPI plus the ghcr.io images (requires trusted publishers for both PyPI projects on `.github/workflows/release.yml` with the `pypi` environment)
 
 ## Common Patterns
 

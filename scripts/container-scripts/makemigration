@@ -36,7 +36,7 @@ Options:
   -f, --from VERSION    Source base version.
   -t, --to VERSION      Target base version.
   -o, --overwrite       Replace an existing migration file.
-  -d, --debug           Print the generated migra SQL before wrapping it.
+  -d, --debug           Print the generated wrapped migration SQL after creation.
   -h, --help            Show this help text.
 
 Environment:
@@ -44,6 +44,7 @@ Environment:
   PGSTAC_TO_VERSION     Default target version.
   PGSTAC_OVERWRITE      Set to 1 to imply --overwrite.
   PGSTAC_DEBUG          Set to 1 to imply --debug.
+  PGPKG_REPO_DIR        Optional local pgpkg checkout to use instead of the installed package.
 EOF
       exit 0
       ;;
@@ -72,12 +73,27 @@ fi
 
 
 BASEDIR=$SRCDIR
+PGSTACDIR=$BASEDIR/pgstac
+PGPKGDIR=${PGPKG_REPO_DIR:-}
 PYPGSTACDIR=$BASEDIR/pypgstac
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
 SQLDIR=$BASEDIR/pgstac/sql
 
+function run_pgpkg_makemigration() {
+  if [[ -n "$PGPKGDIR" ]]; then
+    if [[ ! -d "$PGPKGDIR" ]]; then
+      echo "PGPKG_REPO_DIR points to $PGPKGDIR but no checkout exists there." >&2
+      exit 1
+    fi
+    uv run --directory "$PGPKGDIR" --extra diff "$@"
+    return
+  fi
+
+  uv run --no-project --with "pgpkg[diff]>=0.1.1,<0.2" "$@"
+}
+
 # Check if from SQL file exists
-FROMSQL=$MIGRATIONSDIR/pgstac.$FROM.sql
+FROMSQL=$MIGRATIONSDIR/pgstac--$FROM.sql
 if [ -f $FROMSQL ]; then
   echo "Migrating From: $FROMSQL"
 else
@@ -86,7 +102,7 @@ else
 fi
 
 # Check if to SQL file exists
-TOSQL=$MIGRATIONSDIR/pgstac.$TO.sql
+TOSQL=$MIGRATIONSDIR/pgstac--$TO.sql
 if [ -f $TOSQL ]; then
   echo "Migrating To: $TOSQL"
 else
@@ -94,71 +110,34 @@ else
  exit 1
 fi
 
-MIGRATIONSQL=$MIGRATIONSDIR/pgstac.$FROM-$TO.sql
+MIGRATIONSQL=$MIGRATIONSDIR/pgstac--$FROM--$TO.sql
 if [[ -f "$MIGRATIONSQL" ]]; then
   if [[ "$OVERWRITE" != 1 ]]; then
     echo "ERROR: $MIGRATIONSQL already exists. Use --overwrite to replace." >&2
     exit 1
-  else
-    echo "Removing existing $MIGRATIONSQL"
-    rm $MIGRATIONSQL
   fi
 else
  echo "Creating $MIGRATIONSQL"
 fi
 
-pg_isready -t 10
-# Create Databases to inspect to create migration
-psql -q >/dev/null 2>&1 <<-'EOSQL'
-    DROP DATABASE IF EXISTS migra_from;
-    CREATE DATABASE migra_from;
-    DROP DATABASE IF EXISTS migra_to;
-    CREATE DATABASE migra_to;
-EOSQL
-
-TODBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_to"
-FROMDBURL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/migra_from"
-
-# Make sure to clean up migra databases
-function drop_migra_dbs(){
-psql -q >/dev/null 2>&1 <<-'EOSQL'
-    DROP DATABASE IF EXISTS migra_from;
-    DROP DATABASE IF EXISTS migra_to;
-EOSQL
-}
-
-trap drop_migra_dbs 0 2 3 15
-
 echo "Creating Migration from $FROM to $TO"
 
-# Install From into Database
-psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $FROMSQL $FROMDBURL >/dev/null || exit 1;
+BASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST:-localhost}:${PGPORT:-5432}/postgres"
+run_pgpkg_makemigration pgpkg makemigration \
+  --project-root "$PGSTACDIR" \
+  --from "$FROM" \
+  --to "$TO" \
+  --output "$MIGRATIONSQL" \
+  --prepend-file "$SQLDIR/000_idempotent_pre.sql" \
+  --append-file "$SQLDIR/998_idempotent_post.sql" \
+  --append-sql "SELECT set_version('${TO}');" \
+  --base-url "$BASE_URL"
 
-# Install To into Database
-psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $TOSQL $TODBURL >/dev/null || exit 1;
-
-
-# Calculate the migration
-MIGRATION=$(mktemp)
-trap "rm $MIGRATION" 0 2 3 15
-
-migra --schema pgstac --unsafe $FROMDBURL $TODBURL >$MIGRATION
 if [[ $DEBUG == 1 ]]; then
   echo "*************"
-  cat $MIGRATION
+  cat "$MIGRATIONSQL"
   echo "*************"
 fi
-
-# Append wrapper around created migration with idempotent and transaction statements
-
-echo "SET client_min_messages TO WARNING;" >$MIGRATIONSQL
-echo "SET SEARCH_PATH to pgstac, public;" >>$MIGRATIONSQL
-cat $SQLDIR/000_idempotent_pre.sql >>$MIGRATIONSQL
-echo "-- BEGIN migra calculated SQL" >>$MIGRATIONSQL
-cat $MIGRATION >>$MIGRATIONSQL
-echo "-- END migra calculated SQL" >>$MIGRATIONSQL
-cat $SQLDIR/998_idempotent_post.sql >>$MIGRATIONSQL
-echo "SELECT set_version('${TO}');" >>$MIGRATIONSQL
 
 echo "Migration created at $MIGRATIONSQL."
 exit 0
