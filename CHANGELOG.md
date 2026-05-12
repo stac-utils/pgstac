@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Search context stats updates now use optimistic compare-and-update guards on
   `statslastupdated`, reducing stale overwrites when concurrent workers refresh
   counts.
+- The Rust crate moved from the top-level `rust/` directory to
+  `src/pgstac-rs/`, and CI/release workflows now use the new path.
 - Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
