@@ -48,9 +48,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `PGPKG_REPO_DIR` override support.
 - `scripts/runinpypgstac` now supports a `PGPKG_LOCAL_REPO_DIR` mount override
   for local pgpkg development while keeping the default flow PyPI-first.
-- `pgstac_hash` now lives with the search hashing helpers in
-  `src/pgstac/sql/004_search.sql` instead of the pre-idempotent bootstrap SQL,
-  and `stageversion` regenerates a clean incremental migration for that move.
+- Search cache hashing now uses SHA-256 and canonical where-clause inputs,
+  reducing collision risk and avoiding cache-key drift from pagination and
+  presentation-only parameters.
+- Search cache lifecycle now lives on `searches` (retiring `search_wheres`),
+  adding named/pinned search support and retention-driven GC for anonymous
+  cache rows.
+- Search cache writes now use non-blocking row touch (`FOR UPDATE SKIP LOCKED`)
+  plus advisory-lock-backed insert/update fallback, reducing lock waits and
+  deadlock risk under concurrent identical searches.
+- Search context stats updates now use optimistic compare-and-update guards on
+  `statslastupdated`, reducing stale overwrites when concurrent workers refresh
+  counts.
 - Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
@@ -91,6 +100,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Fixed
 - `scripts/container-scripts/test` now refreshes collation metadata for the
   `postgres` database during setup to avoid noisy warning output.
+- Read-only search with context now returns `numberMatched` without requiring
+  cache writes, reducing failure risk for replica/read-only deployments.
 - `load.py`: Use timezone-aware `MIN_DATETIME_UTC` / `MAX_DATETIME_UTC` sentinel
   constants (instead of naive `datetime.min` / `datetime.max`) to avoid
   `TypeError: can't compare offset-naive and offset-aware datetimes`.
