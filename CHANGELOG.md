@@ -120,6 +120,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   the broken `3.9.0` sdist under `--resolution lowest-direct`.
 - `pydantic` minimum raised to `>=2.10` so `--resolution lowest-direct` on Python 3.13
   does not resolve to `pydantic-core==2.0.1`, which fails to build.
+- `scripts/container-scripts/test` now uses `PGDATABASE`/`POSTGRES_DB` when checking
+  server extensions instead of assuming a `postgis` database name.
 
 
 ## [v0.9.11]

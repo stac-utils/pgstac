@@ -71,7 +71,7 @@ function refresh_collation_versions(){
 }
 
 function test_server_extensions(){
-    local appdb="${POSTGRES_DB:-postgis}"
+    local appdb="${PGDATABASE:-${POSTGRES_DB:-postgres}}"
     local pgss_count
 
     psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" <<EOSQL
