@@ -222,5 +222,7 @@ jobs:
           echo "/tmp/ci-venv/bin" >> "$GITHUB_PATH"
       - name: Migrate pgstac
         run: pypgstac migrate
+      - name: Set search_path
+        run: psql -c "ALTER DATABASE postgis SET search_path TO pgstac, public;"
       - name: Test
         run: cargo test -p pgstac --all-features --manifest-path rust/Cargo.toml
