@@ -24,6 +24,7 @@ DO $$
     RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+-- Upgrade path for existing installs where datetime already exists.
 UPDATE queryables
 SET zone_map_enabled = TRUE
 WHERE name = 'datetime' AND collection_ids IS NULL;

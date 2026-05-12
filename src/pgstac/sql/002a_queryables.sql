@@ -211,6 +211,7 @@ BEGIN
             _collection_ids IS NULL
             OR cardinality(_collection_ids) = 0
             OR q.collection_ids IS NULL
+            -- Include queryables scoped to any requested collection.
             OR q.collection_ids && _collection_ids
         )
     ORDER BY q.name;
