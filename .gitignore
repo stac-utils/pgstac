@@ -19,4 +19,4 @@ src/pgstacrust/target/
 src/pgstac-migrate/dist/
 src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst
 src/pypgstac/uv.lock
-V0.10.0_RESTRUCTURE_PLAN.md
+*_PLAN.md
