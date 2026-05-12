@@ -70,6 +70,62 @@ function refresh_collation_versions(){
     psql -X -q -d postgres -c "ALTER DATABASE postgis REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
 }
 
+function test_server_extensions(){
+    local appdb="${POSTGRES_DB:-postgis}"
+    local pgss_count
+
+    psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" <<EOSQL
+DO \$\$
+DECLARE
+    preload_libs text;
+BEGIN
+    preload_libs := current_setting('shared_preload_libraries');
+    IF preload_libs NOT LIKE '%pg_stat_statements%' THEN
+        RAISE EXCEPTION 'pg_stat_statements is not in shared_preload_libraries: %', preload_libs;
+    END IF;
+    IF preload_libs NOT LIKE '%pg_cron%' THEN
+        RAISE EXCEPTION 'pg_cron is not in shared_preload_libraries: %', preload_libs;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') THEN
+        RAISE EXCEPTION 'pg_stat_statements extension is not installed in %', current_database();
+    END IF;
+END
+\$\$;
+EOSQL
+
+    psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" -c "SELECT pg_stat_statements_reset();" >/dev/null
+    psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" -c "SELECT count(*) FROM pg_class;" >/dev/null
+    pgss_count=$(psql -X -q -t -A -v ON_ERROR_STOP=1 -d "$appdb" -c "SELECT count(*) FROM pg_stat_statements;")
+    if [[ -z "$pgss_count" || "$pgss_count" -eq 0 ]]; then
+        echo "pg_stat_statements did not record statements for ${appdb}" >&2
+        exit 1
+    fi
+
+    psql -X -q -v ON_ERROR_STOP=1 -d postgres <<EOSQL
+DO \$\$
+DECLARE
+    preload_libs text;
+BEGIN
+    preload_libs := current_setting('shared_preload_libraries');
+    IF preload_libs NOT LIKE '%pg_cron%' THEN
+        RAISE EXCEPTION 'pg_cron is not in shared_preload_libraries: %', preload_libs;
+    END IF;
+    IF current_setting('cron.database_name') <> 'postgres' THEN
+        RAISE EXCEPTION 'cron.database_name expected postgres but was %', current_setting('cron.database_name');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+        RAISE EXCEPTION 'pg_cron extension is not installed in %', current_database();
+    END IF;
+
+    PERFORM cron.unschedule(cron.schedule('* * * * *', 'SELECT 1'));
+END
+\$\$;
+EOSQL
+
+    echo "Server extension tests passed for ${appdb} + postgres."
+}
+
 function test_formatting(){
     cd $SRCDIR/pypgstac
 
@@ -410,7 +466,11 @@ then
 fi
 
 [ $FORMATTING -eq 1 ] && test_formatting
-[ $SETUPDB -eq 1 ] && refresh_collation_versions && setuptestdb
+if [ $SETUPDB -eq 1 ]; then
+    refresh_collation_versions
+    test_server_extensions
+    setuptestdb
+fi
 [ $PGTAP -eq 1 ] && test_pgtap
 [ $BASICSQL -eq 1 ] && test_basicsql
 [ $PYPGSTAC -eq 1 ] && test_pypgstac

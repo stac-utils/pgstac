@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `workflow_dispatch` trigger for manual CI runs.
 - `pg_tle` v1.5.2 built and pre-loaded in the `pgstacbase` image; database init runs
   `CREATE EXTENSION IF NOT EXISTS pg_tle`.
+- `pg_stat_statements` and `pg_cron` are now installed in the pgstac Docker image,
+  added to `shared_preload_libraries`, and initialized during container bootstrap
+  (`pg_stat_statements` in the app database, `pg_cron` in `postgres`).
+- `scripts/container-scripts/test` now includes extension smoke tests that verify
+  preload configuration plus basic runtime behavior for both
+  `pg_stat_statements` and `pg_cron`.
 - `pypgstac-runtime` Docker target: slim Python 3.13-trixie image without the Rust/build
   toolchain, for production deployments where the Rust build environment is not needed.
 - Dependabot coverage expanded to Docker base images and pip packages (two new
