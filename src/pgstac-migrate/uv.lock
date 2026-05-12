@@ -13,16 +13,16 @@ wheels = [
 
 [[package]]
 name = "pgpkg"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
     { name = "psycopg", extra = ["binary"] },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/03/12/bd74a956815835a0a1d318f54deab5ebfc8d807178e99421f6232d806111/pgpkg-0.1.0.tar.gz", hash = "sha256:fecfea66c84c5976eb4058f3325e4d601a4a47378b1499f56ba413b7222b5838", size = 43573, upload-time = "2026-05-05T21:24:41.292Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/4c/c2557e77821fb7c53b327975d544ee7873042caaad8cf6a6f0416fdbd4cc/pgpkg-0.1.1.tar.gz", hash = "sha256:a3abf53a6b7e8c88774e0280a199bf752a4f0d17cb848c6d1119984c871b7ff9", size = 45678, upload-time = "2026-05-12T15:37:28.267Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/8f/7153e33850f68867b340c93cde3b17d3784dbf28880169383cc4b01cff95/pgpkg-0.1.0-py3-none-any.whl", hash = "sha256:1d68d2b2287bf68ee3c47012678eac4247bad79fcefbb9fc53cff1480d4f9d73", size = 30600, upload-time = "2026-05-05T21:24:39.768Z" },
+    { url = "https://files.pythonhosted.org/packages/40/ce/2046b80e9a6e80088479f594b28c861d6ee68a515c109ff99343f4ec6d92/pgpkg-0.1.1-py3-none-any.whl", hash = "sha256:b8d2e6fc7a5118abc9529b37dba63ae4adc83e120650063e8563ef89f7c4e011", size = 31935, upload-time = "2026-05-12T15:37:26.899Z" },
 ]
 
 [[package]]
@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pgpkg", specifier = ">=0.1,<0.2" }]
+requires-dist = [{ name = "pgpkg", specifier = ">=0.1.1,<0.2" }]
 
 [[package]]
 name = "psycopg"

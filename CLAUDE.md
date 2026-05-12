@@ -127,10 +127,12 @@ This runs inside Docker and:
 4. Appends `998_idempotent_post.sql` and `SELECT set_version(...)`
 5. Writes `migrations/pgstac--0.9.10--0.9.11.sql`
 
-**Important**: The generated migration is created with a `.staged` suffix. You MUST:
-1. Review the `.staged` file for correctness
-2. Remove the `.staged` suffix to enable it
-3. Run `scripts/test --migrations` to validate
+**Important**:
+1. `scripts/stageversion` regenerates `*unreleased*` migration files on each run.
+2. If you hand-edit an incremental migration, do not rerun `stageversion` unless you want those edits overwritten.
+3. After hand-editing an incremental migration, rebuild the baked artifact:
+	`uv run --directory src/pgstac-migrate pgstac-migrate build-artifact`
+4. Validate with `scripts/test --migrations` (or `scripts/test` for the full gate).
 
 ### Running Migrations
 
@@ -181,13 +183,14 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 ## Release Checklist
 
 1. `scripts/stageversion VERSION`
-2. Review `.staged` migration, remove suffix
-3. `scripts/test --migrations`
-4. Move CHANGELOG "Unreleased" → new version
-5. Copy updated `CHANGELOG.md` to `docs/src/release-notes.md` (keep identical)
-6. Create PR, merge
-7. `git tag vVERSION && git push origin vVERSION`
-8. CI publishes `pypgstac` and `pgstac-migrate` to PyPI plus the ghcr.io images (requires trusted publishers for both PyPI projects on `.github/workflows/release.yml` with the `pypi` environment)
+2. Review generated incremental migration for correctness
+3. If hand-edited, run `uv run --directory src/pgstac-migrate pgstac-migrate build-artifact`
+4. `scripts/test --migrations`
+5. Move CHANGELOG "Unreleased" → new version
+6. Copy updated `CHANGELOG.md` to `docs/src/release-notes.md` (keep identical)
+7. Create PR, merge
+8. `git tag vVERSION && git push origin vVERSION`
+9. CI publishes `pypgstac` and `pgstac-migrate` to PyPI plus the ghcr.io images (requires trusted publishers for both PyPI projects on `.github/workflows/release.yml` with the `pypi` environment)
 
 ## Common Patterns
 

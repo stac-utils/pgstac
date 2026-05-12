@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SRCDIR=${PGSTAC_REPO_DIR:-/opt/src}
 cd $SRCDIR
@@ -29,13 +31,23 @@ Usage: $(basename "$0") [version]
 Create a new base migration, update pypgstac version metadata, and generate the
 incremental migration via makemigration.
 
+Important workflow note:
+        This command regenerates *unreleased* migrations each time it runs.
+        If you hand-edit an incremental migration, do NOT rerun stageversion unless
+        you want those edits overwritten. After hand edits, rebuild the baked
+        artifact with:
+            uv run --directory src/pgstac-migrate pgstac-migrate build-artifact
+
 Environment:
     PGSTAC_VERSION   Default version when no positional version is provided.
     PGPKG_REPO_DIR   Optional local pgpkg checkout to use instead of the installed package.
 EOF
 }
 
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+ARG1=${1:-}
+VERSION=""
+
+if [[ "$ARG1" == "-h" || "$ARG1" == "--help" ]]; then
         usage
         exit 0
 fi
@@ -45,8 +57,8 @@ fi
 find $MIGRATIONSDIR -name "*unreleased*" -exec rm {} \;
 
 # Get Version
-if [[ -n "$1" ]]; then
-    VERSION=$1
+if [[ -n "$ARG1" ]]; then
+    VERSION=$ARG1
 elif [[ -n "${PGSTAC_VERSION:-}" ]]; then
     VERSION=$PGSTAC_VERSION
 fi
@@ -89,3 +101,7 @@ EOD
 sed -i "s/^version[ ]*=[ ]*.*$/version = \"${PYVERSION}\"/" $PYPGSTACDIR/pyproject.toml
 
 makemigration -f $OLDVERSION -t $VERSION
+
+echo "Stageversion complete."
+echo "If you hand-edit the incremental migration, rebuild the baked artifact with:"
+echo "  uv run --directory src/pgstac-migrate pgstac-migrate build-artifact"

@@ -34,6 +34,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_estimated_count', '100000'),
   ('context_estimated_cost', '100000'),
   ('context_stats_ttl', '1 day'),
+  ('search_gc_retention_interval', '7 days'),
   ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
@@ -93,8 +94,15 @@ ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
 ALTER FUNCTION create_table_constraints SECURITY DEFINER;
 ALTER FUNCTION check_partition SECURITY DEFINER;
 ALTER FUNCTION repartition SECURITY DEFINER;
-ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION where_stats(text, text, boolean, jsonb) SECURITY DEFINER;
 ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION name_search SECURITY DEFINER;
+ALTER FUNCTION rename_search SECURITY DEFINER;
+ALTER FUNCTION unname_search SECURITY DEFINER;
+ALTER FUNCTION pin_search SECURITY DEFINER;
+ALTER FUNCTION unpin_search SECURITY DEFINER;
+ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 
