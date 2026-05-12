@@ -104,6 +104,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `flake8`, `black`, and `mypy` removed from dev dependencies.
 
 ### Fixed
+- Explicit search stats refresh now propagates through cached and uncached search paths when `updatestats` is requested, keeping `numberMatched`/context counts current.
 - `scripts/container-scripts/test` now refreshes collation metadata for the
   `postgres` database during setup to avoid noisy warning output.
 - Read-only search with context now returns `numberMatched` without requiring
