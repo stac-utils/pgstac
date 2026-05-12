@@ -696,6 +696,7 @@ CREATE OR REPLACE FUNCTION search_query(
 DECLARE
     search searches%ROWTYPE;
     cached_search searches%ROWTYPE;
+    search_where searches%ROWTYPE;
     ro boolean := pgstac.readonly();
 BEGIN
     RAISE NOTICE 'SEARCH: %', _search;
@@ -746,8 +747,30 @@ BEGIN
     IF cached_search IS NOT NULL THEN
         cached_search._where = search._where;
         cached_search.orderby = search.orderby;
+        IF updatestats THEN
+            search_where := where_stats(
+                cached_search.hash,
+                cached_search._where,
+                true,
+                _search->'conf'
+            );
+            cached_search.context_count := search_where.context_count;
+            cached_search.statslastupdated := search_where.statslastupdated;
+        END IF;
         RETURN cached_search;
     END IF;
+
+    IF updatestats THEN
+        search_where := where_stats(
+            search.hash,
+            search._where,
+            true,
+            _search->'conf'
+        );
+        search.context_count := search_where.context_count;
+        search.statslastupdated := search_where.statslastupdated;
+    END IF;
+
     RETURN search;
 
 END;
@@ -1058,7 +1081,6 @@ DECLARE
     hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
-    context jsonb;
     collection jsonb;
     out_records jsonb;
     out_len int;
