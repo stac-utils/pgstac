@@ -196,6 +196,9 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+-- END FRAGMENT: 000_idempotent_pre.sql
+
+-- BEGIN FRAGMENT: 001_core.sql
 
   CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
     SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
