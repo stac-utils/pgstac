@@ -216,4 +216,4 @@ jobs:
       - name: Install pgstac
         run: psql -v ON_ERROR_STOP=1 -f src/pgstac/pgstac.sql
       - name: Test
-        run: cargo test -p pgstac --all-features
+        run: cargo test -p pgstac --all-features --manifest-path rust/Cargo.toml
