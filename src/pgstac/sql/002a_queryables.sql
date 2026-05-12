@@ -195,6 +195,8 @@ CREATE OR REPLACE FUNCTION zone_map_queryables(
     wrapper text
 ) AS $$
 BEGIN
+    -- Returns queryables enabled for zone-map stats, including global queryables
+    -- and collection-scoped queryables that overlap the requested collections.
     RETURN QUERY
     SELECT
         q.name,

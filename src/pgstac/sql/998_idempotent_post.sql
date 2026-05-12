@@ -24,6 +24,9 @@ DO $$
     RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+UPDATE queryables
+SET zone_map_enabled = TRUE
+WHERE name = 'datetime' AND collection_ids IS NULL;
 
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
