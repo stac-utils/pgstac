@@ -210,8 +210,9 @@ BEGIN
         AND (
             _collection_ids IS NULL
             OR cardinality(_collection_ids) = 0
+            -- Global queryables (NULL collection_ids) always apply.
             OR q.collection_ids IS NULL
-            -- Include queryables scoped to any requested collection.
+            -- Collection-scoped queryables apply when scopes overlap.
             OR q.collection_ids && _collection_ids
         )
     ORDER BY q.name;

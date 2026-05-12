@@ -27,7 +27,10 @@ $$;
 -- Upgrade path for existing installs where datetime already exists.
 UPDATE queryables
 SET zone_map_enabled = TRUE
-WHERE name = 'datetime' AND collection_ids IS NULL;
+WHERE
+  name = 'datetime'
+  AND collection_ids IS NULL
+  AND zone_map_enabled IS DISTINCT FROM TRUE;
 
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
