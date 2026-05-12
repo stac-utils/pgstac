@@ -21,7 +21,7 @@ function run_pgpkg() {
         return
     fi
 
-    uv run --no-project --with "pgpkg>=0.1,<0.2" "$@"
+    uv run --no-project --with "pgpkg>=0.1.1,<0.2" "$@"
 }
 
 function usage() {

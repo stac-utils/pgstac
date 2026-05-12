@@ -43,8 +43,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `src/pgstac/migrations/` and `src/pypgstac/src/pypgstac/migrations/`.
 - `scripts/container-scripts/stageversion` and
   `scripts/container-scripts/makemigration` now shell through `pgpkg`
-  (`uv run --no-project --with "pgpkg>=0.1,<0.2"` and
-  `uv run --no-project --with "pgpkg[diff]>=0.1,<0.2"`) with optional
+  (`uv run --no-project --with "pgpkg>=0.1.1,<0.2"` and
+  `uv run --no-project --with "pgpkg[diff]>=0.1.1,<0.2"`) with optional
   `PGPKG_REPO_DIR` override support.
 - `scripts/runinpypgstac` now supports a `PGPKG_LOCAL_REPO_DIR` mount override
   for local pgpkg development while keeping the default flow PyPI-first.

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "pgpkg>=0.1,<0.2",
+#   "pgpkg>=0.1.1,<0.2",
 # ]
 # ///
 """Build the local pgstac-migrate baked artifact with the published pgpkg API."""

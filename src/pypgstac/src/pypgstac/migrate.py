@@ -2,6 +2,7 @@
 
 import glob
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Iterator
 from importlib import import_module
@@ -10,6 +11,12 @@ from .db import PgstacDB
 from .version import __version__
 
 MIGRATION_PREFIX = "pgstac--"
+
+warnings.warn(
+    "pypgstac.migrate is a compatibility wrapper and will be deprecated in a future minor release; use pgstac_migrate.api or the pgstac-migrate CLI directly.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 def base_migration_filename(version: str) -> str:

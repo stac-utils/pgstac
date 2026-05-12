@@ -98,7 +98,7 @@ All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuil
 - **pgstac** container: PostgreSQL 17 + PostGIS 3 + extensions, port 5439→5432
 - **pypgstac** container: Python + Rust build tools, runs scripts
 - `scripts/runinpypgstac` uses the published-package path by default; set `PGPKG_LOCAL_REPO_DIR` to mount a local `pgpkg` checkout at `/pgpkg` and export `PGPKG_REPO_DIR` when `stageversion` or `makemigration` should run against a local checkout
-- When no local checkout is mounted, the in-container `stageversion` / `makemigration` helpers resolve `pgpkg>=0.1,<0.2` from PyPI with `uv run --no-project --with ...`
+- When no local checkout is mounted, the in-container `stageversion` / `makemigration` helpers resolve `pgpkg>=0.1.1,<0.2` from PyPI with `uv run --no-project --with ...`
 - Credentials: `username` / `password`, database: `postgis`
 
 ## Migration Process
@@ -119,7 +119,7 @@ This runs inside Docker and:
 
 ### How makemigration Works
 
-`makemigration` (copied from `scripts/container-scripts/makemigration` into the image) now prefers a local checkout via `PGPKG_REPO_DIR`, otherwise it resolves the pinned published package with `uv run --no-project --with "pgpkg[diff]>=0.1,<0.2" pgpkg makemigration`:
+`makemigration` (copied from `scripts/container-scripts/makemigration` into the image) now prefers a local checkout via `PGPKG_REPO_DIR`, otherwise it resolves the pinned published package with `uv run --no-project --with "pgpkg[diff]>=0.1.1,<0.2" pgpkg makemigration`:
 
 1. Uses `src/pgstac/pyproject.toml` to locate the canonical staged base files
 2. Uses `results.temporary_local_db` via `pgpkg` to diff the source and target staged bases
@@ -146,7 +146,7 @@ uv run --directory src/pgstac-migrate pgstac-migrate versions
 
 `pgstac-migrate` owns runtime migration planning and apply logic. `pypgstac migrate` delegates to the same Python API for backwards compatibility and does not execute source-tree SQL files directly.
 The source-tree `pgstac-migrate` package prefers the baked artifact at `src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst` and rebuilds it from the source tree when that file is missing.
-`src/pgstac-migrate/pyproject.toml` resolves `pgpkg>=0.1,<0.2` from PyPI. The standalone `src/pgstac-migrate/scripts/build_artifact.py` helper does not use that lockfile; it carries its own inline `pgpkg>=0.1,<0.2` dependency.
+`src/pgstac-migrate/pyproject.toml` resolves `pgpkg>=0.1.1,<0.2` from PyPI. The standalone `src/pgstac-migrate/scripts/build_artifact.py` helper does not use that lockfile; it carries its own inline `pgpkg>=0.1.1,<0.2` dependency.
 `src/pypgstac/pyproject.toml` keeps a local `[tool.uv.sources]` override to the sibling `../pgstac-migrate` project so `uv run --directory src/pypgstac ...` resolves the wrapper stack from the source tree, while `pgpkg` resolves from PyPI. In the Docker-backed dev flow, `scripts/runinpypgstac` can mount a local pgpkg checkout at `/pgpkg` and export `PGPKG_REPO_DIR` for container-script testing.
 
 ## Testing Details

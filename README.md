@@ -24,7 +24,7 @@
 
 ---
 
-**PgSTAC** is a set of SQL functions and schema to build highly performant databases for Spatio-Temporal Asset Catalogs ([STAC](https://stacspec.org/)). The project also provides **pypgstac** (a Python module) to help with database migrations and document ingestion (collections and items).
+**PgSTAC** is a set of SQL functions and schema to build highly performant databases for Spatio-Temporal Asset Catalogs ([STAC](https://stacspec.org/)). The project also provides **pgstac-migrate** (a focused migration package) and **pypgstac** (a Python module for compatibility migration commands and document ingestion).
 
 PgSTAC provides functionality for STAC Filters, CQL2 search, and utilities to help manage the indexing and partitioning of STAC Collections and Items.
 
@@ -33,6 +33,8 @@ PgSTAC is used in production to scale to hundreds of millions of STAC items. PgS
 PgSTAC Documentation: https://stac-utils.github.io/pgstac/pgstac
 
 pyPgSTAC Documentation: https://stac-utils.github.io/pgstac/pypgstac
+
+pgstac-migrate package: `src/pgstac-migrate`
 
 ## Project structure
 
