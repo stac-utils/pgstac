@@ -198,10 +198,6 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-  CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
-    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
-  $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
-
 drop function if exists "pgstac"."search_rows"(_where text, _orderby text, partitions text[], _limit integer);
 
 drop function if exists "pgstac"."where_stats"(inwhere text, updatestats boolean, conf jsonb);
@@ -304,7 +300,7 @@ CREATE OR REPLACE FUNCTION pgstac.pgstac_hash(data text)
  IMMUTABLE PARALLEL SAFE STRICT
 AS $function$
     SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
-  $function$
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION pgstac.pin_search(_name text)

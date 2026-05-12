@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `PGPKG_REPO_DIR` override support.
 - `scripts/runinpypgstac` now supports a `PGPKG_LOCAL_REPO_DIR` mount override
   for local pgpkg development while keeping the default flow PyPI-first.
+- `pgstac_hash` now lives with the search hashing helpers in
+  `src/pgstac/sql/004_search.sql` instead of the pre-idempotent bootstrap SQL,
+  and `stageversion` regenerates a clean incremental migration for that move.
 - Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.

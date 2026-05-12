@@ -200,13 +200,6 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 
 -- BEGIN FRAGMENT: 001_core.sql
 
-  CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
-    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
-  $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
--- END FRAGMENT: 000_idempotent_pre.sql
-
--- BEGIN FRAGMENT: 001_core.sql
-
 CREATE TABLE IF NOT EXISTS migrations (
   version text PRIMARY KEY,
   datetime timestamptz DEFAULT clock_timestamp() NOT NULL
@@ -3537,6 +3530,10 @@ $$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
 -- ============================================================================
 -- Search Hashing
 -- ============================================================================
+
+CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
+    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
 -- Central hash helper: one canonical where-clause + metadata payload to hash.
 CREATE OR REPLACE FUNCTION search_hash_from_where(_where text, _metadata jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$

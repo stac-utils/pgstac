@@ -191,7 +191,3 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
-
-  CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
-    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
-  $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
