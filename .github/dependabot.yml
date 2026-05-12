@@ -52,3 +52,15 @@ updates:
           - "tenacity"
           - "version-parser"
           - "psycopg*"
+
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      rust-all:
+        applies-to: version-updates
+        patterns:
+          - "*"

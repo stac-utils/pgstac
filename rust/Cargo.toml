@@ -1,0 +1,31 @@
+[package]
+name = "pgstac"
+description = "Rust interface for pgstac"
+version = "0.9.11-dev"
+keywords = ["geospatial", "stac", "metadata", "raster", "database"]
+categories = ["database", "data-structures", "science"]
+authors = ["Pete Gadomski <pete.gadomski@gmail.com>"]
+edition = "2024"
+homepage = "https://stac-utils.github.io/pgstac"
+repository = "https://github.com/stac-utils/pgstac"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+
+[dependencies]
+serde = "1.0"
+serde_json = "1.0"
+stac = "0.17.0"
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["rt"] }
+tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1"] }
+tracing = "0.1.40"
+
+[dev-dependencies]
+geojson = "1.0"
+rstest = "0.26.1"
+tokio = { version = "1.44", features = ["rt-multi-thread", "macros"] }
+tokio-test = "0.4.4"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
