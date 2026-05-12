@@ -65,14 +65,22 @@ EOSQL
 
 function refresh_collation_versions(){
     # Newer container libc versions can make template collation metadata stale.
-    psql -X -q -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
-    psql -X -q -d postgres -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
-    psql -X -q -d postgres -c "ALTER DATABASE postgis REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+    local appdb="${PGDATABASE:-${POSTGRES_DB:-postgres}}"
+    local db
+
+    for db in template1 postgres "$appdb"; do
+        psql -X -q -d postgres -c "ALTER DATABASE ${db} REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+    done
 }
 
 function test_server_extensions(){
     local appdb="${PGDATABASE:-${POSTGRES_DB:-postgres}}"
     local pgss_count
+
+    # CI test jobs use the pgstacbase image (no init scripts), so create the
+    # extensions in the active databases before validating preload/runtime behavior.
+    psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;" >/dev/null
+    psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "CREATE EXTENSION IF NOT EXISTS pg_cron;" >/dev/null
 
     psql -X -q -v ON_ERROR_STOP=1 -d "$appdb" <<EOSQL
 DO \$\$

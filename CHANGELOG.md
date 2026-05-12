@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Added
 - New `pgstac-migrate` package under `src/pgstac-migrate/` with a standalone
   CLI, Python API, and tests for migration planning and execution.
+- New Rust crate under `src/pgstac-rs/` with updated CI/release wiring,
+  README guidance, and test coverage.
 - `src/pgstac/pyproject.toml` `tool.pgpkg` project metadata for canonical SQL +
   migration staging.
 - `scripts/makemigration` host wrapper for the in-container `makemigration` helper.
@@ -54,20 +56,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `PGPKG_REPO_DIR` override support.
 - `scripts/runinpypgstac` now supports a `PGPKG_LOCAL_REPO_DIR` mount override
   for local pgpkg development while keeping the default flow PyPI-first.
-- Search cache hashing now uses SHA-256 and canonical where-clause inputs,
-  reducing collision risk and avoiding cache-key drift from pagination and
-  presentation-only parameters.
-- Search cache lifecycle now lives on `searches` (retiring `search_wheres`),
-  adding named/pinned search support and retention-driven GC for anonymous
-  cache rows.
-- Search cache writes now use non-blocking row touch (`FOR UPDATE SKIP LOCKED`)
-  plus advisory-lock-backed insert/update fallback, reducing lock waits and
-  deadlock risk under concurrent identical searches.
+- Search cache hashing, storage, and concurrency control were reworked: SHA-256
+  cache keys, canonical where-clause inputs, `searches`-backed lifecycle,
+  retention-driven GC, and less blocking row touch / update behavior.
 - Search context stats updates now use optimistic compare-and-update guards on
   `statslastupdated`, reducing stale overwrites when concurrent workers refresh
   counts.
-- The Rust crate moved from the top-level `rust/` directory to
-  `src/pgstac-rs/`, and CI/release workflows now use the new path.
+- GitHub Actions and release automation were refreshed for the current layout:
+  Rust crate path updates, workflow/action version bumps, and Dependabot group
+  adjustments.
 - Tagged releases now publish the new `pgstac-migrate` package to PyPI alongside `pypgstac` via trusted publishing in `.github/workflows/release.yml`.
 - In-container helper scripts moved from `docker/pypgstac/bin/` to
   `scripts/container-scripts/`; container `PATH` updated accordingly.
@@ -81,22 +78,23 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `--build` flag; `PGSTAC_BUILD_POLICY` env var provides a persistent default.
 - Dev tooling: `flake8`, `black`, and `mypy` removed in favour of `ruff==0.15.11` and
   `ty==0.0.31`. `pre-commit` pinned to `3.5.0`. `pre-commit-hooks` updated to v5.0.0.
-- `pypgstac` package floor raised to Python 3.11; metadata now advertises 3.11-3.14.
-- `pypgstac` settings now use `pydantic-settings` (`BaseSettings` from
-  `pydantic_settings`) and require `pydantic>=2,<3`.
 - `cachetools` upper bound removed (`cachetools>=5.3.0`) since `pypgstac` only uses
   `cachetools.func.lru_cache`; no known incompatible API changes affect this usage.
 - `pypgstac` developer tooling config now consistently targets Ruff + ty:
   removes stale mypy config, pins Ruff to `0.15.11` to match pre-commit,
   and adds minimal `[tool.ty]` project settings.
+- `pypgstac` now requires Python 3.11+ and advertises support through 3.14;
+  settings now use `pydantic-settings` and require `pydantic>=2,<3`.
 - Formatting/type-check pipeline now uses `scripts/test --formatting` as the
   single pre-commit entry point (removing duplicate direct Ruff pre-commit hooks)
   and aligns Ruff line-length handling with the formatter (`E501` ignored;
   explicit `line-length = 88`).
-- GitHub Actions updated: `dorny/paths-filter` v2→v3, `docker/build-push-action`
-  v4→v6, `astral-sh/setup-uv` v8.0.0→v8.1.0; all SHA pins refreshed.
-- Dependabot groups reworked: `actions-all` (replaces `minor-and-patch`), new
-  `docker-base-images`, `python-dev-tooling`, and `python-runtime` groups.
+- GitHub Actions and release automation were refreshed for the current layout:
+  Rust crate path updates, `dorny/paths-filter` v2→v3,
+  `docker/build-push-action` v4→v6, `astral-sh/setup-uv` v8.0.0→v8.1.0,
+  refreshed SHA pins, and Dependabot group updates (`actions-all` replaces
+  `minor-and-patch`, with new `docker-base-images`, `python-dev-tooling`, and
+  `python-runtime` groups).
 - `docker-compose.yml` removes explicit `container_name` entries to avoid conflicts
   between concurrent local instances.
 
@@ -120,8 +118,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   the broken `3.9.0` sdist under `--resolution lowest-direct`.
 - `pydantic` minimum raised to `>=2.10` so `--resolution lowest-direct` on Python 3.13
   does not resolve to `pydantic-core==2.0.1`, which fails to build.
-- `scripts/container-scripts/test` now uses `PGDATABASE`/`POSTGRES_DB` when checking
-  server extensions instead of assuming a `postgis` database name.
+- `scripts/container-scripts/test` now derives the active database from
+  `PGDATABASE`/`POSTGRES_DB` when checking server extensions and refreshing
+  collation versions, instead of assuming `postgis`.
 
 
 ## [v0.9.11]
