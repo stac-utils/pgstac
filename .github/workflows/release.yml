@@ -217,15 +217,36 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install build
-        working-directory: /home/runner/work/pgstac/pgstac/src/pypgstac
+        working-directory: src/pypgstac
         run: pip install build
       - name: Build
-        working-directory: /home/runner/work/pgstac/pgstac/src/pypgstac
+        working-directory: src/pypgstac
         run: python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          packages-dir: /home/runner/work/pgstac/pgstac/src/pypgstac/dist
+          packages-dir: src/pypgstac/dist
+
+  releasepgstacmigratetopypi:
+    name: Release pgstac-migrate to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pgstac-migrate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - name: Build
+        working-directory: src/pgstac-migrate
+        run: uvx --from build pyproject-build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: src/pgstac-migrate/dist
 
   releasetocratesio:
     name: Release Rust crate

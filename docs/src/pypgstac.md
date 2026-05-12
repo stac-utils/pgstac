@@ -7,11 +7,7 @@ pyPgSTAC is available on PyPI
 python -m pip install pypgstac
 ```
 
-By default, pyPgSTAC does not install the `psycopg` dependency. If you want the database driver installed, use:
-
-```
-python -m pip install pypgstac[psycopg]
-```
+pyPgSTAC installs the PostgreSQL driver dependencies (`psycopg[binary]` and `psycopg-pool`) by default.
 
 Or can be built locally
 ```
@@ -50,14 +46,40 @@ pyPgSTAC will get the database connection settings from the **standard PG enviro
 It can also take a DSN database url "postgresql://..." via the **--dsn** flag.
 
 ### Migrations
-pyPgSTAC has a utility to help apply migrations to an existing PgSTAC instance to bring it up to date.
 
-There are two types of migrations:
+`pypgstac migrate` is a compatibility wrapper over the standalone `pgstac-migrate` package.
 
- - **Base migrations** install PgSTAC into a database with no current PgSTAC installation. These migrations follow the file pattern `"pgstac.[version].sql"`
- - **Incremental migrations** are used to move PgSTAC from one version to the next. These migrations follow the file pattern `"pgstac.[version].[fromversion].sql"`
+- Runtime planning and apply logic lives in `pgstac-migrate`.
+- `pypgstac migrate` remains supported for backward compatibility.
 
-Migrations are stored in ```pypgstac/pypgstac/migrations``` and are distributed with the pyPgSTAC package.
+Migration filenames use canonical PostgreSQL extension naming:
+
+- **Base migrations:** `pgstac--<version>.sql`
+- **Incremental migrations:** `pgstac--<from>--<to>.sql`
+
+These files are bundled in the `pgstac-migrate` artifact and used by both CLIs.
+
+### `pgstac-migrate` CLI and API
+
+For direct migration operations (recommended for new integrations):
+
+```bash
+pgstac-migrate migrate --help
+pgstac-migrate plan
+pgstac-migrate versions
+pgstac-migrate info
+```
+
+Python API example:
+
+```python
+from pgstac_migrate.api import migrate
+
+result = migrate(target=None, conninfo="postgresql://...")
+print(result.final_version)
+```
+
+Use `target=None` for latest, or set `target="<version>"`.
 
 ### Running Migrations
 pyPgSTAC has a utility for checking the version of an existing PgSTAC database and applying the appropriate migrations in the correct order. It can also be used to setup a database from scratch.

@@ -57,6 +57,18 @@ function wait_for_pgstac() {
 
 CONTAINER_ARGS=()
 BUILD_POLICY="${PGSTAC_BUILD_POLICY:-always}"
+LOCAL_PGPKG_DIR="${PGPKG_LOCAL_REPO_DIR:-}"
+COMPOSE_RUN_ARGS=()
+
+if [[ -n "${PGPKG_LOCAL_REPO_DIR:-}" && ! -d "$LOCAL_PGPKG_DIR" ]]; then
+    echo "PGPKG_LOCAL_REPO_DIR points to $LOCAL_PGPKG_DIR but no checkout exists there." >&2
+    exit 1
+fi
+
+if [[ -n "$LOCAL_PGPKG_DIR" && -d "$LOCAL_PGPKG_DIR" ]]; then
+    COMPOSE_RUN_ARGS+=("-e" "PGPKG_REPO_DIR=/pgpkg")
+    COMPOSE_RUN_ARGS+=("-v" "$LOCAL_PGPKG_DIR:/pgpkg")
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -129,7 +141,7 @@ fi
 
 if [[ $CPFILES == 1 ]]; then
     echo "Running pypgstac worker"
-    WORKER_ID=$(docker compose run -d --rm pypgstac tail -f /dev/null)
+    WORKER_ID=$(docker compose run -d --rm "${COMPOSE_RUN_ARGS[@]}" pypgstac tail -f /dev/null)
     echo "Executing ${CONTAINER_ARGS[@]} in pypgstac worker"
     docker exec "$WORKER_ID" "${CONTAINER_ARGS[@]}"
     echo "copying datafiles to host"
@@ -138,7 +150,7 @@ if [[ $CPFILES == 1 ]]; then
     docker kill "$WORKER_ID" >/dev/null
 else
     echo "Running ${CONTAINER_ARGS[@]} in pypgstacworker"
-    docker compose run -T --rm pypgstac "${CONTAINER_ARGS[@]}"
+    docker compose run -T --rm "${COMPOSE_RUN_ARGS[@]}" pypgstac "${CONTAINER_ARGS[@]}"
 fi
 JOBEXITCODE=$?
 [[ $PGSTAC_RUNNING == "" ]] && docker compose stop pgstac

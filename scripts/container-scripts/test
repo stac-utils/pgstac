@@ -66,6 +66,7 @@ EOSQL
 function refresh_collation_versions(){
     # Newer container libc versions can make template collation metadata stale.
     psql -X -q -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
+    psql -X -q -d postgres -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
     psql -X -q -d postgres -c "ALTER DATABASE postgis REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
 }
 
@@ -73,24 +74,28 @@ function test_formatting(){
     cd $SRCDIR/pypgstac
 
     echo "Running ruff"
-    ruff check src/pypgstac tests
-    ruff format --check src/pypgstac tests
+    uv run --group dev ruff check src/pypgstac tests
+    uv run --group dev ruff format --check src/pypgstac tests
 
     echo "Running ty"
-    ty check
+    uv run --group dev --group test ty check
 
     echo "Checking if there are any staged migrations."
-    find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pypgstac/migrations. Please check migrations and remove staged suffix."; exit 1; }
+    find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pgstac/migrations. Please check migrations and remove the staged suffix."; exit 1; }
+
+    echo "Checking for legacy dotted migration filenames."
+    find $SRCDIR/pgstac/migrations -maxdepth 1 -type f -name 'pgstac.*.sql' | grep . && { echo "Legacy dotted migration filenames remain in src/pgstac/migrations."; exit 1; }
+    find $SRCDIR/pypgstac/src/pypgstac/migrations -maxdepth 1 -type f -name 'pgstac.*.sql' | grep . && { echo "Legacy dotted migration filenames remain in src/pypgstac/src/pypgstac/migrations."; exit 1; }
 
 
-    VERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
+    VERSION=$(cd $SRCDIR/pypgstac && uv run python -c "from pypgstac.version import __version__; print(__version__)")
     echo $VERSION
     if echo $VERSION | grep "dev"; then
         VERSION="unreleased"
     fi
 
     echo "Checking whether base sql migration exists for pypgstac version."
-    [ -f $SRCDIR/pgstac/migrations/pgstac."${VERSION}".sql ] || { echo "****FAIL No Migration exists pypgstac/migrations/pgstac.${VERSION}.sql"; exit 1; }
+    [ -f $SRCDIR/pgstac/migrations/pgstac--"${VERSION}".sql ] || { echo "****FAIL No migration exists at pgstac/migrations/pgstac--${VERSION}.sql"; exit 1; }
 
     echo "Congratulations! All formatting tests pass."
 }
@@ -162,16 +167,13 @@ function test_pypgstac(){
 [[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
 TEMPLATEDB=${1:-pgstac_test_db_template}
     cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e . --no-deps
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
-    pytest tests $VERBOSE
+    uv run --group dev --group test pytest tests $VERBOSE
+    uv run --group dev --group test pytest ../pgstac-migrate/tests $VERBOSE
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 
@@ -287,16 +289,11 @@ EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
     cd $SRCDIR/pypgstac
-    python -m venv venv
-    source venv/bin/activate
-    pip install --cache /tmp/.pipcache --upgrade pip
-    pip install --cache /tmp/.pipcache -e .[dev,test,psycopg]
+    uv run --group dev --group test pypgstac migrate --toversion 0.3.0
+    uv run --group dev --group test pypgstac --version
 
-    pypgstac migrate --toversion 0.3.0
-    pypgstac --version
-
-    pypgstac migrate
-    pypgstac --version
+    uv run --group dev --group test pypgstac migrate
+    uv run --group dev --group test pypgstac --version
 
     echo "Running all tests against incrementally migrated database."
     test_pgtap pgstac_test_migration

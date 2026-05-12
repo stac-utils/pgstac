@@ -3,9 +3,24 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SRCDIR=${PGSTAC_REPO_DIR:-/opt/src}
 cd $SRCDIR
 BASEDIR=$SRCDIR
+PGSTACDIR=$BASEDIR/pgstac
+PGPKGDIR=${PGPKG_REPO_DIR:-}
 SQLDIR=$BASEDIR/pgstac/sql
 PYPGSTACDIR=$BASEDIR/pypgstac
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
+
+function run_pgpkg() {
+    if [[ -n "$PGPKGDIR" ]]; then
+        if [[ ! -d "$PGPKGDIR" ]]; then
+            echo "PGPKG_REPO_DIR points to $PGPKGDIR but no checkout exists there." >&2
+            exit 1
+        fi
+        uv run --directory "$PGPKGDIR" "$@"
+        return
+    fi
+
+    uv run --no-project --with "pgpkg>=0.1.1,<0.2" "$@"
+}
 
 function usage() {
         cat <<EOF
@@ -16,6 +31,7 @@ incremental migration via makemigration.
 
 Environment:
     PGSTAC_VERSION   Default version when no positional version is provided.
+    PGPKG_REPO_DIR   Optional local pgpkg checkout to use instead of the installed package.
 EOF
 }
 
@@ -48,21 +64,19 @@ else
 fi
 
 
-OLDVERSION=$(find $MIGRATIONSDIR -name "pgstac.*.sql" | sed -En 's/^.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' | grep -v "$VERSION" | sort -Vr | head -1)
+OLDVERSION=$(find $MIGRATIONSDIR -name "pgstac--*.sql" | sed -En 's/^.*pgstac--([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' | grep -v "$VERSION" | sort -Vr | head -1)
 
 
 
 echo "Bumping version from $OLDVERSION to $VERSION"
 
-# Assemble a base migration for the version and put it in the migrations directory.
+# Update the version SQL fragment before staging the canonical base file.
 cd $SQLDIR
 echo "SELECT set_version('${VERSION}');" >999_version.sql
-cat *.sql >$MIGRATIONSDIR/pgstac.${VERSION}.sql
-cd $BASEDIR/pgstac
-
-# make the base pgstac.sql a symbolic link to the most recent version
-rm pgstac.sql
-cp migrations/pgstac.${VERSION}.sql pgstac.sql
+run_pgpkg pgpkg stageversion "$VERSION" \
+    --project-root "$PGSTACDIR" \
+    --also-write "$PGSTACDIR/pgstac.sql"
+cd $PGSTACDIR
 
 # Update the version number in the appropriate places
 [[ $VERSION == 'unreleased' ]] && PYVERSION="${OLDVERSION}-dev" || PYVERSION="$VERSION"
