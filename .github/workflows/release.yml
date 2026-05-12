@@ -243,7 +243,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install build
-        working-directory: /home/runner/work/pgstac/pgstac/src/pgstac-migrate
+        working-directory: src/pgstac-migrate
         run: python -m pip install build
       - name: Build
         working-directory: /home/runner/work/pgstac/pgstac/src/pgstac-migrate
