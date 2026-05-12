@@ -2070,11 +2070,25 @@ CREATE TABLE items (
     collection text NOT NULL,
     datetime timestamptz NOT NULL,
     end_datetime timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    content_hash text NOT NULL DEFAULT '',
     content JSONB NOT NULL,
     private jsonb
 )
 PARTITION BY LIST (collection)
 ;
+
+CREATE TABLE IF NOT EXISTS items_deleted_log (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    item_id text NOT NULL,
+    collection text NOT NULL,
+    partition text,
+    datetime timestamptz,
+    end_datetime timestamptz,
+    content_hash text NOT NULL DEFAULT '',
+    deleted_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS items_deleted_log_deleted_at_idx ON items_deleted_log (deleted_at);
 
 CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
@@ -2121,21 +2135,69 @@ REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
+CREATE OR REPLACE FUNCTION items_touch_triggerfunc() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at := now();
+    NEW.content_hash := '';
+    RETURN NEW;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS items_before_upsert_trigger ON items;
+CREATE TRIGGER items_before_upsert_trigger
+BEFORE INSERT OR UPDATE ON items
+FOR EACH ROW
+EXECUTE FUNCTION items_touch_triggerfunc();
+
+CREATE OR REPLACE FUNCTION items_delete_log_trigger() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO items_deleted_log (
+        item_id,
+        collection,
+        partition,
+        datetime,
+        end_datetime,
+        content_hash
+    )
+    SELECT
+        old_rows.id,
+        old_rows.collection,
+        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+        old_rows.datetime,
+        old_rows.end_datetime,
+        old_rows.content_hash
+    FROM old_rows;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS items_delete_log_after_delete_trigger ON items;
+CREATE TRIGGER items_delete_log_after_delete_trigger
+    AFTER DELETE ON items
+    REFERENCING OLD TABLE AS old_rows
+    FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
+
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
-    SELECT
-            content->>'id' as id,
-            stac_geom(content) as geometry,
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            strip_jsonb(
-                content - '{id,geometry,collection,type}'::text[],
-                collection_base_item(content->>'collection')
-            ) - '{id,geometry,collection,type}'::text[] as content,
-            null::jsonb as private
-    ;
-$$ LANGUAGE SQL STABLE;
+DECLARE
+    out items;
+BEGIN
+    out.id := content->>'id';
+    out.geometry := stac_geom(content);
+    out.collection := content->>'collection';
+    out.datetime := stac_datetime(content);
+    out.end_datetime := stac_end_datetime(content);
+    out.updated_at := now();
+    out.content_hash := '';
+    out.content := strip_jsonb(
+        content - '{id,geometry,collection,type}'::text[],
+        collection_base_item(content->>'collection')
+    ) - '{id,geometry,collection,type}'::text[];
+    out.private := null;
+    RETURN out;
+END;
+$$ LANGUAGE PLPGSQL STABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -4726,6 +4788,15 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION gc_deleted_items_log(retention_interval interval DEFAULT '30 days') RETURNS bigint AS $$
+    WITH deleted AS (
+        DELETE FROM items_deleted_log
+        WHERE deleted_at < now() - retention_interval
+        RETURNING 1
+    )
+    SELECT count(*)::bigint FROM deleted;
+$$ LANGUAGE SQL SECURITY DEFINER;
 -- END FRAGMENT: 997_maintenance.sql
 
 -- BEGIN FRAGMENT: 998_idempotent_post.sql

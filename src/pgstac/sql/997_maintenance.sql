@@ -85,3 +85,12 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION gc_deleted_items_log(retention_interval interval DEFAULT '30 days') RETURNS bigint AS $$
+    WITH deleted AS (
+        DELETE FROM items_deleted_log
+        WHERE deleted_at < now() - retention_interval
+        RETURNING 1
+    )
+    SELECT count(*)::bigint FROM deleted;
+$$ LANGUAGE SQL SECURITY DEFINER;
