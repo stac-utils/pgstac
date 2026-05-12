@@ -208,12 +208,17 @@ jobs:
       PGUSER: username
       PGPASSWORD: password
       PGDATABASE: postgis
+      UV_SYSTEM_PYTHON: 1
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Install pgstac
-        run: psql -v ON_ERROR_STOP=1 -f src/pgstac/pgstac.sql
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - name: Install pypgstac
+        working-directory: src/pypgstac
+        run: uv pip install .[psycopg]
+      - name: Migrate pgstac
+        run: pypgstac migrate
       - name: Test
         run: cargo test -p pgstac --all-features --manifest-path rust/Cargo.toml
