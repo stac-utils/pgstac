@@ -74,11 +74,11 @@ function test_formatting(){
     cd $SRCDIR/pypgstac
 
     echo "Running ruff"
-    uv run --extra dev ruff check src/pypgstac tests
-    uv run --extra dev ruff format --check src/pypgstac tests
+    uv run --group dev ruff check src/pypgstac tests
+    uv run --group dev ruff format --check src/pypgstac tests
 
     echo "Running ty"
-    uv run --extra dev --extra test --extra psycopg ty check
+    uv run --group dev --group test ty check
 
     echo "Checking if there are any staged migrations."
     find $SRCDIR/pgstac/migrations | grep 'staged' && { echo "There are staged migrations in pgstac/migrations. Please check migrations and remove the staged suffix."; exit 1; }
@@ -172,8 +172,8 @@ DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
 CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
 ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
 EOSQL
-    uv run --extra dev --extra test --extra psycopg pytest tests $VERBOSE
-    uv run --extra dev --extra test --extra psycopg pytest ../pgstac-migrate/tests $VERBOSE
+    uv run --group dev --group test pytest tests $VERBOSE
+    uv run --group dev --group test pytest ../pgstac-migrate/tests $VERBOSE
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
 }
 
@@ -289,11 +289,11 @@ EOSQL
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
     cd $SRCDIR/pypgstac
-    uv run --extra dev --extra test --extra psycopg pypgstac migrate --toversion 0.3.0
-    uv run --extra dev --extra test --extra psycopg pypgstac --version
+    uv run --group dev --group test pypgstac migrate --toversion 0.3.0
+    uv run --group dev --group test pypgstac --version
 
-    uv run --extra dev --extra test --extra psycopg pypgstac migrate
-    uv run --extra dev --extra test --extra psycopg pypgstac --version
+    uv run --group dev --group test pypgstac migrate
+    uv run --group dev --group test pypgstac --version
 
     echo "Running all tests against incrementally migrated database."
     test_pgtap pgstac_test_migration

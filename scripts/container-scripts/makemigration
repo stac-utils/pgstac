@@ -89,7 +89,7 @@ function run_pgpkg_makemigration() {
     return
   fi
 
-  uv run --no-project --with "pgpkg[diff]>=0.1,<0.2" "$@"
+  uv run --no-project --with "pgpkg[diff]>=0.1.1,<0.2" "$@"
 }
 
 # Check if from SQL file exists
