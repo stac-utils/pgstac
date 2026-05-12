@@ -18,8 +18,8 @@ $$;
 
 DO $$
   BEGIN
-    INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
-    ('datetime','{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}', null, null);
+    INSERT INTO queryables (name, zone_map_enabled, definition, property_wrapper, property_index_type) VALUES
+    ('datetime', true, '{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}', null, null);
   EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
   END

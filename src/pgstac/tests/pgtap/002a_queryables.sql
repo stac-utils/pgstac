@@ -78,6 +78,31 @@ SELECT lives_ok(
     'Can update a queryable from null to a single collection.'
 );
 
+SELECT has_function('pgstac'::name, 'zone_map_queryables', ARRAY['text[]']);
+
+SELECT results_eq(
+    $$ SELECT zone_map_enabled::text FROM queryables WHERE name = 'datetime' AND collection_ids IS NULL LIMIT 1; $$,
+    $$ SELECT 'true'; $$,
+    'Default datetime queryable is enabled for zone-map tracking.'
+);
+
+SELECT lives_ok(
+    $$ UPDATE queryables SET zone_map_enabled = TRUE WHERE name IN ('testqueryable', 'testqueryable3'); $$,
+    'Can enable zone-map tracking for queryables.'
+);
+
+SELECT results_eq(
+    $$ SELECT array_agg(name ORDER BY name) FROM zone_map_queryables(ARRAY['pgstac-test-collection']); $$,
+    $$ SELECT ARRAY['datetime', 'testqueryable', 'testqueryable3']::text[]; $$,
+    'Zone-map queryables include global and collection-specific queryables.'
+);
+
+SELECT results_eq(
+    $$ SELECT array_agg(name ORDER BY name) FROM zone_map_queryables(ARRAY['pgstac-test-collection2']); $$,
+    $$ SELECT ARRAY['datetime']::text[]; $$,
+    'Zone-map queryables apply collection scoping.'
+);
+
 SET pgstac.additional_properties to 'false';
 
 SELECT results_eq(

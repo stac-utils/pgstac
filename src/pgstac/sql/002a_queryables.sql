@@ -6,6 +6,7 @@ CREATE TABLE queryables (
     id bigint GENERATED ALWAYS AS identity PRIMARY KEY,
     name text NOT NULL,
     collection_ids text[], -- used to determine what partitions to create indexes on
+    zone_map_enabled boolean NOT NULL DEFAULT FALSE,
     definition jsonb,
     property_path text,
     property_wrapper text,
@@ -183,6 +184,35 @@ CREATE OR REPLACE FUNCTION unnest_collection(collection_ids text[] DEFAULT NULL)
         END IF;
         RETURN QUERY SELECT unnest(collection_ids);
     END;
+$$ LANGUAGE PLPGSQL STABLE;
+
+CREATE OR REPLACE FUNCTION zone_map_queryables(
+    _collection_ids text[] DEFAULT NULL
+) RETURNS TABLE(
+    name text,
+    collection_ids text[],
+    path text,
+    wrapper text
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        q.name,
+        q.collection_ids,
+        qq.path,
+        qq.wrapper
+    FROM queryables q
+    CROSS JOIN LATERAL queryable(q.name) qq
+    WHERE
+        q.zone_map_enabled
+        AND (
+            _collection_ids IS NULL
+            OR cardinality(_collection_ids) = 0
+            OR q.collection_ids IS NULL
+            OR q.collection_ids && _collection_ids
+        )
+    ORDER BY q.name;
+END;
 $$ LANGUAGE PLPGSQL STABLE;
 
 CREATE OR REPLACE FUNCTION normalize_indexdef(def text) RETURNS text AS $$
