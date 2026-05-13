@@ -47,6 +47,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('queue_strategy', 'legacy'),
   ('queue_max_size', '100'),
   ('queue_max_age', '5 minutes'),
+  ('datetime_limit_strategy', 'chunk'),
   ('queue_timeout', '10 minutes'),
   ('update_collection_extent', 'false'),
   ('format_cache', 'false'),

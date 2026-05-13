@@ -111,6 +111,25 @@ FROM benchmark_partition_stats_queue(
 )
 ORDER BY strategy;
 
+--benchmark datetime-sorted limit strategies against chunk baseline
+SET pgstac.datetime_limit_strategy='chunk';
+SELECT get_setting('datetime_limit_strategy');
+
+SELECT
+    strategy,
+    limit_n,
+    top_n_bucket,
+    matches_chunk
+FROM benchmark_datetime_limit_strategies(
+    'collection = ''pgstactest-partitioned-month''',
+    'datetime DESC, id DESC',
+    ARRAY[10, 50, 100],
+    ARRAY['chunk', 'big_union', 'hybrid'],
+    1,
+    12
+)
+ORDER BY strategy, limit_n, round_no;
+
 --check that values for datetimes that are non 4 digit or that have very high precision are ingesting correctly and that partitioning is working for them
 SET pgstac.use_queue=FALSE;
 SET pgstac.queue_strategy='legacy';

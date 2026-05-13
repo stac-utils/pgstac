@@ -172,3 +172,143 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION benchmark_datetime_limit_strategies(
+    _where text DEFAULT 'TRUE',
+    _orderby text DEFAULT 'datetime DESC, id DESC',
+    limits int[] DEFAULT ARRAY[10, 50, 500],
+    strategies text[] DEFAULT ARRAY['chunk', 'big_union', 'hybrid'],
+    rounds int DEFAULT 3,
+    hybrid_max_partition_queries int DEFAULT 128
+) RETURNS TABLE (
+    strategy text,
+    limit_n int,
+    top_n_bucket text,
+    round_no int,
+    rows_returned int,
+    first_datetime timestamptz,
+    last_datetime timestamptz,
+    elapsed_ms float,
+    planning_ms float,
+    execution_ms float,
+    partitions_touched int,
+    matches_chunk boolean
+) AS $$
+DECLARE
+    raw_strategy text;
+    normalized_strategy text;
+    limit_value int;
+    run_no int;
+    explain_json jsonb;
+    explain_query text;
+    started_at timestamptz;
+    chunk_ids text[];
+    strategy_ids text[];
+BEGIN
+    IF rounds < 1 THEN
+        RAISE EXCEPTION 'rounds must be >= 1';
+    END IF;
+    IF hybrid_max_partition_queries < 1 THEN
+        RAISE EXCEPTION 'hybrid_max_partition_queries must be >= 1';
+    END IF;
+
+    FOREACH limit_value IN ARRAY limits LOOP
+        IF limit_value < 1 THEN
+            RAISE EXCEPTION 'limits values must be >= 1 (got %)', limit_value;
+        END IF;
+
+        FOR run_no IN 1..rounds LOOP
+            started_at := clock_timestamp();
+            SELECT
+                array_agg(concat_ws(':', (row_item.item).collection, (row_item.item).id) ORDER BY row_item.ord),
+                count(*),
+                min((row_item.item).datetime),
+                max((row_item.item).datetime)
+            INTO
+                chunk_ids,
+                rows_returned,
+                first_datetime,
+                last_datetime
+            FROM search_rows(_where, _orderby, NULL, limit_value) WITH ORDINALITY AS row_item(item, ord);
+            elapsed_ms := age_ms(started_at);
+
+            explain_query := format(
+                'SELECT * FROM search_rows(%L, %L, NULL, %L);',
+                _where,
+                _orderby,
+                limit_value
+            );
+            EXECUTE format('EXPLAIN (ANALYZE, FORMAT JSON) %s', explain_query) INTO explain_json;
+            planning_ms := COALESCE((explain_json->0->>'Planning Time')::float, 0.0);
+            execution_ms := COALESCE((explain_json->0->>'Execution Time')::float, 0.0);
+            SELECT count(DISTINCT rel->>0)::int INTO partitions_touched
+            FROM jsonb_path_query(explain_json, 'strict $.**."Relation Name" ? (@ != null)') rel;
+
+            strategy := 'chunk';
+            limit_n := limit_value;
+            top_n_bucket := CASE
+                WHEN limit_value <= 50 THEN 'small'
+                WHEN limit_value <= 500 THEN 'medium'
+                ELSE 'large'
+            END;
+            round_no := run_no;
+            matches_chunk := TRUE;
+            RETURN NEXT;
+
+            FOREACH raw_strategy IN ARRAY strategies LOOP
+                normalized_strategy := normalize_datetime_limit_strategy(raw_strategy);
+                IF normalized_strategy = 'chunk' THEN
+                    CONTINUE;
+                END IF;
+
+                started_at := clock_timestamp();
+                SELECT
+                    array_agg(concat_ws(':', (row_item.item).collection, (row_item.item).id) ORDER BY row_item.ord),
+                    count(*),
+                    min((row_item.item).datetime),
+                    max((row_item.item).datetime)
+                INTO
+                    strategy_ids,
+                    rows_returned,
+                    first_datetime,
+                    last_datetime
+                FROM search_rows_strategy(
+                    _where,
+                    _orderby,
+                    NULL,
+                    limit_value,
+                    normalized_strategy,
+                    hybrid_max_partition_queries
+                ) WITH ORDINALITY AS row_item(item, ord);
+                elapsed_ms := age_ms(started_at);
+
+                explain_query := format(
+                    'SELECT * FROM search_rows_strategy(%L, %L, NULL, %L, %L, %L);',
+                    _where,
+                    _orderby,
+                    limit_value,
+                    normalized_strategy,
+                    hybrid_max_partition_queries
+                );
+                EXECUTE format('EXPLAIN (ANALYZE, FORMAT JSON) %s', explain_query) INTO explain_json;
+                planning_ms := COALESCE((explain_json->0->>'Planning Time')::float, 0.0);
+                execution_ms := COALESCE((explain_json->0->>'Execution Time')::float, 0.0);
+                SELECT count(DISTINCT rel->>0)::int INTO partitions_touched
+                FROM jsonb_path_query(explain_json, 'strict $.**."Relation Name" ? (@ != null)') rel;
+
+                strategy := normalized_strategy;
+                limit_n := limit_value;
+                top_n_bucket := CASE
+                    WHEN limit_value <= 50 THEN 'small'
+                    WHEN limit_value <= 500 THEN 'medium'
+                    ELSE 'large'
+                END;
+                round_no := run_no;
+                matches_chunk := COALESCE(strategy_ids, ARRAY[]::text[]) = COALESCE(chunk_ids, ARRAY[]::text[]);
+                RETURN NEXT;
+            END LOOP;
+        END LOOP;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;

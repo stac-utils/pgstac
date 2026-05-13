@@ -868,6 +868,137 @@ END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
+CREATE OR REPLACE FUNCTION normalize_datetime_limit_strategy(
+    _strategy text DEFAULT NULL
+) RETURNS text AS $$
+DECLARE
+    normalized_strategy text := lower(
+        COALESCE(
+            NULLIF(_strategy, ''),
+            get_setting('datetime_limit_strategy'),
+            'chunk'
+        )
+    );
+BEGIN
+    IF normalized_strategy NOT IN ('chunk', 'big_union', 'hybrid') THEN
+        RAISE EXCEPTION
+            'Unsupported datetime_limit_strategy: %. Valid values are chunk, big_union, hybrid.',
+            normalized_strategy;
+    END IF;
+    RETURN normalized_strategy;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
+CREATE OR REPLACE FUNCTION search_big_union_query(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN partitions text[] DEFAULT NULL,
+    IN _limit int DEFAULT 10,
+    IN _partition_limit int DEFAULT NULL,
+    IN _max_partition_queries int DEFAULT NULL
+) RETURNS text AS $$
+DECLARE
+    query text;
+    union_sql text;
+    query_counter int := 0;
+BEGIN
+    IF _where IS NULL OR trim(_where) = '' THEN
+        _where = ' TRUE ';
+    END IF;
+
+    FOR query IN SELECT * FROM partition_queries(_where, _orderby, partitions) LOOP
+        query_counter := query_counter + 1;
+        EXIT WHEN _max_partition_queries IS NOT NULL AND query_counter > _max_partition_queries;
+        query := format('SELECT * FROM (%s) sub', query);
+        IF _partition_limit IS NOT NULL THEN
+            query := format('%s LIMIT %L', query, _partition_limit);
+        END IF;
+        union_sql := concat_ws(
+            '
+            UNION ALL
+            ',
+            union_sql,
+            query
+        );
+    END LOOP;
+
+    IF union_sql IS NULL THEN
+        RETURN format(
+            'SELECT * FROM items WHERE %s ORDER BY %s LIMIT %L',
+            _where,
+            _orderby,
+            _limit
+        );
+    END IF;
+
+    RETURN format(
+        $q$
+            SELECT * FROM (
+                %s
+            ) total
+            ORDER BY %s
+            LIMIT %L
+        $q$,
+        union_sql,
+        _orderby,
+        _limit
+    );
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
+CREATE OR REPLACE FUNCTION search_rows_strategy(
+    IN _where text DEFAULT 'TRUE',
+    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN partitions text[] DEFAULT NULL,
+    IN _limit int DEFAULT 10,
+    IN _strategy text DEFAULT NULL,
+    IN _hybrid_max_partition_queries int DEFAULT 128
+) RETURNS SETOF items AS $$
+DECLARE
+    query text;
+    strategy text := normalize_datetime_limit_strategy(_strategy);
+    partition_query_count int;
+BEGIN
+    -- Fail-open behavior: strategy routing always falls back to chunk execution.
+    IF strategy = 'chunk' THEN
+        RETURN QUERY
+        SELECT * FROM search_rows(_where, _orderby, partitions, _limit);
+        RETURN;
+    ELSIF strategy = 'hybrid' THEN
+        SELECT count(*) INTO partition_query_count
+        FROM partition_queries(_where, _orderby, partitions);
+        IF partition_query_count > _hybrid_max_partition_queries THEN
+            RETURN QUERY
+            SELECT * FROM search_rows(_where, _orderby, partitions, _limit);
+            RETURN;
+        END IF;
+    END IF;
+
+    BEGIN
+        query := search_big_union_query(
+            _where,
+            _orderby,
+            partitions,
+            _limit,
+            _limit,
+            CASE
+                WHEN strategy = 'hybrid' THEN _hybrid_max_partition_queries
+                ELSE NULL
+            END
+        );
+        RETURN QUERY EXECUTE query;
+    EXCEPTION
+        WHEN others THEN
+            RAISE NOTICE 'search_rows_strategy fallback to chunk because % (%).', SQLERRM, SQLSTATE;
+            RETURN QUERY
+            SELECT * FROM search_rows(_where, _orderby, partitions, _limit);
+    END;
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+
+
 CREATE UNLOGGED TABLE format_item_cache(
     id text,
     collection text,
@@ -983,11 +1114,12 @@ BEGIN
     RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
     SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
-    FROM search_rows(
+    FROM search_rows_strategy(
         full_where,
         orderby,
         search_where.partitions,
-        _querylimit
+        _querylimit,
+        _search->'conf'->>'datetime_limit_strategy'
     ) as i;
 
     RAISE NOTICE 'Time to fetch rows %', age_ms(timer);

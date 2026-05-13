@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `benchmark_partition_stats_queue(...)` SQL helper to run repeatable
   sync/async/adaptive partition-stats maintenance benchmarks and compare queue
   drain + stats freshness outcomes.
+- `benchmark_datetime_limit_strategies(...)` SQL helper for repeated top-N
+  (`ORDER BY datetime ... LIMIT N`) strategy comparisons across
+  `chunk`/`big_union`/`hybrid`, including parity and explain timing metrics.
 
 ### Changed
 - `pypgstac migrate` now delegates runtime migration planning and apply logic to
@@ -88,6 +91,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - New queue-tuning settings: `queue_strategy`, `queue_max_size`, and
   `queue_max_age` (with backward-compatible `legacy` default behavior that
   continues honoring `use_queue`).
+- Datetime-limit strategy controls for search paths:
+  `datetime_limit_strategy` setting (default `chunk`), plus per-query override
+  via `_search.conf.datetime_limit_strategy` with fail-open fallback.
 
 ### Removed
 - PL/Rust support: `pgstacbase-plrust` and `pgstac-plrust` Docker targets removed; the
