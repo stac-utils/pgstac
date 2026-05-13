@@ -77,7 +77,7 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and 
 --check that collection extents have been updated
 SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%' ORDER BY id;
 
---test adaptive queue strategy (mixed sync/async balancing)
+--test adaptive queue strategy (mixed sync/async balancing).
 SET pgstac.use_queue=FALSE;
 SET pgstac.queue_strategy='adaptive';
 SET pgstac.queue_max_size='1';

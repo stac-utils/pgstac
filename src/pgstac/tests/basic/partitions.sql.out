@@ -122,7 +122,7 @@ SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitio
  pgstactest-partitioned-q     | {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}
  pgstactest-partitioned-year  | {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}
 
---test adaptive queue strategy (mixed sync/async balancing)
+--test adaptive queue strategy (mixed sync/async balancing).
 SET pgstac.use_queue=FALSE;
 SET
 SET pgstac.queue_strategy='adaptive';
