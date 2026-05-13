@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark candidate zone-map partition pruning strategies for PgSTAC.
+"""Benchmark cached partition-stat pruning for CQL2-like PgSTAC filters.
 
-The script is designed to run inside the repository's pypgstac Docker image via
+The script runs inside the repository's pypgstac Docker image via
 run_benchmark.sh. It creates an isolated database, installs PgSTAC, generates a
-small month-partitioned STAC fixture, and times pruning-only SQL variants.
+month-partitioned STAC fixture with CQL2-filterable properties, materializes a
+benchmark-only cached partition-stat table, and compares that table against the
+current EXPLAIN/constraint-pruning path.
 """
 
 from __future__ import annotations
@@ -35,6 +37,10 @@ DEFAULT_CONFIG = {
     "warmup_iterations": 2,
     "query_windows": [1, 3, 6],
     "spatial_window_degrees": 4.0,
+    "cloud_cover_threshold": 35,
+    "platform": "sentinel-2a",
+    "chunk_limit": 3,
+    "result_limit": 25,
     "output": "/bench/results/zone_map_partition_pruning_results.json",
 }
 
@@ -58,10 +64,22 @@ def reset_database(dbname: str) -> None:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", dbname):
         raise ValueError(f"Unsafe benchmark database name: {dbname!r}")
     with connect("postgres") as conn:
-        conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE);").format(sql.Identifier(dbname)))
+        conn.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE);").format(
+                sql.Identifier(dbname),
+            ),
+        )
         conn.execute(sql.SQL("CREATE DATABASE {};").format(sql.Identifier(dbname)))
-        conn.execute(sql.SQL("ALTER DATABASE {} SET SEARCH_PATH TO pgstac, public;").format(sql.Identifier(dbname)))
-        conn.execute(sql.SQL("ALTER DATABASE {} SET CLIENT_MIN_MESSAGES TO WARNING;").format(sql.Identifier(dbname)))
+        conn.execute(
+            sql.SQL("ALTER DATABASE {} SET SEARCH_PATH TO pgstac, public;").format(
+                sql.Identifier(dbname),
+            ),
+        )
+        conn.execute(
+            sql.SQL("ALTER DATABASE {} SET CLIENT_MIN_MESSAGES TO WARNING;").format(
+                sql.Identifier(dbname),
+            ),
+        )
     env = os.environ.copy()
     env["PGDATABASE"] = dbname
     subprocess.run(
@@ -76,7 +94,7 @@ def collection_doc(collection_id: str) -> dict[str, Any]:
         "type": "Collection",
         "id": collection_id,
         "stac_version": "1.0.0",
-        "description": f"Zone-map pruning benchmark collection {collection_id}",
+        "description": f"CQL2 partition-stat pruning benchmark collection {collection_id}",
         "license": "proprietary",
         "extent": {
             "spatial": {"bbox": [[-180, -90, 180, 90]]},
@@ -98,6 +116,8 @@ def item_doc(collection_id: str, month: int, item_no: int, collection_no: int) -
     bottom = base_y + jitter
     right = left + 0.5
     top = bottom + 0.5
+    cloud_cover = (month * 11 + item_no * 7 + collection_no * 13) % 100
+    platform = "sentinel-2a" if (month + item_no + collection_no) % 3 != 0 else "landsat-8"
     return {
         "type": "Feature",
         "stac_version": "1.0.0",
@@ -105,10 +125,16 @@ def item_doc(collection_id: str, month: int, item_no: int, collection_no: int) -
         "collection": collection_id,
         "geometry": {
             "type": "Polygon",
-            "coordinates": [[[left, bottom], [right, bottom], [right, top], [left, top], [left, bottom]]],
+            "coordinates": [
+                [[left, bottom], [right, bottom], [right, top], [left, top], [left, bottom]],
+            ],
         },
         "bbox": [left, bottom, right, top],
-        "properties": {"datetime": dt.isoformat().replace("+00:00", "Z")},
+        "properties": {
+            "datetime": dt.isoformat().replace("+00:00", "Z"),
+            "eo:cloud_cover": cloud_cover,
+            "platform": platform,
+        },
     }
 
 
@@ -117,8 +143,11 @@ def prepare_fixture(dbname: str, config: dict[str, Any]) -> list[str]:
     db = PgstacDB(dsn=f"dbname={dbname}")
     loader = Loader(db)
     try:
-        collection_ids = [f"zone-map-bench-{i}" for i in range(int(config["collections"]))]
-        loader.load_collections((collection_doc(cid) for cid in collection_ids), insert_mode=Methods.insert)
+        collection_ids = [f"cql2-zone-map-bench-{i}" for i in range(int(config["collections"]))]
+        loader.load_collections(
+            (collection_doc(cid) for cid in collection_ids),
+            insert_mode=Methods.insert,
+        )
         with connect(dbname) as conn:
             conn.execute("UPDATE pgstac.collections SET partition_trunc = 'month';")
         for collection_no, collection_id in enumerate(collection_ids):
@@ -131,11 +160,84 @@ def prepare_fixture(dbname: str, config: dict[str, Any]) -> list[str]:
     finally:
         db.close()
     with connect(dbname) as conn:
-        conn.execute("SELECT update_partition_stats(partition, false) FROM pgstac.partition_sys_meta;")
-        conn.execute("CREATE INDEX IF NOT EXISTS partition_stats_spatial_gist ON pgstac.partition_stats USING GIST (spatial);")
-        conn.execute("CREATE INDEX IF NOT EXISTS partition_stats_dtrange_gist ON pgstac.partition_stats USING GIST (dtrange);")
-        conn.execute("ANALYZE pgstac.partition_stats;")
+        conn.execute(
+            "SELECT update_partition_stats(partition, true) FROM pgstac.partition_sys_meta;",
+        )
+        create_cached_partition_stats(conn)
     return collection_ids
+
+
+def create_cached_partition_stats(conn: psycopg.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS bench_partition_cql2_stats;")
+    conn.execute(
+        """
+        CREATE UNLOGGED TABLE bench_partition_cql2_stats (
+            partition text PRIMARY KEY,
+            collection text NOT NULL,
+            dtrange tstzrange,
+            edtrange tstzrange,
+            spatial geometry,
+            cloud_cover_range numrange,
+            platforms text[],
+            row_count bigint NOT NULL
+        );
+        """
+    )
+    rows = conn.execute(
+        """
+        SELECT partition, collection, COALESCE(dtrange, constraint_dtrange) AS dtrange,
+               COALESCE(edtrange, constraint_edtrange) AS edtrange, spatial
+        FROM pgstac.partitions_view
+        ORDER BY partition;
+        """
+    ).fetchall()
+    for partition, collection, dtrange, edtrange, spatial in rows:
+        conn.execute(
+            sql.SQL(
+                """
+                INSERT INTO bench_partition_cql2_stats (
+                    partition, collection, dtrange, edtrange, spatial,
+                    cloud_cover_range, platforms, row_count
+                )
+                SELECT %s, %s, %s, %s, %s,
+                       numrange(
+                           min((content->'properties'->>'eo:cloud_cover')::numeric),
+                           max((content->'properties'->>'eo:cloud_cover')::numeric),
+                           '[]'
+                       ),
+                       array_agg(DISTINCT content->'properties'->>'platform')
+                           FILTER (WHERE content->'properties' ? 'platform'),
+                       count(*)
+                FROM {};
+                """
+            ).format(sql.Identifier("pgstac", partition)),
+            (partition, collection, dtrange, edtrange, spatial),
+        )
+    conn.execute(
+        """
+        CREATE INDEX bench_partition_cql2_stats_dtrange_gist
+        ON bench_partition_cql2_stats USING GIST (dtrange);
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX bench_partition_cql2_stats_spatial_gist
+        ON bench_partition_cql2_stats USING GIST (spatial);
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX bench_partition_cql2_stats_cloud_gist
+        ON bench_partition_cql2_stats USING GIST (cloud_cover_range);
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX bench_partition_cql2_stats_platforms_gin
+        ON bench_partition_cql2_stats USING GIN (platforms);
+        """,
+    )
+    conn.execute("ANALYZE bench_partition_cql2_stats;")
 
 
 def month_range(start_month: int, width: int) -> str:
@@ -144,7 +246,10 @@ def month_range(start_month: int, width: int) -> str:
     end_month = start_month + width
     end_year = 2020 + (end_month // 12)
     end_month_of_year = (end_month % 12) + 1
-    return f"[{start_year}-{start_month_of_year:02d}-01 UTC,{end_year}-{end_month_of_year:02d}-01 UTC)"
+    return (
+        f"[{start_year}-{start_month_of_year:02d}-01 UTC,"
+        f"{end_year}-{end_month_of_year:02d}-01 UTC)"
+    )
 
 
 def spatial_wkt(month: int, window: float) -> str:
@@ -162,53 +267,76 @@ def spatial_wkt(month: int, window: float) -> str:
     )
 
 
+def candidate_predicate() -> str:
+    return """
+        collection = ANY(%(collections)s)
+        AND dtrange && %(dtrange)s::tstzrange
+        AND edtrange && %(dtrange)s::tstzrange
+        AND spatial && ST_GeomFromText(%(geom_wkt)s, 4326)
+        AND ST_Intersects(spatial, ST_GeomFromText(%(geom_wkt)s, 4326))
+        AND cloud_cover_range && numrange(NULL, %(cloud_cover_threshold)s::numeric, '[]')
+        AND platforms @> ARRAY[%(platform)s]::text[]
+    """
+
+
 def variants() -> dict[str, str]:
-    # These benchmark variants need accurate zone-map metadata. `partitions_view`
-    # is live and joins catalog metadata to partition_stats; avoid the stale
-    # `partitions` materialized view here.
+    pred = candidate_predicate()
     return {
-        "baseline_explain_chunker": "SELECT count(*) FROM pgstac.chunker(%(where)s)",
-        "direct_constraint_temporal": """
+        "baseline_explain_constraint_pruning": "SELECT count(*) FROM pgstac.chunker(%(where)s)",
+        "cached_cql2_stats_candidates": f"""
             SELECT count(*)
-            FROM pgstac.partition_sys_meta
-            WHERE collection = ANY(%(collections)s)
-              AND constraint_dtrange && %(dtrange)s::tstzrange
+            FROM bench_partition_cql2_stats
+            WHERE {pred}
         """,
-        "partition_stats_temporal": """
+        "cached_cql2_stats_candidate_rows": f"""
+            SELECT COALESCE(sum(row_count), 0)
+            FROM bench_partition_cql2_stats
+            WHERE {pred}
+        """,
+        "cached_cql2_stats_datetime_desc_chunks": f"""
             SELECT count(*)
-            FROM pgstac.partitions_view
-            WHERE collection = ANY(%(collections)s)
-              AND COALESCE(dtrange, constraint_dtrange) && %(dtrange)s::tstzrange
+            FROM (
+                SELECT partition
+                FROM bench_partition_cql2_stats
+                WHERE {pred}
+                ORDER BY upper(dtrange) DESC NULLS LAST, partition DESC
+                LIMIT %(chunk_limit)s
+            ) chunks
         """,
-        "partition_stats_temporal_spatial": """
+        "cached_cql2_stats_datetime_asc_chunks": f"""
             SELECT count(*)
-            FROM pgstac.partitions_view
-            WHERE collection = ANY(%(collections)s)
-              AND COALESCE(dtrange, constraint_dtrange) && %(dtrange)s::tstzrange
-              AND spatial && ST_GeomFromText(%(geom_wkt)s, 4326)
-              AND ST_Intersects(spatial, ST_GeomFromText(%(geom_wkt)s, 4326))
+            FROM (
+                SELECT partition
+                FROM bench_partition_cql2_stats
+                WHERE {pred}
+                ORDER BY lower(dtrange) ASC NULLS LAST, partition ASC
+                LIMIT %(chunk_limit)s
+            ) chunks
         """,
-        "cached_partition_set": """
+        "cached_partition_set_for_cql2": f"""
             WITH key AS (
                 SELECT md5(jsonb_build_object(
-                    'where', %(where)s,
-                    'geom_wkt', %(geom_wkt)s,
+                    'cql2', %(cql2_filter)s::jsonb,
                     'dtrange', %(dtrange)s,
+                    'geom_wkt', %(geom_wkt)s,
                     'collections', to_jsonb((
                         SELECT array_agg(collection ORDER BY collection)
                         FROM unnest(%(collections)s::text[]) AS collection
-                    ))
+                    )),
+                    'order', %(orderby)s
                 )::text) AS cache_key
             ), cached AS (
                 SELECT partitions FROM pg_temp.partition_prune_cache c JOIN key USING (cache_key)
             ), inserted AS (
                 INSERT INTO pg_temp.partition_prune_cache(cache_key, partitions)
-                SELECT key.cache_key, array_agg(partition ORDER BY partition)
-                FROM key, pgstac.partitions_view
+                SELECT key.cache_key,
+                       array_agg(
+                           partition
+                           ORDER BY upper(dtrange) DESC NULLS LAST, partition DESC
+                       )
+                FROM key, bench_partition_cql2_stats
                 WHERE NOT EXISTS (SELECT 1 FROM cached)
-                  AND collection = ANY(%(collections)s)
-                  AND COALESCE(dtrange, constraint_dtrange) && %(dtrange)s::tstzrange
-                  AND spatial && ST_GeomFromText(%(geom_wkt)s, 4326)
+                  AND {pred}
                 GROUP BY key.cache_key
                 ON CONFLICT (cache_key) DO NOTHING
                 RETURNING partitions
@@ -219,20 +347,26 @@ def variants() -> dict[str, str]:
     }
 
 
-def time_sql(conn: psycopg.Connection, sql: str, params: dict[str, Any], warmups: int, iterations: int) -> dict[str, Any]:
+def time_sql(
+    conn: psycopg.Connection,
+    sql_text: str,
+    params: dict[str, Any],
+    warmups: int,
+    iterations: int,
+) -> dict[str, Any]:
     timings: list[float] = []
     last_value: Any = None
     for i in range(warmups + iterations):
         start = time.perf_counter()
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            cur.execute(sql_text, params)
             row = cur.fetchone()
         elapsed_ms = (time.perf_counter() - start) * 1000
         last_value = row[0] if row else None
         if i >= warmups:
             timings.append(elapsed_ms)
     return {
-        "count": last_value,
+        "value": str(last_value),
         "min_ms": min(timings),
         "median_ms": statistics.median(timings),
         "mean_ms": statistics.mean(timings),
@@ -241,32 +375,76 @@ def time_sql(conn: psycopg.Connection, sql: str, params: dict[str, Any], warmups
     }
 
 
-def run_benchmarks(dbname: str, collection_ids: list[str], config: dict[str, Any]) -> dict[str, Any]:
+def cql2_filter(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "op": "and",
+        "args": [
+            {
+                "op": "<=",
+                "args": [
+                    {"property": "eo:cloud_cover"},
+                    int(config["cloud_cover_threshold"]),
+                ],
+            },
+            {"op": "=", "args": [{"property": "platform"}, str(config["platform"])]},
+        ],
+    }
+
+
+def run_benchmarks(
+    dbname: str,
+    collection_ids: list[str],
+    config: dict[str, Any],
+) -> dict[str, Any]:
     results: dict[str, Any] = {"config": config, "scenarios": []}
     warmups = int(config["warmup_iterations"])
     iterations = int(config["iterations"])
     with connect(dbname) as conn:
-        conn.execute("CREATE TEMP TABLE partition_prune_cache(cache_key text PRIMARY KEY, partitions text[]) ON COMMIT PRESERVE ROWS;")
+        conn.execute(
+            """
+            CREATE TEMP TABLE partition_prune_cache(
+                cache_key text PRIMARY KEY,
+                partitions text[]
+            ) ON COMMIT PRESERVE ROWS;
+            """,
+        )
         for width in config["query_windows"]:
             start_month = max(0, int(config["months"]) // 2 - int(width) // 2)
             dtrange = month_range(start_month, int(width))
             geom_wkt = spatial_wkt(start_month, float(config["spatial_window_degrees"]))
+            cloud_cover_threshold = int(config["cloud_cover_threshold"])
+            platform = str(config["platform"])
+            cql2 = cql2_filter(config)
             where = (
                 f"collection = ANY ('{{{','.join(collection_ids)}}}'::text[]) "
                 f"AND datetime < upper('{dtrange}'::tstzrange) "
                 f"AND end_datetime >= lower('{dtrange}'::tstzrange) "
-                f"AND st_intersects(geometry, ST_GeomFromText('{geom_wkt}', 4326))"
+                f"AND st_intersects(geometry, ST_GeomFromText('{geom_wkt}', 4326)) "
+                f"AND (content->'properties'->>'eo:cloud_cover')::numeric "
+                f"<= {cloud_cover_threshold} "
+                f"AND content->'properties'->>'platform' = '{platform}'"
             )
             params = {
                 "where": where,
                 "collections": collection_ids,
                 "dtrange": dtrange,
                 "geom_wkt": geom_wkt,
+                "cloud_cover_threshold": cloud_cover_threshold,
+                "platform": platform,
+                "chunk_limit": int(config["chunk_limit"]),
+                "orderby": "datetime DESC, id DESC",
+                "cql2_filter": json.dumps(cql2, sort_keys=True),
             }
-            scenario = {"window_months": width, "dtrange": dtrange, "geom_wkt": geom_wkt, "variants": {}}
+            scenario = {
+                "window_months": width,
+                "dtrange": dtrange,
+                "geom_wkt": geom_wkt,
+                "cql2_filter": cql2,
+                "variants": {},
+            }
             conn.execute("TRUNCATE pg_temp.partition_prune_cache;")
-            for name, sql in variants().items():
-                scenario["variants"][name] = time_sql(conn, sql, params, warmups, iterations)
+            for name, sql_text in variants().items():
+                scenario["variants"][name] = time_sql(conn, sql_text, params, warmups, iterations)
             results["scenarios"].append(scenario)
     return results
 

@@ -1,6 +1,9 @@
-# Zone-map partition pruning benchmark scaffold
+# CQL2 cached partition-stat pruning benchmark scaffold
 
-This scaffold benchmarks the current EXPLAIN-driven `chunker()` path against five candidate zone-map pruning strategies without editing PgSTAC SQL source files.
+This scaffold benchmarks the current EXPLAIN/constraint-pruning path against cached per-partition statistics for CQL2-like filters. It is focused on two goals:
+
+1. quickly determining partitions that could be touched by a CQL2 filter without relying on partition constraint exclusion, and
+2. ordering those candidate partitions into datetime chunks for expensive datetime-sorted searches with a small `LIMIT`.
 
 ## Run
 

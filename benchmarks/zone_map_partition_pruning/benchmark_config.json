@@ -7,5 +7,9 @@
   "warmup_iterations": 2,
   "query_windows": [1, 3, 6],
   "spatial_window_degrees": 4.0,
+  "cloud_cover_threshold": 35,
+  "platform": "sentinel-2a",
+  "chunk_limit": 3,
+  "result_limit": 25,
   "output": "/bench/results/zone_map_partition_pruning_results.json"
 }
