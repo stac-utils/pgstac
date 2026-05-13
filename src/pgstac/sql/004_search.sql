@@ -991,7 +991,7 @@ BEGIN
         RETURN QUERY EXECUTE query;
     EXCEPTION
         WHEN others THEN
-            RAISE NOTICE 'search_rows_strategy fallback to chunk because % (%).', SQLERRM, SQLSTATE;
+            RAISE NOTICE 'search_rows_strategy (%) fallback to chunk because % (%).', strategy, SQLERRM, SQLSTATE;
             RETURN QUERY
             SELECT * FROM search_rows(_where, _orderby, partitions, _limit);
     END;

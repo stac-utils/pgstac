@@ -17,7 +17,7 @@ BEGIN
         COMMIT;
     END LOOP;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE PROCEDURE validate_constraints() AS $$

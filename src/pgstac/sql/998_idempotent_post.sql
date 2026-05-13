@@ -24,7 +24,7 @@ DO $$
     RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
--- Upgrade path for existing installs where datetime already exists.
+-- Ensure datetime remains zone-map-enabled on both fresh installs and upgrades.
 UPDATE queryables
 SET zone_map_enabled = TRUE
 WHERE
