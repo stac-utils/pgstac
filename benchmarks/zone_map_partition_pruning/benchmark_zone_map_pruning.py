@@ -82,11 +82,23 @@ def reset_database(dbname: str) -> None:
         )
     env = os.environ.copy()
     env["PGDATABASE"] = dbname
-    subprocess.run(
-        ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "/opt/src/pgstac/pgstac.sql"],
-        check=True,
-        env=env,
-    )
+    try:
+        subprocess.run(
+            [
+                "psql",
+                "-X",
+                "-q",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-f",
+                "/opt/src/pgstac/pgstac.sql",
+            ],
+            check=True,
+            env=env,
+        )
+    except subprocess.CalledProcessError as exc:
+        msg = f"Failed to install PgSTAC into benchmark database {dbname!r}."
+        raise RuntimeError(msg) from exc
 
 
 def collection_doc(collection_id: str) -> dict[str, Any]:
@@ -205,11 +217,23 @@ def create_cached_partition_stats(conn: psycopg.Connection) -> None:
                     cloud_cover_range, platforms, row_count
                 )
                 SELECT %s, %s, %s, %s, %s,
-                       numrange(
-                           min((content->'properties'->>'eo:cloud_cover')::numeric),
-                           max((content->'properties'->>'eo:cloud_cover')::numeric),
-                           '[]'
-                       ),
+                       CASE
+                           WHEN count(*) FILTER (
+                               WHERE content->'properties' ? 'eo:cloud_cover'
+                           ) = 0
+                           THEN 'empty'::numrange
+                           ELSE numrange(
+                               min((content->'properties'->>'eo:cloud_cover')::numeric)
+                                   FILTER (
+                                       WHERE content->'properties' ? 'eo:cloud_cover'
+                                   ),
+                               max((content->'properties'->>'eo:cloud_cover')::numeric)
+                                   FILTER (
+                                       WHERE content->'properties' ? 'eo:cloud_cover'
+                                   ),
+                               '[]'
+                           )
+                       END,
                        array_agg(DISTINCT content->'properties'->>'platform')
                            FILTER (WHERE content->'properties' ? 'platform'),
                        count(*)
