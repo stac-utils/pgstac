@@ -282,6 +282,10 @@ CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS in
   SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION search_gc_retention_interval(conf jsonb DEFAULT NULL) RETURNS interval AS $$
+    SELECT pgstac.get_setting('search_gc_retention_interval', conf)::interval;
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
     SELECT extract(epoch FROM $1::interval)::text || ' s';
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
@@ -289,7 +293,6 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 CREATE OR REPLACE FUNCTION age_ms(a timestamptz, b timestamptz DEFAULT clock_timestamp()) RETURNS float AS $$
     SELECT abs(extract(epoch from age(a,b)) * 1000);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
     SELECT t2s(coalesce(
@@ -2119,10 +2122,6 @@ FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
 
-CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
             content->>'id' as id,
@@ -2130,7 +2129,10 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
             content->>'collection' as collection,
             stac_datetime(content) as datetime,
             stac_end_datetime(content) as end_datetime,
-            content_slim(content) as content,
+            strip_jsonb(
+                content - '{id,geometry,collection,type}'::text[],
+                collection_base_item(content->>'collection')
+            ) - '{id,geometry,collection,type}'::text[] as content,
             null::jsonb as private
     ;
 $$ LANGUAGE SQL STABLE;
@@ -3522,50 +3524,74 @@ BEGIN
 $$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
 ;
 
-CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
-    SELECT md5(concat(($1 - '{token,limit,context,includes,excludes}'::text[])::text,$2::text));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-DROP FUNCTION IF EXISTS search_tohash(jsonb);
+-- ============================================================================
+-- Search Hashing
+-- ============================================================================
 
+CREATE OR REPLACE FUNCTION pgstac_hash(data text) RETURNS text AS $$
+    SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- Central hash helper: one canonical where-clause + metadata payload to hash.
+CREATE OR REPLACE FUNCTION search_hash_from_where(_where text, _metadata jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
+    SELECT pgstac_hash(
+        format(
+            '%s|%s',
+            _where,
+            coalesce(_metadata, '{}'::jsonb)::text
+        )
+    );
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION search_hash(_search jsonb, _metadata jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
+    SELECT search_hash_from_where(
+        stac_search_to_where(_search),
+        _metadata
+    );
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
+
+-- ============================================================================
+-- Search Cache Table
+-- ============================================================================
+
+-- Search lifecycle and context cache now live on searches; search_wheres is retired.
 CREATE TABLE IF NOT EXISTS searches(
-    hash text GENERATED ALWAYS AS (search_hash(search, metadata)) STORED PRIMARY KEY,
+    hash text PRIMARY KEY,
+    name text UNIQUE,
     search jsonb NOT NULL,
     _where text,
     orderby text,
     lastused timestamptz DEFAULT now(),
     usecount bigint DEFAULT 0,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS search_wheres(
-    id bigint generated always as identity primary key,
-    _where text NOT NULL,
-    lastused timestamptz DEFAULT now(),
-    usecount bigint DEFAULT 0,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    pinned boolean NOT NULL DEFAULT false,
+    created_at timestamptz DEFAULT now(),
     statslastupdated timestamptz,
-    estimated_count bigint,
-    estimated_cost float,
-    time_to_estimate float,
-    total_count bigint,
-    time_to_count float,
-    partitions text[]
+    context_count bigint
 );
+CREATE INDEX IF NOT EXISTS searches_lastused_anon_idx
+    ON searches (lastused) WHERE name IS NULL AND NOT pinned;
 
-CREATE INDEX IF NOT EXISTS search_wheres_partitions ON search_wheres USING GIN (partitions);
-CREATE UNIQUE INDEX IF NOT EXISTS search_wheres_where ON search_wheres ((md5(_where)));
+DROP TABLE IF EXISTS search_wheres;
+
+-- ============================================================================
+-- Context Stats (estimate/count/TTL)
+-- ============================================================================
 
 CREATE OR REPLACE FUNCTION where_stats(
+    inhash text,
     inwhere text,
     updatestats boolean default false,
     conf jsonb default null
-) RETURNS search_wheres AS $$
+) RETURNS searches AS $$
 DECLARE
     t timestamptz;
     i interval;
     explain_json jsonb;
-    partitions text[];
-    sw search_wheres%ROWTYPE;
-    inwhere_hash text := md5(inwhere);
+    sw searches%ROWTYPE;
+    sw_statslastupdated timestamptz;
+    sw_estimated_count bigint;
+    sw_estimated_cost float;
     _context text := lower(context(conf));
     _stats_ttl interval := context_stats_ttl(conf);
     _estimated_cost_threshold float := context_estimated_cost(conf);
@@ -3580,96 +3606,71 @@ BEGIN
 
     -- If we don't need to calculate context, just return
     IF _context = 'off' THEN
-        sw._where = inwhere;
         RETURN sw;
     END IF;
 
-    -- Get any stats that we have.
-    IF NOT ro THEN
-        -- If there is a lock where another process is
-        -- updating the stats, wait so that we don't end up calculating a bunch of times.
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+    -- Read current stats state without holding row locks during expensive
+    -- estimate/count operations.
+    SELECT * INTO sw FROM searches WHERE hash = inhash;
+
+    IF sw IS NULL THEN
+        -- In read-only mode, searches may not be persisted. Continue with
+        -- non-persistent estimate/count calculation so context can still be
+        -- returned to callers.
+        sw.hash := inhash;
+        sw._where := inwhere;
+        sw_statslastupdated := NULL;
     ELSE
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
+        sw_statslastupdated := sw.statslastupdated;
     END IF;
 
     -- If there is a cached row, figure out if we need to update
     IF
         sw IS NOT NULL
         AND sw.statslastupdated IS NOT NULL
-        AND sw.total_count IS NOT NULL
+        AND sw.context_count IS NOT NULL
         AND now() - sw.statslastupdated <= _stats_ttl
     THEN
-        -- we have a cached row with data that is within our ttl
+        -- We have a cached row with data that is within our ttl.
         RAISE DEBUG 'Stats present in table and lastupdated within ttl: %', sw;
-        IF NOT ro THEN
-            RAISE DEBUG 'Updating search_wheres only bumping lastused and usecount';
-            UPDATE search_wheres SET
-                lastused = now(),
-                usecount = search_wheres.usecount + 1
-            WHERE md5(_where) = inwhere_hash
-            RETURNING * INTO sw;
-        END IF;
         RAISE DEBUG 'Returning cached counts. %', sw;
         RETURN sw;
     END IF;
 
     -- Calculate estimated cost and rows
     -- Use explain to get estimated count/cost
-    IF sw.estimated_count IS NULL OR sw.estimated_cost IS NULL THEN
-        RAISE DEBUG 'Calculating estimated stats';
-        t := clock_timestamp();
-        EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
-            INTO explain_json;
-        RAISE DEBUG 'Time for just the explain: %', clock_timestamp() - t;
-        i := clock_timestamp() - t;
+    RAISE DEBUG 'Calculating estimated stats';
+    t := clock_timestamp();
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM items WHERE %s', inwhere)
+        INTO explain_json;
+    RAISE DEBUG 'Time for just the explain: %', clock_timestamp() - t;
+    i := clock_timestamp() - t;
 
-        sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
-        sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
-        sw.time_to_estimate := extract(epoch from i);
-    END IF;
+    sw_estimated_count := (explain_json->0->'Plan'->>'Plan Rows')::bigint;
+    sw_estimated_cost := (explain_json->0->'Plan'->>'Total Cost')::float;
 
-    RAISE DEBUG 'ESTIMATED_COUNT: %, THRESHOLD %', sw.estimated_count, _estimated_count_threshold;
-    RAISE DEBUG 'ESTIMATED_COST: %, THRESHOLD %', sw.estimated_cost, _estimated_cost_threshold;
+    RAISE DEBUG 'ESTIMATED_COUNT: %, THRESHOLD %', sw_estimated_count, _estimated_count_threshold;
+    RAISE DEBUG 'ESTIMATED_COST: %, THRESHOLD %', sw_estimated_cost, _estimated_cost_threshold;
 
     -- If context is set to auto and the costs are within the threshold return the estimated costs
     IF
         _context = 'auto'
-        AND sw.estimated_count >= _estimated_count_threshold
-        AND sw.estimated_cost >= _estimated_cost_threshold
+        AND sw_estimated_count >= _estimated_count_threshold
+        AND sw_estimated_cost >= _estimated_cost_threshold
     THEN
+        sw.context_count := sw_estimated_count;
         IF NOT ro THEN
-            INSERT INTO search_wheres (
-                _where,
-                lastused,
-                usecount,
-                statslastupdated,
-                estimated_count,
-                estimated_cost,
-                time_to_estimate,
-                total_count,
-                time_to_count
-            ) VALUES (
-                inwhere,
-                now(),
-                1,
-                now(),
-                sw.estimated_count,
-                sw.estimated_cost,
-                sw.time_to_estimate,
-                null,
-                null
-            ) ON CONFLICT ((md5(_where)))
-            DO UPDATE SET
-                lastused = EXCLUDED.lastused,
-                usecount = search_wheres.usecount + 1,
-                statslastupdated = EXCLUDED.statslastupdated,
-                estimated_count = EXCLUDED.estimated_count,
-                estimated_cost = EXCLUDED.estimated_cost,
-                time_to_estimate = EXCLUDED.time_to_estimate,
-                total_count = EXCLUDED.total_count,
-                time_to_count = EXCLUDED.time_to_count
+            UPDATE searches SET
+                statslastupdated = now(),
+                context_count = sw.context_count
+            WHERE
+                hash = inhash
+                AND statslastupdated IS NOT DISTINCT FROM sw_statslastupdated
             RETURNING * INTO sw;
+
+            IF sw IS NULL THEN
+                SELECT * INTO sw FROM searches WHERE hash = inhash;
+            END IF;
         END IF;
         RAISE DEBUG 'Estimates are within thresholds, returning estimates. %', sw;
         RETURN sw;
@@ -3681,49 +3682,34 @@ BEGIN
     EXECUTE format(
         'SELECT count(*) FROM items WHERE %s',
         inwhere
-    ) INTO sw.total_count;
+    ) INTO sw.context_count;
     i := clock_timestamp() - t;
-    RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
-    sw.time_to_count := extract(epoch FROM i);
+    RAISE NOTICE 'Actual Count: % -- %', sw.context_count, i;
 
     IF NOT ro THEN
-        INSERT INTO search_wheres (
-            _where,
-            lastused,
-            usecount,
-            statslastupdated,
-            estimated_count,
-            estimated_cost,
-            time_to_estimate,
-            total_count,
-            time_to_count
-        ) VALUES (
-            inwhere,
-            now(),
-            1,
-            now(),
-            sw.estimated_count,
-            sw.estimated_cost,
-            sw.time_to_estimate,
-            sw.total_count,
-            sw.time_to_count
-        ) ON CONFLICT ((md5(_where)))
-        DO UPDATE SET
-            lastused = EXCLUDED.lastused,
-            usecount = search_wheres.usecount + 1,
-            statslastupdated = EXCLUDED.statslastupdated,
-            estimated_count = EXCLUDED.estimated_count,
-            estimated_cost = EXCLUDED.estimated_cost,
-            time_to_estimate = EXCLUDED.time_to_estimate,
-            total_count = EXCLUDED.total_count,
-            time_to_count = EXCLUDED.time_to_count
+        UPDATE searches SET
+            statslastupdated = now(),
+            context_count = sw.context_count
+        WHERE
+            hash = inhash
+            AND statslastupdated IS NOT DISTINCT FROM sw_statslastupdated
         RETURNING * INTO sw;
+
+        IF sw IS NULL THEN
+            SELECT * INTO sw FROM searches WHERE hash = inhash;
+        END IF;
     END IF;
     RAISE DEBUG 'Returning with actual count. %', sw;
     RETURN sw;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
+
+-- ============================================================================
+-- Search Cache Lifecycle (create, name, pin, GC)
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS search_query(jsonb, boolean, jsonb);
 
 CREATE OR REPLACE FUNCTION search_query(
     _search jsonb = '{}'::jsonb,
@@ -3733,20 +3719,15 @@ CREATE OR REPLACE FUNCTION search_query(
 DECLARE
     search searches%ROWTYPE;
     cached_search searches%ROWTYPE;
-    pexplain jsonb;
-    t timestamptz;
-    i interval;
-    doupdate boolean := FALSE;
-    insertfound boolean := FALSE;
+    search_where searches%ROWTYPE;
     ro boolean := pgstac.readonly();
-    found_search text;
 BEGIN
     RAISE NOTICE 'SEARCH: %', _search;
     -- Calculate hash, where clause, and order by statement
     search.search := _search;
     search.metadata := _metadata;
-    search.hash := search_hash(_search, _metadata);
     search._where := stac_search_to_where(_search);
+    search.hash := search_hash_from_where(search._where, search.metadata);
     search.orderby := sort_sqlorderby(_search);
     search.lastused := now();
     search.usecount := 1;
@@ -3756,31 +3737,63 @@ BEGIN
         RETURN search;
     END IF;
 
-    RAISE NOTICE 'Updating Statistics for search: %s', search;
-    -- Update statistics for times used and and when last used
-    -- If the entry is locked, rather than waiting, skip updating the stats
-    INSERT INTO searches (search, lastused, usecount, metadata)
-        VALUES (search.search, now(), 1, search.metadata)
-        ON CONFLICT DO NOTHING
-        RETURNING * INTO cached_search
-    ;
+    -- Cache bookkeeping is best-effort and non-blocking. We always return
+    -- canonical hash + where, even if cache touch cannot be acquired quickly.
+    UPDATE searches
+    SET
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE ctid = (
+        SELECT ctid
+        FROM searches
+        WHERE hash = search.hash
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+    )
+    RETURNING * INTO cached_search;
 
-    IF NOT FOUND OR cached_search IS NULL THEN
-        UPDATE searches SET
-            lastused = now(),
-            usecount = searches.usecount + 1
-        WHERE hash = (
-            SELECT hash FROM searches WHERE hash=search.hash FOR UPDATE SKIP LOCKED
-        )
-        RETURNING * INTO cached_search
-        ;
+    IF cached_search IS NULL THEN
+        IF pg_try_advisory_xact_lock(hashtext(search.hash)) THEN
+            INSERT INTO searches (hash, search, _where, orderby, lastused, usecount, metadata)
+                VALUES (search.hash, search.search, search._where, search.orderby, now(), 1, search.metadata)
+                ON CONFLICT (hash) DO UPDATE SET
+                    lastused = EXCLUDED.lastused,
+                    usecount = searches.usecount + 1
+                RETURNING * INTO cached_search;
+        END IF;
+
+        IF cached_search IS NULL THEN
+            SELECT * INTO cached_search FROM searches WHERE hash = search.hash;
+        END IF;
     END IF;
 
     IF cached_search IS NOT NULL THEN
         cached_search._where = search._where;
         cached_search.orderby = search.orderby;
+        IF updatestats THEN
+            search_where := where_stats(
+                cached_search.hash,
+                cached_search._where,
+                true,
+                _search->'conf'
+            );
+            cached_search.context_count := search_where.context_count;
+            cached_search.statslastupdated := search_where.statslastupdated;
+        END IF;
         RETURN cached_search;
     END IF;
+
+    IF updatestats THEN
+        search_where := where_stats(
+            search.hash,
+            search._where,
+            true,
+            _search->'conf'
+        );
+        search.context_count := search_where.context_count;
+        search.statslastupdated := search_where.statslastupdated;
+    END IF;
+
     RETURN search;
 
 END;
@@ -3789,13 +3802,153 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION search_fromhash(
     _hash text
 ) RETURNS searches AS $$
-    SELECT * FROM search_query((SELECT search FROM searches WHERE hash=_hash LIMIT 1));
+    SELECT * FROM searches WHERE hash = _hash LIMIT 1;
 $$ LANGUAGE SQL STRICT;
+
+CREATE OR REPLACE FUNCTION name_search(
+    _search jsonb,
+    _name text,
+    _metadata jsonb DEFAULT '{}'::jsonb
+) RETURNS searches AS $$
+DECLARE
+    named searches%ROWTYPE;
+BEGIN
+    named := search_query(_search, false, _metadata);
+    UPDATE searches
+    SET
+        name = _name,
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE hash = named.hash
+    RETURNING * INTO named;
+
+    IF named IS NULL THEN
+        RAISE EXCEPTION 'Could not name search for input: %', _search;
+    END IF;
+
+    RETURN named;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION rename_search(_old_name text, _new_name text) RETURNS searches AS $$
+DECLARE
+    renamed searches%ROWTYPE;
+BEGIN
+    -- Serialize rename-pair operations to avoid deadlocks on concurrent name swaps.
+    PERFORM pg_advisory_xact_lock(
+        hashtext(
+            least(_old_name, _new_name)
+            || '|'
+            || greatest(_old_name, _new_name)
+        )
+    );
+
+    UPDATE searches
+    SET
+        name = _new_name,
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE name = _old_name
+    RETURNING * INTO renamed;
+
+    IF renamed IS NULL THEN
+        RAISE EXCEPTION 'Named search % not found', _old_name;
+    END IF;
+
+    RETURN renamed;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION unname_search(_name text) RETURNS searches AS $$
+DECLARE
+    unnamed searches%ROWTYPE;
+BEGIN
+    UPDATE searches
+    SET
+        name = NULL,
+        pinned = false,
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE name = _name
+    RETURNING * INTO unnamed;
+
+    IF unnamed IS NULL THEN
+        RAISE EXCEPTION 'Named search % not found', _name;
+    END IF;
+
+    RETURN unnamed;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION pin_search(_name text) RETURNS searches AS $$
+DECLARE
+    pinned_search searches%ROWTYPE;
+BEGIN
+    UPDATE searches
+    SET
+        pinned = true,
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE name = _name
+    RETURNING * INTO pinned_search;
+
+    IF pinned_search IS NULL THEN
+        RAISE EXCEPTION 'Named search % not found', _name;
+    END IF;
+
+    RETURN pinned_search;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION unpin_search(_name text) RETURNS searches AS $$
+DECLARE
+    unpinned_search searches%ROWTYPE;
+BEGIN
+    UPDATE searches
+    SET
+        pinned = false,
+        lastused = now(),
+        usecount = searches.usecount + 1
+    WHERE name = _name
+    RETURNING * INTO unpinned_search;
+
+    IF unpinned_search IS NULL THEN
+        RAISE EXCEPTION 'Named search % not found', _name;
+    END IF;
+
+    RETURN unpinned_search;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION gc_anonymous_searches(retention_interval interval DEFAULT NULL, conf jsonb DEFAULT NULL) RETURNS bigint AS $$
+    WITH effective_retention AS (
+        SELECT COALESCE(
+            retention_interval,
+            search_gc_retention_interval(conf)
+        ) AS i
+    ),
+    deleted AS (
+        DELETE FROM searches
+        USING effective_retention
+        WHERE
+            name IS NULL
+            AND NOT pinned
+            AND lastused < now() - effective_retention.i
+        RETURNING 1
+    )
+    SELECT count(*)::bigint FROM deleted;
+$$ LANGUAGE SQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION gc_search_caches(retention_interval interval DEFAULT NULL, conf jsonb DEFAULT NULL) RETURNS jsonb AS $$
+    SELECT jsonb_build_object(
+        'removed_searches',
+        gc_anonymous_searches(retention_interval, conf)
+    );
+$$ LANGUAGE SQL SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION search_rows(
     IN _where text DEFAULT 'TRUE',
     IN _orderby text DEFAULT 'datetime DESC, id DESC',
-    IN partitions text[] DEFAULT NULL,
     IN _limit int DEFAULT 10
 ) RETURNS SETOF items AS $$
 DECLARE
@@ -3932,13 +4085,14 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
+DROP FUNCTION IF EXISTS search(jsonb);
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
     searches searches%ROWTYPE;
     _where text;
     orderby text;
-    search_where search_wheres%ROWTYPE;
+    search_where searches%ROWTYPE;
     total_count bigint;
     token record;
     token_prev boolean;
@@ -3950,7 +4104,6 @@ DECLARE
     hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
-    context jsonb;
     collection jsonb;
     out_records jsonb;
     out_len int;
@@ -3965,8 +4118,8 @@ BEGIN
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
-    search_where := where_stats(_where);
-    total_count := coalesce(search_where.total_count, search_where.estimated_count);
+    search_where := where_stats(searches.hash, _where, false, _search->'conf');
+    total_count := search_where.context_count;
     RAISE NOTICE 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
     RAISE NOTICE '***TOKEN: %', token;
@@ -4007,7 +4160,6 @@ BEGIN
     FROM search_rows(
         full_where,
         orderby,
-        search_where.partitions,
         _querylimit
     ) as i;
 
@@ -4613,6 +4765,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_estimated_count', '100000'),
   ('context_estimated_cost', '100000'),
   ('context_stats_ttl', '1 day'),
+  ('search_gc_retention_interval', '7 days'),
   ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
@@ -4672,8 +4825,15 @@ ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
 ALTER FUNCTION create_table_constraints SECURITY DEFINER;
 ALTER FUNCTION check_partition SECURITY DEFINER;
 ALTER FUNCTION repartition SECURITY DEFINER;
-ALTER FUNCTION where_stats SECURITY DEFINER;
+ALTER FUNCTION where_stats(text, text, boolean, jsonb) SECURITY DEFINER;
 ALTER FUNCTION search_query SECURITY DEFINER;
+ALTER FUNCTION name_search SECURITY DEFINER;
+ALTER FUNCTION rename_search SECURITY DEFINER;
+ALTER FUNCTION unname_search SECURITY DEFINER;
+ALTER FUNCTION pin_search SECURITY DEFINER;
+ALTER FUNCTION unpin_search SECURITY DEFINER;
+ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 

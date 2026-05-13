@@ -26,10 +26,11 @@ Migration specialist for PgSTAC. See CLAUDE.md "Migration Process" for full work
 2. `src/pgstac/pyproject.toml` is the `pgpkg` project config for the SQL + migrations tree
 3. `uv run --directory src/pgstac-migrate pgstac-migrate info|versions|plan` inspects the baked migration artifact during wrapper work
 4. `uv run --directory src/pypgstac pypgstac migrate -- --help` remains a backwards-compatible wrapper over `pgstac-migrate`; put new runtime migration behavior in `src/pgstac-migrate/`, not `src/pypgstac/`
-5. `scripts/stageversion VERSION` → generates canonical `pgstac--VERSION.sql` plus an incremental `.staged` migration; set `PGPKG_LOCAL_REPO_DIR` when `stageversion` or `makemigration` should run against a local pgpkg checkout. The Docker-backed flow mounts that override at `/pgpkg` and exports `PGPKG_REPO_DIR` to the container scripts.
-6. Review `.staged` file (watch for DROPs, unsafe ALTERs, missing `CREATE OR REPLACE`)
-7. Remove `.staged` suffix → `scripts/test --migrations`
-8. Tagged releases publish both `pypgstac` and `pgstac-migrate` to PyPI from `.github/workflows/release.yml`; keep the PyPI trusted publisher registration aligned with the `pypi` environment and workflow path
+5. `scripts/stageversion VERSION` regenerates canonical `pgstac--VERSION.sql` plus incremental `pgstac--FROM--TO.sql`; set `PGPKG_LOCAL_REPO_DIR` when `stageversion` or `makemigration` should run against a local pgpkg checkout. The Docker-backed flow mounts that override at `/pgpkg` and exports `PGPKG_REPO_DIR` to the container scripts.
+6. Review the generated incremental migration (watch for DROPs, unsafe ALTERs, missing `CREATE OR REPLACE`)
+7. If you hand-edit the incremental migration, rebuild the baked artifact: `uv run --directory src/pgstac-migrate pgstac-migrate build-artifact`
+8. Run `scripts/test --migrations` (or full `scripts/test` gate)
+9. Tagged releases publish both `pypgstac` and `pgstac-migrate` to PyPI from `.github/workflows/release.yml`; keep the PyPI trusted publisher registration aligned with the `pypi` environment and workflow path
 
 ### Review Checklist
 
