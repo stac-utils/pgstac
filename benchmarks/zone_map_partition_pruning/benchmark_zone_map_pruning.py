@@ -88,7 +88,8 @@ def collection_doc(collection_id: str) -> dict[str, Any]:
 def item_doc(collection_id: str, month: int, item_no: int, collection_no: int) -> dict[str, Any]:
     year = 2020 + (month // 12)
     month_of_year = (month % 12) + 1
-    day = min((item_no % 28) + 1, calendar.monthrange(year, month_of_year)[1])
+    days_in_month = calendar.monthrange(year, month_of_year)[1]
+    day = (item_no % days_in_month) + 1
     dt = datetime(year, month_of_year, day, tzinfo=timezone.utc)
     base_x = -120 + month * 4 + collection_no * 8
     base_y = -45 + (month % 12) * 3 + collection_no * 4
@@ -162,8 +163,9 @@ def spatial_wkt(month: int, window: float) -> str:
 
 
 def variants() -> dict[str, str]:
-    # `partitions_view` is the live view that joins catalog metadata to
-    # partition_stats; avoid the stale `partitions` materialized view here.
+    # These benchmark variants need accurate zone-map metadata. `partitions_view`
+    # is live and joins catalog metadata to partition_stats; avoid the stale
+    # `partitions` materialized view here.
     return {
         "baseline_explain_chunker": "SELECT count(*) FROM pgstac.chunker(%(where)s)",
         "direct_constraint_temporal": """
@@ -188,7 +190,9 @@ def variants() -> dict[str, str]:
         """,
         "cached_partition_set": """
             WITH key AS (
-                SELECT md5(%(where)s || %(geom_wkt)s) AS cache_key
+                SELECT md5(
+                    %(where)s || %(geom_wkt)s || %(dtrange)s || array_to_string(%(collections)s, ',')
+                ) AS cache_key
             ), cached AS (
                 SELECT partitions FROM pg_temp.partition_prune_cache c JOIN key USING (cache_key)
             ), inserted AS (

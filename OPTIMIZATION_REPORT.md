@@ -6,7 +6,7 @@ Generated: 2026-05-13
 
 ## Current-state summary
 
-The current branch has no local uncommitted changes at the start of this continuation. The current pruning path is centered on:
+This report documents the partition-pruning implementation observed on branch `copilot/continue-implement-zone-map-partition-pruning` before adding the benchmark/report artifacts in this change. The current pruning path is centered on:
 
 - `/home/runner/work/pgstac/pgstac/src/pgstac/sql/004_search.sql`: `chunker()` runs `EXPLAIN (format json) SELECT 1 FROM items WHERE ...`, extracts planned relation names, and joins them to `partition_steps`; `partition_queries()` converts those chunks into per-time-window SQL.
 - `/home/runner/work/pgstac/pgstac/src/pgstac/sql/006_tilesearch.sql`: `geometrysearch()` calls `partition_queries()` and opens one cursor per generated query.
