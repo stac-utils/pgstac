@@ -4,7 +4,7 @@ CREATE TABLE items (
     collection text NOT NULL,
     datetime timestamptz NOT NULL,
     end_datetime timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL DEFAULT now(),
+    pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
     content_hash text NOT NULL DEFAULT '',
     content JSONB NOT NULL,
     private jsonb
@@ -71,15 +71,16 @@ EXECUTE FUNCTION partition_after_triggerfunc();
 
 CREATE OR REPLACE FUNCTION items_touch_triggerfunc() RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at := now();
-    NEW.content_hash := '';
+    NEW.pgstac_updated_at := now();
+    NEW.content_hash := encode(sha256(content_hydrate(NEW)::text::bytea), 'hex');
     RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 DROP TRIGGER IF EXISTS items_before_upsert_trigger ON items;
-CREATE TRIGGER items_before_upsert_trigger
-BEFORE INSERT OR UPDATE ON items
+DROP TRIGGER IF EXISTS items_before_update_trigger ON items;
+CREATE TRIGGER items_before_update_trigger
+BEFORE UPDATE ON items
 FOR EACH ROW
 EXECUTE FUNCTION items_touch_triggerfunc();
 
@@ -122,8 +123,8 @@ BEGIN
     out.collection := content->>'collection';
     out.datetime := stac_datetime(content);
     out.end_datetime := stac_end_datetime(content);
-    out.updated_at := now();
-    out.content_hash := '';
+    out.pgstac_updated_at := now();
+    out.content_hash := encode(sha256(content::text::bytea), 'hex');
     out.content := strip_jsonb(
         content - '{id,geometry,collection,type}'::text[],
         collection_base_item(content->>'collection')

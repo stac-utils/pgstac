@@ -228,7 +228,7 @@ create table "pgstac"."items_deleted_log" (
 
 alter table "pgstac"."items" add column "content_hash" text not null default ''::text;
 
-alter table "pgstac"."items" add column "updated_at" timestamp with time zone not null default now();
+alter table "pgstac"."items" add column "pgstac_updated_at" timestamp with time zone not null default now();
 
 alter table "pgstac"."searches" add column "context_count" bigint;
 
@@ -340,8 +340,8 @@ CREATE OR REPLACE FUNCTION pgstac.items_touch_triggerfunc()
  SECURITY DEFINER
 AS $function$
 BEGIN
-    NEW.updated_at := now();
-    NEW.content_hash := '';
+    NEW.pgstac_updated_at := now();
+    NEW.content_hash := encode(sha256(content_hydrate(NEW)::text::bytea), 'hex');
     RETURN NEW;
 END;
 $function$
@@ -762,8 +762,8 @@ BEGIN
     out.collection := content->>'collection';
     out.datetime := stac_datetime(content);
     out.end_datetime := stac_end_datetime(content);
-    out.updated_at := now();
-    out.content_hash := '';
+    out.pgstac_updated_at := now();
+    out.content_hash := encode(sha256(content::text::bytea), 'hex');
     out.content := strip_jsonb(
         content - '{id,geometry,collection,type}'::text[],
         collection_base_item(content->>'collection')
@@ -774,7 +774,7 @@ END;
 $function$
 ;
 
-CREATE TRIGGER items_before_upsert_trigger BEFORE INSERT OR UPDATE ON pgstac.items FOR EACH ROW EXECUTE FUNCTION items_touch_triggerfunc();
+CREATE TRIGGER items_before_update_trigger BEFORE UPDATE ON pgstac.items FOR EACH ROW EXECUTE FUNCTION items_touch_triggerfunc();
 
 CREATE TRIGGER items_delete_log_after_delete_trigger AFTER DELETE ON pgstac.items REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
 
@@ -791,8 +791,8 @@ BEGIN
     out.collection := content->>'collection';
     out.datetime := stac_datetime(content);
     out.end_datetime := stac_end_datetime(content);
-    out.updated_at := now();
-    out.content_hash := '';
+    out.pgstac_updated_at := now();
+    out.content_hash := encode(sha256(content::text::bytea), 'hex');
     out.content := strip_jsonb(
         content - '{id,geometry,collection,type}'::text[],
         collection_base_item(content->>'collection')
