@@ -215,15 +215,43 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
 DECLARE
-    use_queue text := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+    use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+    queue_strategy text := lower(COALESCE(get_setting('queue_strategy'), 'legacy'));
+    queue_max_size int := COALESCE(get_setting('queue_max_size'), '100')::int;
+    queue_max_age interval := t2s(COALESCE(get_setting('queue_max_age'), '5 minutes'))::interval;
+    queued_count bigint;
+    oldest_age interval;
 BEGIN
     IF get_setting_bool('debug') THEN
-        RAISE NOTICE '%', query;
+        RAISE NOTICE 'run_or_queue strategy=% query=%', queue_strategy, query;
     END IF;
-    IF use_queue THEN
-        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
-    ELSE
+    IF queue_strategy = 'legacy' THEN
+        IF use_queue THEN
+            INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+        ELSE
+            EXECUTE query;
+        END IF;
+    ELSIF queue_strategy = 'sync' THEN
         EXECUTE query;
+    ELSIF queue_strategy = 'async' THEN
+        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+    ELSIF queue_strategy = 'adaptive' THEN
+        SELECT
+            count(*),
+            COALESCE(clock_timestamp() - min(added), '0 seconds'::interval)
+        INTO
+            queued_count,
+            oldest_age
+        FROM query_queue;
+        IF queued_count >= queue_max_size OR oldest_age >= queue_max_age THEN
+            EXECUTE query;
+        ELSE
+            INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+        END IF;
+    ELSE
+        RAISE EXCEPTION
+            'Unsupported queue_strategy: %. Valid values are legacy, sync, async, adaptive.',
+            queue_strategy;
     END IF;
     RETURN;
 END;

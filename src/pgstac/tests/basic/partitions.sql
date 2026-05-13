@@ -77,8 +77,43 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and 
 --check that collection extents have been updated
 SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitioned%' ORDER BY id;
 
+--test adaptive queue strategy (mixed sync/async balancing)
+SET pgstac.use_queue=FALSE;
+SET pgstac.queue_strategy='adaptive';
+SET pgstac.queue_max_size='1';
+SET pgstac.queue_max_age='1 day';
+SELECT get_setting('queue_strategy');
+
+INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-adaptive"}', 'month');
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-adaptive"}'::jsonb FROM test_items;
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive';
+
+--with max queue size 1, adaptive mode should queue at most one stats update and run the rest inline
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
+SELECT count(*) FROM query_queue;
+SELECT run_queued_queries_intransaction() > 0;
+SELECT count(*) FROM query_queue;
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
+
+--benchmark helper should run all strategies and drain queue state
+SELECT
+    strategy,
+    partitions_total > 0 as has_partitions,
+    partitions_with_null_stats = 0 as no_missing_stats,
+    remaining_queue = 0 as queue_drained
+FROM benchmark_partition_stats_queue(
+    ARRAY['sync', 'async', 'adaptive'],
+    90,
+    'month',
+    2,
+    '1 day'::interval
+)
+ORDER BY strategy;
+
 --check that values for datetimes that are non 4 digit or that have very high precision are ingesting correctly and that partitioning is working for them
 SET pgstac.use_queue=FALSE;
+SET pgstac.queue_strategy='legacy';
 SELECT get_setting_bool('use_queue');
 
 INSERT INTO test_items (content)
