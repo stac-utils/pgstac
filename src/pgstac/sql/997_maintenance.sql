@@ -103,15 +103,16 @@ CREATE OR REPLACE FUNCTION benchmark_partition_stats_queue(
 ) AS $$
 DECLARE
     s text;
+    raw_strategy text;
     collection_id text;
     ingest_started timestamptz;
     drain_started timestamptz;
 BEGIN
-    FOREACH s IN ARRAY strategies LOOP
+    FOREACH raw_strategy IN ARRAY strategies LOOP
         BEGIN
-            s := normalize_queue_strategy(s);
+            s := normalize_queue_strategy(raw_strategy);
         EXCEPTION WHEN others THEN
-            RAISE EXCEPTION 'benchmark_partition_stats_queue strategy "%" is invalid: %', s, SQLERRM;
+            RAISE EXCEPTION 'benchmark_partition_stats_queue strategy "%" is invalid: %', raw_strategy, SQLERRM;
         END;
 
         LOOP

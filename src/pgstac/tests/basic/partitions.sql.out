@@ -142,7 +142,7 @@ INSERT 0 105
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive';
     24
 
---with max queue size 1, adaptive mode should queue at most one stats update and run the rest inline
+--with max queue size 1, adaptive mode should queue exactly one stats update and run the rest inline
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
      1
 SELECT count(*) FROM query_queue;

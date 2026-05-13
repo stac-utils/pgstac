@@ -89,7 +89,7 @@ INSERT INTO items_staging(content)
 SELECT content || '{"collection":"pgstactest-partitioned-adaptive"}'::jsonb FROM test_items;
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive';
 
---with max queue size 1, adaptive mode should queue at most one stats update and run the rest inline
+--with max queue size 1, adaptive mode should queue exactly one stats update and run the rest inline
 SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
 SELECT count(*) FROM query_queue;
 SELECT run_queued_queries_intransaction() > 0;
