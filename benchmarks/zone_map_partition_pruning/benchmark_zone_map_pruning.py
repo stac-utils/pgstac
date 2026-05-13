@@ -183,6 +183,9 @@ def create_cached_partition_stats(conn: psycopg.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS bench_partition_cql2_stats;")
     conn.execute(
         """
+        -- Benchmark-only cache table. UNLOGGED reduces benchmark I/O noise; the
+        -- table is rebuilt for each run and is not intended to survive crash
+        -- recovery.
         CREATE UNLOGGED TABLE bench_partition_cql2_stats (
             partition text PRIMARY KEY,
             collection text NOT NULL,
@@ -218,6 +221,9 @@ def create_cached_partition_stats(conn: psycopg.Connection) -> None:
                 )
                 SELECT %s, %s, %s, %s, %s,
                        CASE
+                           -- Empty means a partition has no values for this
+                           -- queryable, so a cloud-cover predicate should not
+                           -- keep it as a candidate.
                            WHEN count(*) FILTER (
                                WHERE content->'properties' ? 'eo:cloud_cover'
                            ) = 0
@@ -297,6 +303,8 @@ def spatial_wkt(month: int, window: float) -> str:
 
 
 def candidate_predicate() -> str:
+    # Keep the bbox operator before ST_Intersects to model a cheap stats-table
+    # prefilter followed by the exact cached-extent check.
     return """
         collection = ANY(%(collections)s)
         AND dtrange && %(dtrange)s::tstzrange
@@ -431,6 +439,8 @@ def run_benchmarks(
     with connect(dbname) as conn:
         conn.execute(
             """
+            -- Benchmark-scope cache. It is truncated before each scenario so
+            -- cold and warm candidate-set timings are scenario-local.
             CREATE TEMP TABLE partition_prune_cache(
                 cache_key text PRIMARY KEY,
                 partitions text[]
@@ -444,6 +454,9 @@ def run_benchmarks(
             cloud_cover_threshold = int(config["cloud_cover_threshold"])
             platform = str(config["platform"])
             cql2 = cql2_filter(config)
+            # Benchmark-only baseline SQL: this intentionally mirrors the
+            # current string-based EXPLAIN/chunker path. Production code should
+            # keep using parameterized SQL for user-provided values.
             where = (
                 f"collection = ANY ('{{{','.join(collection_ids)}}}'::text[]) "
                 f"AND datetime < upper('{dtrange}'::tstzrange) "

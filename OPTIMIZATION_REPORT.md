@@ -13,6 +13,8 @@ There are two execution modes to optimize:
 1. **Queries not sorted by datetime**: cached partition stats should primarily make planning faster by producing a candidate partition set without forcing PostgreSQL to reason through many child table constraints.
 2. **Queries sorted by datetime with a limit**: cached partition stats should also guide datetime-ordered chunking so expensive CQL2 filters can short-circuit after enough rows are found.
 
+Meaningful benchmark targets: candidate partition lookup should be at least 2x faster than the EXPLAIN/constraint-pruning baseline for non-datetime sorts, and datetime-sorted LIMIT queries should be able to identify the first candidate chunks in single-digit milliseconds on the benchmark fixture. An expensive CQL2 filter is any residual filter that requires item JSON/property extraction, spatial predicates, or low-selectivity scans across many partitions after candidate selection.
+
 The current implementation still relies on `/home/runner/work/pgstac/pgstac/src/pgstac/sql/004_search.sql` `chunker()`, which runs `EXPLAIN (format json)` against `items` and extracts planned relation names. That means it still leans on partition pruning and constraint exclusion. The proposed direction is to make partition candidacy a data lookup against cached statistics, not a planning side effect.
 
 ## Current-state observations
