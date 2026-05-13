@@ -14,6 +14,18 @@ SELECT results_eq(
     'to_text_array returns text[] from jsonb array'
 );
 
+SELECT has_function('pgstac'::name, 'pgstac_hash', ARRAY['text']);
+SELECT results_eq(
+    $$ SELECT pgstac_hash('abc') $$,
+    $$ SELECT 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'::text $$,
+    'pgstac_hash returns the expected sha256 hex digest'
+);
+SELECT is(
+    pgstac_hash(NULL),
+    NULL,
+    'pgstac_hash is strict and returns NULL for NULL input'
+);
+
 SET pgstac.readonly to 'false';
 
 SELECT results_eq(

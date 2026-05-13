@@ -225,4 +225,4 @@ jobs:
       - name: Set search_path
         run: psql -c "ALTER ROLE username SET search_path TO pgstac, public;"
       - name: Test
-        run: cargo test -p pgstac --all-features --manifest-path rust/Cargo.toml
+        run: cargo test -p pgstac --all-features --manifest-path src/pgstac-rs/Cargo.toml

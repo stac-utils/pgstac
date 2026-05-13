@@ -28,7 +28,7 @@ scripts/server
 Then, in another terminal:
 
 ```sh
-cargo test --manifest-path rust/Cargo.toml
+cargo test --manifest-path src/pgstac-rs/Cargo.toml
 ```
 
 Each test is run in its own transaction, which is rolled back after the test.
@@ -39,7 +39,7 @@ By default, the tests will connect to the database at `postgresql://username:pas
 If you need to customize the connection information for whatever reason, set your `PGSTAC_RS_TEST_DB` environment variable:
 
 ```shell
-PGSTAC_RS_TEST_DB=postgresql://otherusername:otherpassword@otherhost:7822/otherdbname cargo test --manifest-path rust/Cargo.toml
+PGSTAC_RS_TEST_DB=postgresql://otherusername:otherpassword@otherhost:7822/otherdbname cargo test --manifest-path src/pgstac-rs/Cargo.toml
 ```
 
 ## Other info

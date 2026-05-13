@@ -69,6 +69,143 @@ SELECT results_eq($$
 
 
 SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
+SELECT has_function('pgstac'::name, 'name_search', ARRAY['jsonb','text','jsonb']);
+SELECT has_function('pgstac'::name, 'rename_search', ARRAY['text','text']);
+SELECT has_function('pgstac'::name, 'unname_search', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'pin_search', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'unpin_search', ARRAY['text']);
+SELECT has_function('pgstac'::name, 'search_gc_retention_interval', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'gc_anonymous_searches', ARRAY['interval','jsonb']);
+SELECT has_function('pgstac'::name, 'gc_search_caches', ARRAY['interval','jsonb']);
+
+SELECT results_eq(
+    $$ SELECT (name_search('{"collections":["pgstac-test-collection"]}'::jsonb, 'pgstac-test-named-search')).name $$,
+    $$ SELECT 'pgstac-test-named-search'::text $$,
+    'name_search assigns a stable name'
+);
+SELECT results_eq(
+    $$ SELECT (rename_search('pgstac-test-named-search', 'pgstac-test-renamed-search')).name $$,
+    $$ SELECT 'pgstac-test-renamed-search'::text $$,
+    'rename_search renames an existing named search'
+);
+SELECT results_eq(
+    $$ SELECT (pin_search('pgstac-test-renamed-search')).pinned $$,
+    $$ SELECT TRUE $$,
+    'pin_search sets pinned=true'
+);
+SELECT results_eq(
+    $$ SELECT (unpin_search('pgstac-test-renamed-search')).pinned $$,
+    $$ SELECT FALSE $$,
+    'unpin_search sets pinned=false'
+);
+SELECT results_eq(
+    $$ SELECT (unname_search('pgstac-test-renamed-search')).name IS NULL $$,
+    $$ SELECT TRUE $$,
+    'unname_search clears search name'
+);
+SELECT results_eq(
+    $$ SELECT search_gc_retention_interval('{"search_gc_retention_interval":"3 days"}'::jsonb) $$,
+    $$ SELECT '3 days'::interval $$,
+    'GC retention interval honors conf override'
+);
+SELECT lives_ok(
+    $$
+        INSERT INTO searches (
+            hash,
+            search,
+            _where,
+            orderby,
+            metadata,
+            lastused,
+            usecount,
+            pinned,
+            name
+        ) VALUES (
+            pgstac_hash('gc-test-row-' || clock_timestamp()::text),
+            '{}'::jsonb,
+            'TRUE',
+            'datetime DESC, id DESC',
+            '{}'::jsonb,
+            now() - '2 days'::interval,
+            1,
+            false,
+            NULL
+        )
+    $$,
+    'Seed an old anonymous search row for GC test'
+);
+SELECT results_eq(
+    $$ SELECT gc_anonymous_searches(NULL, '{"search_gc_retention_interval":"1 day"}'::jsonb) > 0 $$,
+    $$ SELECT TRUE $$,
+    'gc_anonymous_searches uses retention from conf when interval arg is null'
+);
+
+SELECT ok(
+    to_regclass('pgstac.search_wheres') IS NULL,
+    'search_wheres table removed'
+);
+SELECT ok(
+    EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE
+            table_schema = 'pgstac'
+            AND table_name = 'searches'
+            AND column_name = 'context_count'
+    ),
+    'searches table stores context_count cache'
+);
+SELECT ok(
+    EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE
+            table_schema = 'pgstac'
+            AND table_name = 'searches'
+            AND column_name = 'statslastupdated'
+    ),
+    'searches table stores statslastupdated for TTL'
+);
+SELECT results_eq(
+    $$
+        SELECT to_jsonb(array_agg(column_name ORDER BY column_name))
+        FROM information_schema.columns
+        WHERE table_schema = 'pgstac' AND table_name = 'searches'
+    $$,
+    $$
+        SELECT to_jsonb(ARRAY[
+            '_where',
+            'context_count',
+            'created_at',
+            'hash',
+            'lastused',
+            'metadata',
+            'name',
+            'orderby',
+            'pinned',
+            'search',
+            'statslastupdated',
+            'usecount'
+        ]::text[])
+    $$,
+    'searches table has only expected columns'
+);
+
+SELECT results_eq(
+    $$
+        SELECT search_hash(
+            '{"collections":["pgstac-test-collection"],"limit":10,"token":"next:abc","context":"on","sortby":[{"field":"id","direction":"asc"}]}'::jsonb,
+            '{}'::jsonb
+        )
+    $$,
+    $$
+        SELECT search_hash(
+            '{"collections":["pgstac-test-collection"],"limit":1,"token":"prev:def","context":"off","sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb,
+            '{}'::jsonb
+        )
+    $$,
+    'search_hash ignores pagination, token, context, and sort fields'
+);
 
 
 SELECT results_eq($$

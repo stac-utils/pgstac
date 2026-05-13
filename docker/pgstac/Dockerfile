@@ -16,6 +16,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR \
         postgresql-$PG_MAJOR-postgis-$POSTGIS_MAJOR-scripts \
+        postgresql-$PG_MAJOR-cron \
+        postgresql-contrib-$PG_MAJOR \
         postgresql-$PG_MAJOR-pgtap \
         postgresql-$PG_MAJOR-plpgsql-check \
         postgresql-$PG_MAJOR-partman \
@@ -31,8 +33,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && make -C /tmp/pg_tle \
     && make -C /tmp/pg_tle install \
     && rm -rf /tmp/pg_tle \
-    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle'/" /usr/share/postgresql/$PG_MAJOR/postgresql.conf.sample \
-    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle'/" /usr/share/postgresql/postgresql.conf.sample \
+    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron'/" /usr/share/postgresql/$PG_MAJOR/postgresql.conf.sample \
+    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron'/" /usr/share/postgresql/postgresql.conf.sample \
     && apt-get purge -y --auto-remove \
         postgresql-server-dev-$PG_MAJOR \
         build-essential \
