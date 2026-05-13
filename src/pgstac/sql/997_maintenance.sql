@@ -108,7 +108,11 @@ DECLARE
     drain_started timestamptz;
 BEGIN
     FOREACH s IN ARRAY strategies LOOP
-        s := normalize_queue_strategy(s);
+        BEGIN
+            s := normalize_queue_strategy(s);
+        EXCEPTION WHEN others THEN
+            RAISE EXCEPTION 'benchmark_partition_stats_queue strategy "%" is invalid: %', s, SQLERRM;
+        END;
 
         LOOP
             EXIT WHEN run_queued_queries_intransaction() = 0;

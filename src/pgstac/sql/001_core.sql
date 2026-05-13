@@ -257,6 +257,7 @@ BEGIN
     ELSIF queue_mode = 'async' THEN
         INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
     ELSIF queue_mode = 'adaptive' THEN
+        -- Adaptive mode checks live queue depth/age each call for freshness control.
         SELECT
             count(*),
             COALESCE(clock_timestamp() - min(added), '0 seconds'::interval)
