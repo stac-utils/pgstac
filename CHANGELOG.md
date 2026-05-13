@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Add tombstone table `items_deleted_log` and `updated_at` column to items table.
 - New `pgstac-migrate` package under `src/pgstac-migrate/` with a standalone
   CLI, Python API, and tests for migration planning and execution.
 - New Rust crate under `src/pgstac-rs/` with updated CI/release wiring,
