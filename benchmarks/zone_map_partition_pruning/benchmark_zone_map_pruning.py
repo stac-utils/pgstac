@@ -190,9 +190,12 @@ def variants() -> dict[str, str]:
         """,
         "cached_partition_set": """
             WITH key AS (
-                SELECT md5(
-                    %(where)s || %(geom_wkt)s || %(dtrange)s || array_to_string(%(collections)s, ',')
-                ) AS cache_key
+                SELECT md5(jsonb_build_object(
+                    'where', %(where)s,
+                    'geom_wkt', %(geom_wkt)s,
+                    'dtrange', %(dtrange)s,
+                    'collections', to_jsonb(%(collections)s::text[])
+                )::text) AS cache_key
             ), cached AS (
                 SELECT partitions FROM pg_temp.partition_prune_cache c JOIN key USING (cache_key)
             ), inserted AS (
