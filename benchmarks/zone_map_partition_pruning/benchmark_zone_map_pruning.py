@@ -185,10 +185,15 @@ def create_cached_partition_stats(conn: psycopg.Connection) -> None:
     )
     rows = conn.execute(
         """
-        SELECT partition, collection, COALESCE(dtrange, constraint_dtrange) AS dtrange,
-               COALESCE(edtrange, constraint_edtrange) AS edtrange, spatial
-        FROM pgstac.partitions_view
-        ORDER BY partition;
+        SELECT
+            p.partition,
+            p.collection,
+            COALESCE(s.dtrange, p.constraint_dtrange) AS dtrange,
+            COALESCE(s.edtrange, p.constraint_edtrange) AS edtrange,
+            s.spatial
+        FROM pgstac.partition_sys_meta p
+        LEFT JOIN pgstac.partition_stats s USING (partition)
+        ORDER BY p.partition;
         """
     ).fetchall()
     for partition, collection, dtrange, edtrange, spatial in rows:
