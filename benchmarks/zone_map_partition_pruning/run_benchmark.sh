@@ -10,12 +10,15 @@ CONFIG_DIR=$(cd -- "$(dirname -- "$CONFIG")" >/dev/null 2>&1 && pwd)
 CONFIG_FILE=$(basename -- "$CONFIG")
 CONFIG_PATH="$CONFIG_DIR/$CONFIG_FILE"
 VOLUME_ARGS=(-v "$SCRIPT_DIR:/bench:ro")
-if [[ "$CONFIG_PATH" == "$SCRIPT_DIR/"* ]]; then
-  CONTAINER_CONFIG="/bench/${CONFIG_PATH#"$SCRIPT_DIR/"}"
-else
-  VOLUME_ARGS+=(-v "$CONFIG_DIR:/bench_config:ro")
-  CONTAINER_CONFIG="/bench_config/$CONFIG_FILE"
-fi
+case "$CONFIG_PATH" in
+  "$SCRIPT_DIR"/*)
+    CONTAINER_CONFIG="/bench/${CONFIG_PATH#"$SCRIPT_DIR/"}"
+    ;;
+  *)
+    VOLUME_ARGS+=(-v "$CONFIG_DIR:/bench_config:ro")
+    CONTAINER_CONFIG="/bench_config/$CONFIG_FILE"
+    ;;
+esac
 
 cd "$REPO_ROOT"
 if [[ ! -f .env && -f .env.example ]]; then

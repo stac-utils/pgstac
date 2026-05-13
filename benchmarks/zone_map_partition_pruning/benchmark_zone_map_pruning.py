@@ -61,6 +61,8 @@ def connect(dbname: str | None = None) -> psycopg.Connection:
 
 
 def reset_database(dbname: str) -> None:
+    # Deliberately allow a conservative subset of PostgreSQL identifiers for a
+    # benchmark database name; callers do not need dollar-quoted identifiers.
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", dbname):
         raise ValueError(f"Unsafe benchmark database name: {dbname!r}")
     with connect("postgres") as conn:
@@ -222,8 +224,8 @@ def create_cached_partition_stats(conn: psycopg.Connection) -> None:
                 SELECT %s, %s, %s, %s, %s,
                        CASE
                            -- Empty means a partition has no values for this
-                           -- queryable, so a cloud-cover predicate should not
-                           -- keep it as a candidate.
+                           -- queryable, so cloud-cover-based candidate
+                           -- selection should exclude it.
                            WHEN count(*) FILTER (
                                WHERE content->'properties' ? 'eo:cloud_cover'
                            ) = 0
@@ -453,6 +455,8 @@ def run_benchmarks(
             geom_wkt = spatial_wkt(start_month, float(config["spatial_window_degrees"]))
             cloud_cover_threshold = int(config["cloud_cover_threshold"])
             platform = str(config["platform"])
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]+", platform):
+                raise ValueError(f"Unsafe benchmark platform value: {platform!r}")
             cql2 = cql2_filter(config)
             # Benchmark-only baseline SQL: this intentionally mirrors the
             # current string-based EXPLAIN/chunker path. Production code should
