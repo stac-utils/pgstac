@@ -1,0 +1,11 @@
+{
+  "database": "pgstac_zone_map_bench",
+  "collections": 3,
+  "months": 24,
+  "items_per_partition": 40,
+  "iterations": 7,
+  "warmup_iterations": 2,
+  "query_windows": [1, 3, 6],
+  "spatial_window_degrees": 4.0,
+  "output": "/bench/results/zone_map_partition_pruning_results.json"
+}
