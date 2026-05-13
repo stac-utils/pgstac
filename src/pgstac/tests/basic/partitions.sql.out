@@ -122,8 +122,60 @@ SELECT id, content->'extent' FROM collections WHERE id LIKE 'pgstactest-partitio
  pgstactest-partitioned-q     | {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}
  pgstactest-partitioned-year  | {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2021-12-29T00:00:00+00:00"]]}}
 
+--test adaptive queue strategy (mixed sync/async balancing)
+SET pgstac.use_queue=FALSE;
+SET
+SET pgstac.queue_strategy='adaptive';
+SET
+SET pgstac.queue_max_size='1';
+SET
+SET pgstac.queue_max_age='1 day';
+SET
+SELECT get_setting('queue_strategy');
+ adaptive
+
+INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-partitioned-adaptive"}', 'month');
+INSERT 0 1
+INSERT INTO items_staging(content)
+SELECT content || '{"collection":"pgstactest-partitioned-adaptive"}'::jsonb FROM test_items;
+INSERT 0 105
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive';
+    24
+
+--with max queue size 1, adaptive mode should queue at most one stats update and run the rest inline
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
+     1
+SELECT count(*) FROM query_queue;
+     1
+SELECT run_queued_queries_intransaction() > 0;
+ t
+SELECT count(*) FROM query_queue;
+     0
+SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-adaptive' and spatial IS NULL;
+     0
+
+--benchmark helper should run all strategies and drain queue state
+SELECT
+    strategy,
+    partitions_total > 0 as has_partitions,
+    partitions_with_null_stats = 0 as no_missing_stats,
+    remaining_queue = 0 as queue_drained
+FROM benchmark_partition_stats_queue(
+    ARRAY['sync', 'async', 'adaptive'],
+    90,
+    'month',
+    2,
+    '1 day'::interval
+)
+ORDER BY strategy;
+ adaptive | t | t | t
+ async    | t | t | t
+ sync     | t | t | t
+
 --check that values for datetimes that are non 4 digit or that have very high precision are ingesting correctly and that partitioning is working for them
 SET pgstac.use_queue=FALSE;
+SET
+SET pgstac.queue_strategy='legacy';
 SET
 SELECT get_setting_bool('use_queue');
  f

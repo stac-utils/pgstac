@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   toolchain, for production deployments where the Rust build environment is not needed.
 - Dependabot coverage expanded to Docker base images and pip packages (two new
   ecosystems with grouped update policies).
+- `benchmark_partition_stats_queue(...)` SQL helper to run repeatable
+  sync/async/adaptive partition-stats maintenance benchmarks and compare queue
+  drain + stats freshness outcomes.
 
 ### Changed
 - `pypgstac migrate` now delegates runtime migration planning and apply logic to
@@ -79,6 +82,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `docker-base-images`, `python-dev-tooling`, and `python-runtime` groups.
 - `docker-compose.yml` removes explicit `container_name` entries to avoid conflicts
   between concurrent local instances.
+- `run_or_queue(...)` now supports explicit `queue_strategy` modes
+  (`legacy`, `sync`, `async`, `adaptive`) to balance immediate execution vs
+  queued execution based on queue size/age thresholds.
+- New queue-tuning settings: `queue_strategy`, `queue_max_size`, and
+  `queue_max_age` (with backward-compatible `legacy` default behavior that
+  continues honoring `use_queue`).
 
 ### Removed
 - PL/Rust support: `pgstacbase-plrust` and `pgstac-plrust` Docker targets removed; the
