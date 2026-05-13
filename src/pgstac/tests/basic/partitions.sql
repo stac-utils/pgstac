@@ -64,7 +64,7 @@ SELECT count(*) FROM partitions WHERE collection='pgstactest-partitioned-q' and 
 --check that queue has items
 SELECT count(*)>0 FROM query_queue;
 
---run queue items to update partition stats
+--run queue items in transaction to update partition stats
 SELECT run_queued_queries_intransaction()>0;
 
 --check that queue has been emptied

@@ -108,9 +108,7 @@ DECLARE
     drain_started timestamptz;
 BEGIN
     FOREACH s IN ARRAY strategies LOOP
-        IF s NOT IN ('sync', 'async', 'adaptive', 'legacy') THEN
-            RAISE EXCEPTION 'Unsupported strategy % in benchmark_partition_stats_queue.', s;
-        END IF;
+        s := normalize_queue_strategy(s);
 
         LOOP
             EXIT WHEN run_queued_queries_intransaction() = 0;

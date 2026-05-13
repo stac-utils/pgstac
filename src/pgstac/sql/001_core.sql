@@ -213,29 +213,49 @@ END;
 $$ LANGUAGE PLPGSQL;
 
 
+CREATE OR REPLACE FUNCTION normalize_queue_strategy(_strategy text DEFAULT NULL) RETURNS text AS $$
+DECLARE
+    normalized_strategy text := lower(
+        COALESCE(
+            NULLIF(_strategy, ''),
+            get_setting('queue_strategy'),
+            'legacy'
+        )
+    );
+BEGIN
+    IF normalized_strategy NOT IN ('legacy', 'sync', 'async', 'adaptive') THEN
+        RAISE EXCEPTION
+            'Unsupported queue_strategy: %. Valid values are legacy, sync, async, adaptive.',
+            normalized_strategy;
+    END IF;
+    RETURN normalized_strategy;
+END;
+$$ LANGUAGE PLPGSQL;
+
+
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
 DECLARE
     use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
-    queue_strategy text := lower(COALESCE(get_setting('queue_strategy'), 'legacy'));
+    queue_mode text := normalize_queue_strategy();
     queue_max_size int := COALESCE(get_setting('queue_max_size'), '100')::int;
     queue_max_age interval := t2s(COALESCE(get_setting('queue_max_age'), '5 minutes'))::interval;
     queued_count bigint;
     oldest_age interval;
 BEGIN
     IF get_setting_bool('debug') THEN
-        RAISE NOTICE 'run_or_queue strategy=% query=%', queue_strategy, query;
+        RAISE NOTICE 'run_or_queue strategy=% query=%', queue_mode, query;
     END IF;
-    IF queue_strategy = 'legacy' THEN
+    IF queue_mode = 'legacy' THEN
         IF use_queue THEN
             INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
         ELSE
             EXECUTE query;
         END IF;
-    ELSIF queue_strategy = 'sync' THEN
+    ELSIF queue_mode = 'sync' THEN
         EXECUTE query;
-    ELSIF queue_strategy = 'async' THEN
+    ELSIF queue_mode = 'async' THEN
         INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
-    ELSIF queue_strategy = 'adaptive' THEN
+    ELSIF queue_mode = 'adaptive' THEN
         SELECT
             count(*),
             COALESCE(clock_timestamp() - min(added), '0 seconds'::interval)
@@ -248,10 +268,6 @@ BEGIN
         ELSE
             INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
         END IF;
-    ELSE
-        RAISE EXCEPTION
-            'Unsupported queue_strategy: %. Valid values are legacy, sync, async, adaptive.',
-            queue_strategy;
     END IF;
     RETURN;
 END;
