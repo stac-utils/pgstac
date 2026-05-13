@@ -120,10 +120,10 @@ BEGIN
         PERFORM set_config('pgstac.queue_max_age', adaptive_queue_max_age::text, TRUE);
 
         collection_id := format(
-            'queuebench_%s_%s',
-            regexp_replace(s, '[^a-z0-9]+', '_', 'g'),
-            substr(md5(clock_timestamp()::text || random()::text), 1, 10)
+            'queuebench_%s',
+            regexp_replace(s, '[^a-z0-9]+', '_', 'g')
         );
+        DELETE FROM collections WHERE id = collection_id;
 
         INSERT INTO collections (content, partition_trunc)
         VALUES (jsonb_build_object('id', collection_id), partition_trunc);
@@ -166,4 +166,4 @@ BEGIN
         DELETE FROM collections WHERE id = collection_id;
     END LOOP;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL;
