@@ -194,7 +194,10 @@ def variants() -> dict[str, str]:
                     'where', %(where)s,
                     'geom_wkt', %(geom_wkt)s,
                     'dtrange', %(dtrange)s,
-                    'collections', to_jsonb(%(collections)s::text[])
+                    'collections', to_jsonb((
+                        SELECT array_agg(collection ORDER BY collection)
+                        FROM unnest(%(collections)s::text[]) AS collection
+                    ))
                 )::text) AS cache_key
             ), cached AS (
                 SELECT partitions FROM pg_temp.partition_prune_cache c JOIN key USING (cache_key)
