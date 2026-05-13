@@ -237,6 +237,7 @@ CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
 DECLARE
     use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
     queue_mode text := normalize_queue_strategy();
+    -- Keep fallback defaults aligned with 998_idempotent_post.sql seed settings.
     queue_max_size int := COALESCE(get_setting('queue_max_size'), '100')::int;
     queue_max_age interval := t2s(COALESCE(get_setting('queue_max_age'), '5 minutes'))::interval;
     queued_count bigint;

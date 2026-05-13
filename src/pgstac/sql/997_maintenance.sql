@@ -157,7 +157,7 @@ BEGIN
         INTO
             partitions_total,
             partitions_with_null_stats
-        FROM partitions_view
+        FROM partition_sys_meta
         WHERE collection = collection_id;
 
         strategy := s;
