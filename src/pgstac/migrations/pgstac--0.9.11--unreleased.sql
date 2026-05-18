@@ -256,6 +256,20 @@ alter table "pgstac"."searches" add constraint "searches_name_key" UNIQUE using 
 
 set check_function_bodies = off;
 
+CREATE OR REPLACE FUNCTION pgstac.extract_fragment(content jsonb, excluded_keys text[] DEFAULT '{id,geometry,collection,type}'::text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+BEGIN
+    IF content IS NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN content - COALESCE(excluded_keys, '{id,geometry,collection,type}'::text[]);
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.gc_anonymous_searches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
  RETURNS bigint
  LANGUAGE sql
@@ -352,6 +366,37 @@ END;
 $procedure$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.gc_fragments(_collection text DEFAULT NULL::text, retention_interval interval DEFAULT '90 days'::interval)
+ RETURNS TABLE(collection_id text, fragments_removed integer)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    cid text;
+    removed_count int;
+BEGIN
+    IF _collection IS NOT NULL THEN
+        DELETE FROM item_fragments f
+        WHERE f.collection = _collection
+        AND created_at < now() - retention_interval
+        AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id);
+
+        GET DIAGNOSTICS removed_count = ROW_COUNT;
+        RETURN QUERY SELECT _collection, removed_count;
+    ELSE
+        FOR cid IN SELECT DISTINCT collection FROM item_fragments LOOP
+            DELETE FROM item_fragments f
+            WHERE f.collection = cid
+            AND created_at < now() - retention_interval
+            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id);
+
+            GET DIAGNOSTICS removed_count = ROW_COUNT;
+            RETURN QUERY SELECT cid, removed_count;
+        END LOOP;
+    END IF;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.gc_search_caches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
  RETURNS jsonb
  LANGUAGE sql
@@ -361,6 +406,44 @@ AS $function$
         'removed_searches',
         gc_anonymous_searches(retention_interval, conf)
     );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.get_or_create_fragment(content jsonb, _collection text, excluded_keys text[] DEFAULT '{id,geometry,collection,type}'::text[])
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    frag_content jsonb;
+    frag_hash text;
+    frag_id bigint;
+BEGIN
+    IF content IS NULL OR _collection IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    frag_content := extract_fragment(content, excluded_keys);
+    frag_hash := pgstac_hash_fragment(frag_content);
+
+    SELECT id INTO frag_id
+    FROM item_fragments
+    WHERE collection = _collection AND hash = frag_hash;
+
+    IF frag_id IS NULL THEN
+        INSERT INTO item_fragments (collection, hash, content)
+        VALUES (_collection, frag_hash, frag_content)
+        ON CONFLICT (collection, hash) DO NOTHING
+        RETURNING id INTO frag_id;
+
+        IF frag_id IS NULL THEN
+            SELECT id INTO frag_id
+            FROM item_fragments
+            WHERE collection = _collection AND hash = frag_hash;
+        END IF;
+    END IF;
+
+    RETURN frag_id;
+END;
 $function$
 ;
 
@@ -437,6 +520,15 @@ CREATE OR REPLACE FUNCTION pgstac.pgstac_hash(data text)
  IMMUTABLE PARALLEL SAFE STRICT
 AS $function$
     SELECT encode(sha256(convert_to(data, 'UTF8')), 'hex');
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.pgstac_hash_fragment(fragment jsonb)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+SELECT pgstac_hash(fragment::text);
 $function$
 ;
 
