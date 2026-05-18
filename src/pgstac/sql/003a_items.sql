@@ -618,7 +618,7 @@ CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
             FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
         ),
         last_seen   = now()
-    WHERE item_field_registry.last_seen < now() - interval '1 hour';
+    ;
 $$ LANGUAGE SQL VOLATILE;
 
 -- update_field_registry_from_items: Sample a live collection and UPSERT registry rows.
@@ -669,8 +669,10 @@ BEGIN
                 last_seen   = now()
             RETURNING 1
         )
-        SELECT count(*) INTO nrows FROM sampled;
-        GET DIAGNOSTICS npaths = ROW_COUNT;
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
     ELSE
         -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
         WITH sampled AS (
@@ -696,8 +698,10 @@ BEGIN
                 last_seen   = now()
             RETURNING 1
         )
-        SELECT count(*) INTO nrows FROM sampled;
-        GET DIAGNOSTICS npaths = ROW_COUNT;
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
     END IF;
 
     RETURN QUERY SELECT npaths, nrows;

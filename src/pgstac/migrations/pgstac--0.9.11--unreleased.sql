@@ -323,9 +323,8 @@ alter table "pgstac"."item_fragments" validate constraint "item_fragments_collec
 
 alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_hash_key" UNIQUE using index "item_fragments_collection_hash_key";
 
--- items.fragment_id FK: added as VALID (not NOT VALID) because PostgreSQL does
--- not support NOT VALID foreign key constraints on partitioned tables.
--- All existing rows have fragment_id = NULL so there is no data to validate.
+-- items.fragment_id FK: added as VALID because PostgreSQL does not support
+-- NOT VALID foreign keys on partitioned tables.
 alter table "pgstac"."items" add constraint "items_fragment_id_fkey" FOREIGN KEY ("fragment_id") REFERENCES "pgstac"."item_fragments"("id");
 
 alter table "pgstac"."searches" add constraint "searches_name_key" UNIQUE using index "searches_name_key";
@@ -929,8 +928,10 @@ BEGIN
                 last_seen   = now()
             RETURNING 1
         )
-        SELECT count(*) INTO nrows FROM sampled;
-        GET DIAGNOSTICS npaths = ROW_COUNT;
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
     ELSE
         -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
         WITH sampled AS (
@@ -956,8 +957,10 @@ BEGIN
                 last_seen   = now()
             RETURNING 1
         )
-        SELECT count(*) INTO nrows FROM sampled;
-        GET DIAGNOSTICS npaths = ROW_COUNT;
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
     END IF;
 
     RETURN QUERY SELECT npaths, nrows;
@@ -987,7 +990,7 @@ AS $function$
             FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
         ),
         last_seen   = now()
-    WHERE item_field_registry.last_seen < now() - interval '1 hour';
+    ;
 $function$
 ;
 
