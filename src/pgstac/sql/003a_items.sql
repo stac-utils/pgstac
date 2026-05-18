@@ -413,3 +413,95 @@ UPDATE collections
     )
 ;
 $$ LANGUAGE SQL;
+
+-- Item Fragment Management functions
+-- extract_fragment: Extract the commonly-deduplicated part of an item
+CREATE OR REPLACE FUNCTION extract_fragment(
+    content jsonb,
+    excluded_keys text[] DEFAULT '{id,geometry,collection,type}'::text[]
+) RETURNS jsonb AS $$
+BEGIN
+    IF content IS NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN content - COALESCE(excluded_keys, '{id,geometry,collection,type}'::text[]);
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+-- pgstac_hash_fragment: Hash a fragment content for dedup
+CREATE OR REPLACE FUNCTION pgstac_hash_fragment(fragment jsonb) RETURNS text AS $$
+SELECT pgstac_hash(fragment::text);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- get_or_create_fragment: Look up or create a fragment for a content item
+CREATE OR REPLACE FUNCTION get_or_create_fragment(
+    content jsonb,
+    _collection text,
+    excluded_keys text[] DEFAULT '{id,geometry,collection,type}'::text[]
+) RETURNS bigint AS $$
+DECLARE
+    frag_content jsonb;
+    frag_hash text;
+    frag_id bigint;
+BEGIN
+    IF content IS NULL OR _collection IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    frag_content := extract_fragment(content, excluded_keys);
+    frag_hash := pgstac_hash_fragment(frag_content);
+
+    SELECT id INTO frag_id
+    FROM item_fragments
+    WHERE collection = _collection AND hash = frag_hash;
+
+    IF frag_id IS NULL THEN
+        INSERT INTO item_fragments (collection, hash, content)
+        VALUES (_collection, frag_hash, frag_content)
+        ON CONFLICT (collection, hash) DO NOTHING
+        RETURNING id INTO frag_id;
+
+        IF frag_id IS NULL THEN
+            SELECT id INTO frag_id
+            FROM item_fragments
+            WHERE collection = _collection AND hash = frag_hash;
+        END IF;
+    END IF;
+
+    RETURN frag_id;
+END;
+$$ LANGUAGE PLPGSQL VOLATILE PARALLEL UNSAFE;
+
+-- gc_fragments: Garbage collect unused fragments
+CREATE OR REPLACE FUNCTION gc_fragments(
+    _collection text DEFAULT NULL,
+    retention_interval interval DEFAULT '90 days'
+) RETURNS TABLE (
+    collection_id text,
+    fragments_removed int
+) AS $$
+DECLARE
+    cid text;
+    removed_count int;
+BEGIN
+    IF _collection IS NOT NULL THEN
+        DELETE FROM item_fragments f
+        WHERE f.collection = _collection
+        AND created_at < now() - retention_interval
+        AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id);
+
+        GET DIAGNOSTICS removed_count = ROW_COUNT;
+        RETURN QUERY SELECT _collection, removed_count;
+    ELSE
+        FOR cid IN SELECT DISTINCT collection FROM item_fragments LOOP
+            DELETE FROM item_fragments f
+            WHERE f.collection = cid
+            AND created_at < now() - retention_interval
+            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id);
+
+            GET DIAGNOSTICS removed_count = ROW_COUNT;
+            RETURN QUERY SELECT cid, removed_count;
+        END LOOP;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL VOLATILE PARALLEL UNSAFE;
