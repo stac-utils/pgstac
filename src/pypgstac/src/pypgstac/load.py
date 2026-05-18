@@ -378,7 +378,7 @@ class Loader:
                         """
                         DROP TABLE IF EXISTS items_ingest_temp;
                         CREATE TEMP TABLE items_ingest_temp
-                        ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
+                        (LIKE items INCLUDING DEFAULTS) ON COMMIT DROP;
                         """,
                     )
                     with cur.copy(

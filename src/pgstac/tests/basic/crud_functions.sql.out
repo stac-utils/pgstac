@@ -27,7 +27,7 @@ INSERT 0 1
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {"properties": {"datetime": "2020-01-01 00:00:00+00"}} |
 
 -- Check to see if extent got updated
@@ -38,7 +38,7 @@ SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-01-01 00:00:00+00 | 2023-01-01 00:00:00+00 | {"properties": {"datetime": "2023-01-01 00:00:00Z"}} |
 
 -- Check to see if extent got updated
@@ -49,21 +49,21 @@ SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 SELECT upsert_item((SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {"properties": {"datetime": "2023-02-01 00:00:00Z"}} |
 
 -- Delete an item
 SELECT delete_item('pgstactest-crudtest-1', 'pgstactest-crudtest');
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
 
 WITH c AS (SELECT content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT create_items(items) FROM aggregated;
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {"properties": {"datetime": "2020-01-01 00:00:00+00"}} |
  pgstactest-crudtest-2 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-02-01 00:00:00+00 | 2020-02-01 00:00:00+00 | {"properties": {"datetime": "2020-02-01 00:00:00+00"}} |
 
@@ -75,7 +75,7 @@ aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {"properties": {"datetime": "2020-01-01 00:00:00+00"}} |
  pgstactest-crudtest-2 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-02-01 00:00:00+00 | 2020-02-01 00:00:00+00 | {"properties": {"datetime": "2020-02-01 00:00:00+00"}} |
 
@@ -85,7 +85,7 @@ aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
 
 
-SELECT * FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {"properties": {"datetime": "2023-02-01 00:00:00Z"}} |
  pgstactest-crudtest-2 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {"properties": {"datetime": "2023-02-01 00:00:00Z"}} |
 

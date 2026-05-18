@@ -214,6 +214,22 @@ drop index if exists "pgstac"."search_wheres_where";
 
 drop table "pgstac"."search_wheres";
 
+create table "pgstac"."items_deleted_log" (
+    "id" bigint generated always as identity not null,
+    "item_id" text not null,
+    "collection" text not null,
+    "partition" text,
+    "datetime" timestamp with time zone,
+    "end_datetime" timestamp with time zone,
+    "content_hash" text not null default ''::text,
+    "deleted_at" timestamp with time zone not null default now()
+);
+
+
+alter table "pgstac"."items" add column "content_hash" text not null default ''::text;
+
+alter table "pgstac"."items" add column "pgstac_updated_at" timestamp with time zone not null default now();
+
 alter table "pgstac"."searches" add column "context_count" bigint;
 
 alter table "pgstac"."searches" add column "created_at" timestamp with time zone default now();
@@ -226,9 +242,15 @@ alter table "pgstac"."searches" add column "statslastupdated" timestamp with tim
 
 alter table "pgstac"."searches" alter column "hash" drop expression;
 
+CREATE INDEX items_deleted_log_deleted_at_idx ON pgstac.items_deleted_log USING btree (deleted_at);
+
+CREATE UNIQUE INDEX items_deleted_log_pkey ON pgstac.items_deleted_log USING btree (id);
+
 CREATE INDEX searches_lastused_anon_idx ON pgstac.searches USING btree (lastused) WHERE ((name IS NULL) AND (NOT pinned));
 
 CREATE UNIQUE INDEX searches_name_key ON pgstac.searches USING btree (name);
+
+alter table "pgstac"."items_deleted_log" add constraint "items_deleted_log_pkey" PRIMARY KEY using index "items_deleted_log_pkey";
 
 alter table "pgstac"."searches" add constraint "searches_name_key" UNIQUE using index "searches_name_key";
 
@@ -258,6 +280,78 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interval DEFAULT '30 days'::interval)
+ RETURNS bigint
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    SELECT gc_deleted_items_log(retention_interval, 10000);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interval, batch_limit integer)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    deleted_count bigint := 0;
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        deleted_count := deleted_count + batch_deleted;
+        EXIT WHEN batch_deleted = 0;
+    END LOOP;
+
+    RETURN deleted_count;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log_batch(retention_interval interval DEFAULT '30 days'::interval, batch_limit integer DEFAULT 10000)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    WITH to_delete AS (
+        SELECT ctid
+        FROM items_deleted_log
+        WHERE deleted_at < now() - retention_interval
+        ORDER BY deleted_at
+        LIMIT GREATEST(COALESCE(batch_limit, 10000), 1)
+    ),
+    deleted AS (
+        DELETE FROM items_deleted_log d
+        USING to_delete td
+        WHERE d.ctid = td.ctid
+        RETURNING 1
+    )
+    SELECT count(*)::bigint INTO batch_deleted FROM deleted;
+
+    RETURN batch_deleted;
+END;
+$function$
+;
+
+CREATE OR REPLACE PROCEDURE pgstac.gc_deleted_items_log_committed(IN retention_interval interval DEFAULT '30 days'::interval, IN batch_limit integer DEFAULT 10000)
+ LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        EXIT WHEN batch_deleted = 0;
+        COMMIT;
+    END LOOP;
+END;
+$procedure$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.gc_search_caches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
  RETURNS jsonb
  LANGUAGE sql
@@ -267,6 +361,47 @@ AS $function$
         'removed_searches',
         gc_anonymous_searches(retention_interval, conf)
     );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_delete_log_trigger()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+    INSERT INTO items_deleted_log (
+        item_id,
+        collection,
+        partition,
+        datetime,
+        end_datetime,
+        content_hash
+    )
+    SELECT
+        old_rows.id,
+        old_rows.collection,
+        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+        old_rows.datetime,
+        old_rows.end_datetime,
+        old_rows.content_hash
+    FROM old_rows;
+
+    RETURN NULL;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_touch_triggerfunc()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+    NEW.pgstac_updated_at := now();
+    NEW.content_hash := encode(sha256(content_hydrate(NEW)::text::bytea), 'hex');
+    RETURN NEW;
+END;
 $function$
 ;
 
@@ -674,21 +809,55 @@ $function$
 
 CREATE OR REPLACE FUNCTION pgstac.content_dehydrate(content jsonb)
  RETURNS items
- LANGUAGE sql
+ LANGUAGE plpgsql
  STABLE
 AS $function$
-    SELECT
-            content->>'id' as id,
-            stac_geom(content) as geometry,
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            strip_jsonb(
-                content - '{id,geometry,collection,type}'::text[],
-                collection_base_item(content->>'collection')
-            ) - '{id,geometry,collection,type}'::text[] as content,
-            null::jsonb as private
-    ;
+DECLARE
+    out items;
+BEGIN
+    out.id := content->>'id';
+    out.geometry := stac_geom(content);
+    out.collection := content->>'collection';
+    out.datetime := stac_datetime(content);
+    out.end_datetime := stac_end_datetime(content);
+    out.pgstac_updated_at := now();
+    out.content_hash := encode(sha256(content::text::bytea), 'hex');
+    out.content := strip_jsonb(
+        content - '{id,geometry,collection,type}'::text[],
+        collection_base_item(content->>'collection')
+    ) - '{id,geometry,collection,type}'::text[];
+    out.private := null;
+    RETURN out;
+END;
+$function$
+;
+
+CREATE TRIGGER items_before_update_trigger BEFORE UPDATE ON pgstac.items FOR EACH ROW EXECUTE FUNCTION items_touch_triggerfunc();
+
+CREATE TRIGGER items_delete_log_after_delete_trigger AFTER DELETE ON pgstac.items REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
+
+CREATE OR REPLACE FUNCTION pgstac.content_dehydrate(content jsonb)
+ RETURNS items
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+    out items;
+BEGIN
+    out.id := content->>'id';
+    out.geometry := stac_geom(content);
+    out.collection := content->>'collection';
+    out.datetime := stac_datetime(content);
+    out.end_datetime := stac_end_datetime(content);
+    out.pgstac_updated_at := now();
+    out.content_hash := encode(sha256(content::text::bytea), 'hex');
+    out.content := strip_jsonb(
+        content - '{id,geometry,collection,type}'::text[],
+        collection_base_item(content->>'collection')
+    ) - '{id,geometry,collection,type}'::text[];
+    out.private := null;
+    RETURN out;
+END;
 $function$
 ;
 
@@ -1075,6 +1244,9 @@ ALTER FUNCTION pin_search SECURITY DEFINER;
 ALTER FUNCTION unpin_search SECURITY DEFINER;
 ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 
@@ -1099,6 +1271,9 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE gc_deleted_items_log_committed(interval, integer) FROM public;
+GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgstac_admin;
 
 RESET ROLE;
 

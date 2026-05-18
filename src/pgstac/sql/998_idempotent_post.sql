@@ -103,6 +103,9 @@ ALTER FUNCTION pin_search SECURITY DEFINER;
 ALTER FUNCTION unpin_search SECURITY DEFINER;
 ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 
@@ -127,6 +130,9 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE gc_deleted_items_log_committed(interval, integer) FROM public;
+GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgstac_admin;
 
 RESET ROLE;
 
