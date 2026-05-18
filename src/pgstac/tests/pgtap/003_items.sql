@@ -15,6 +15,8 @@ SELECT has_function('pgstac'::name, 'upsert_item', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'create_items', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'upsert_items', ARRAY['jsonb']);
 SELECT has_function('pgstac'::name, 'gc_deleted_items_log', ARRAY['interval']);
+SELECT has_function('pgstac'::name, 'gc_deleted_items_log', ARRAY['interval', 'integer']);
+SELECT has_function('pgstac'::name, 'gc_deleted_items_log_batch', ARRAY['interval', 'integer']);
 
 
 -- tools to update collection extents based on extents in items
@@ -106,4 +108,33 @@ SELECT results_eq($$
     SELECT TRUE;
     $$,
     'gc_deleted_items_log removes aged tombstones'
+);
+
+SELECT lives_ok($$
+    INSERT INTO items_deleted_log (
+        item_id,
+        collection,
+        partition,
+        datetime,
+        end_datetime,
+        content_hash,
+        deleted_at
+    )
+    VALUES (
+        'pgstac-test-item-0003',
+        'pgstac-test-collection',
+        NULL,
+        now() - '41 days'::interval,
+        now() - '41 days'::interval,
+        repeat('a', 64),
+        now() - '40 days'::interval
+    );
+$$, 'Insert aged tombstone row for batched gc_deleted_items_log test');
+
+SELECT results_eq($$
+    SELECT gc_deleted_items_log('30 days'::interval, 1) > 0;
+    $$,$$
+    SELECT TRUE;
+    $$,
+    'gc_deleted_items_log(interval, integer) removes aged tombstones in batches'
 );

@@ -285,13 +285,71 @@ CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interv
  LANGUAGE sql
  SECURITY DEFINER
 AS $function$
-    WITH deleted AS (
-        DELETE FROM items_deleted_log
+    SELECT gc_deleted_items_log(retention_interval, 10000);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interval, batch_limit integer)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    deleted_count bigint := 0;
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        deleted_count := deleted_count + batch_deleted;
+        EXIT WHEN batch_deleted = 0;
+    END LOOP;
+
+    RETURN deleted_count;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log_batch(retention_interval interval DEFAULT '30 days'::interval, batch_limit integer DEFAULT 10000)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    WITH to_delete AS (
+        SELECT ctid
+        FROM items_deleted_log
         WHERE deleted_at < now() - retention_interval
+        ORDER BY deleted_at
+        LIMIT GREATEST(COALESCE(batch_limit, 10000), 1)
+    ),
+    deleted AS (
+        DELETE FROM items_deleted_log d
+        USING to_delete td
+        WHERE d.ctid = td.ctid
         RETURNING 1
     )
-    SELECT count(*)::bigint FROM deleted;
+    SELECT count(*)::bigint INTO batch_deleted FROM deleted;
+
+    RETURN batch_deleted;
+END;
 $function$
+;
+
+CREATE OR REPLACE PROCEDURE pgstac.gc_deleted_items_log_committed(IN retention_interval interval DEFAULT '30 days'::interval, IN batch_limit integer DEFAULT 10000)
+ LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        EXIT WHEN batch_deleted = 0;
+        COMMIT;
+    END LOOP;
+END;
+$procedure$
 ;
 
 CREATE OR REPLACE FUNCTION pgstac.gc_search_caches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
@@ -1186,6 +1244,9 @@ ALTER FUNCTION pin_search SECURITY DEFINER;
 ALTER FUNCTION unpin_search SECURITY DEFINER;
 ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 
@@ -1210,6 +1271,9 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE gc_deleted_items_log_committed(interval, integer) FROM public;
+GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgstac_admin;
 
 RESET ROLE;
 
