@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Replaced expensive row-based trigger for item inserts with optimized SQL/PLPGSQL hydration strategies to improve ingestion throughput.
 - Update pypgstac loaders to dynamically generate hashes during ingestion where required, avoiding trigger recalculation.
-- Add tombstone table `items_deleted_log` and `updated_at` column to items table.
+- Add tombstone table `items_deleted_log` and `pgstac_updated_at` metadata column to items table.
+- Add batched tombstone GC routines: `gc_deleted_items_log_batch(interval, integer)`, overloaded `gc_deleted_items_log(interval, integer)`, and `gc_deleted_items_log_committed(interval, integer)` for commit-per-batch cleanup of large tombstone backlogs.
+- Add PGTap coverage for batched tombstone GC signatures/behavior and read-only rejection paths.
 - New `pgstac-migrate` package under `src/pgstac-migrate/` with a standalone
   CLI, Python API, and tests for migration planning and execution.
 - New Rust crate under `src/pgstac-rs/` with updated CI/release wiring,
