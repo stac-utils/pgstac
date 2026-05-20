@@ -564,6 +564,7 @@ BEGIN
                 AND i.collection = s.collection
                 AND (
                     i.datetime IS DISTINCT FROM s.datetime
+                    OR i.end_datetime IS DISTINCT FROM s.end_datetime
                     OR i.geometry IS DISTINCT FROM s.geometry
                     OR i.assets IS DISTINCT FROM s.assets
                     OR i.properties IS DISTINCT FROM s.properties
