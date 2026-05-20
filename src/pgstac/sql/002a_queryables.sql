@@ -112,6 +112,14 @@ CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
     ) FROM unnest(arr) v;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+-- queryable_uses_native_path: Returns true when a queryable path string is a
+-- bare identifier (e.g. 'proj_epsg', 'platform') that maps to a native promoted
+-- column on the items table. Such paths do not need a content->'properties'->...
+-- expression or a type-cast wrapper; the column type already matches.
+CREATE OR REPLACE FUNCTION queryable_uses_native_path(path text) RETURNS boolean AS $$
+    SELECT path ~ '^[a-zA-Z_][a-zA-Z0-9_]*$';
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 
 
@@ -163,14 +171,41 @@ BEGIN
     ELSE
         path_elements := string_to_array(dotpath, '.');
         IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- links, assets, stac_version, stac_extensions are now split columns.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := path_elements[1];
+            ELSE
+                path := format('%I->%s', path_elements[1], array_to_path(path_elements[2:]));
+            END IF;
         ELSIF path_elements[1] = 'properties' THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- properties is a split JSONB column; generate properties->... path.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := 'properties';
+            ELSE
+                path := format('properties->%s', array_to_path(path_elements[2:]));
+            END IF;
         ELSE
-            path := format($F$content->'properties'->%s$F$, array_to_path(path_elements));
+            -- Non-prefixed queryable names are assumed to live in properties.
+            path := format($F$properties->%s$F$, array_to_path(path_elements));
         END IF;
     END IF;
-    expression := format('%I(%s)', wrapper, path);
+    IF queryable_uses_native_path(path) THEN
+        IF q.definition->>'type' IN ('number', 'integer') OR q.property_wrapper IN ('to_int', 'to_float') THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSIF q.property_wrapper IS NULL THEN
+            wrapper := 'to_text';
+            nulled_wrapper := NULL;
+        END IF;
+    END IF;
+    IF wrapper IS NULL OR queryable_uses_native_path(path) THEN
+        expression := path;
+    ELSE
+        expression := format('%I(%s)', wrapper, path);
+    END IF;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
@@ -194,6 +229,17 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+-- queryable_index_field: Returns the index field name for a queryable row.
+-- For promoted native columns (property_path is a bare identifier) the field name
+-- is the column name itself. For JSON-path queryables it is the STAC property name.
+-- Used by the index consistency view to correlate existing indexes with queryables.
+CREATE OR REPLACE FUNCTION queryable_index_field(q queryables) RETURNS text AS $$
+    SELECT CASE
+        WHEN q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN q.property_path
+        ELSE q.name
+    END;
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
@@ -205,6 +251,13 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
             out := 'CREATE INDEX ON %I USING btree (datetime DESC, end_datetime)';
         ELSIF q.name = 'geometry' THEN
             out := 'CREATE INDEX ON %I USING gist (geometry)';
+        ELSIF q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN
+            -- Native promoted column: index the column directly, no type-cast wrapper needed.
+            out := format(
+                'CREATE INDEX ON %%I USING %s (%s)',
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                q.property_path
+            );
         ELSE
             out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
@@ -224,8 +277,8 @@ SELECT
     i.indexname,
     regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -242,8 +295,8 @@ SELECT
     i.indexname,
     indexdef,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -288,8 +341,8 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM
@@ -297,7 +350,7 @@ WITH p AS (
             JOIN p ON (tablename=partition)
     ), q AS (
         SELECT
-            name AS field,
+            queryable_index_field(queryables) AS field,
             collection,
             partition,
             format(indexdef(queryables), partition) as qidx
@@ -515,7 +568,7 @@ BEGIN
                     OR %L = ANY(collection_ids)
             ), t AS (
                 SELECT
-                    content->'properties' AS properties
+                    properties
                 FROM
                     %I
                 TABLESAMPLE SYSTEM(%L)
