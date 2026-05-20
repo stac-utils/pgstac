@@ -1,17 +1,21 @@
--- collection_fragment_config_default: Derive a fragment_config text[] from item_assets if present.
--- Returns one serialized path per item_asset key (e.g. 'assets.thumbnail'), or NULL if no item_assets.
--- This is used when creating/upserting a collection to auto-populate fragment_config.
+-- collection_fragment_config_default: Derive a sensible starting fragment_config for a
+-- collection.  Returns the paths for values that are reliably identical across every item
+-- in any STAC collection:
+--
+--   • stac_version    — set once at the collection level, never varies per item.
+--   • stac_extensions — same extension list for every item in a collection.
+--
+-- NOTE: asset sub-fields (e.g. type, title, roles) from item_assets are also good
+-- candidates for fragmentation because they are constant per collection.  However,
+-- the current extract_fragment implementation supports depth-1 and depth-2 paths only;
+-- a depth-2 path like 'assets.thumbnail' captures the *whole* asset object, including
+-- 'href', which is unique per item and eliminates any dedup benefit.  Proper support
+-- requires depth-3 paths (e.g. 'assets.thumbnail.type') so that 'href' can be excluded.
+-- Until that is implemented, asset paths are NOT included in the default to avoid
+-- creating one unique fragment per item.  Operators may add explicit fragment_config
+-- paths after collection creation via UPDATE collections SET fragment_config = ...
 CREATE OR REPLACE FUNCTION collection_fragment_config_default(content jsonb) RETURNS text[] AS $$
-    SELECT CASE
-        WHEN content->'item_assets' IS NOT NULL
-             AND jsonb_typeof(content->'item_assets') = 'object'
-             AND content->'item_assets' != '{}'::jsonb
-        THEN ARRAY(
-            SELECT fragment_path_text(ARRAY['assets', k])
-            FROM jsonb_object_keys(content->'item_assets') k
-        )
-        ELSE NULL
-    END;
+    SELECT ARRAY['stac_version', 'stac_extensions'];
 $$ LANGUAGE SQL STABLE;
 
 
@@ -30,34 +34,72 @@ CREATE TABLE IF NOT EXISTS collections (
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 
--- create_collection: Insert a new collection and derive fragment_config from item_assets.
-CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content, fragment_config)
-    VALUES (data, collection_fragment_config_default(data))
+-- create_collection: Insert a new collection.
+-- _partition_trunc: optional 'year' or 'month' sub-partitioning; defaults to none.
+-- _fragment_config: explicit fragment path list; defaults to collection_fragment_config_default(data).
+CREATE OR REPLACE FUNCTION create_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
     ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
--- update_collection: Replace collection content. Does NOT update fragment_config
--- so operator-configured paths survive content updates.
-CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
+-- update_collection: Replace collection content.
+-- _partition_trunc: when not NULL, updates the partition truncation setting.
+--   Pass NULL to preserve the existing value.
+-- _fragment_config: when not NULL, replaces the fragment configuration.
+--   Pass NULL to preserve the existing operator-configured value.
+CREATE OR REPLACE FUNCTION update_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
 DECLARE
     out collections%ROWTYPE;
 BEGIN
-    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+    UPDATE collections
+    SET content         = data,
+        partition_trunc = COALESCE(_partition_trunc, partition_trunc),
+        fragment_config = COALESCE(_fragment_config, fragment_config)
+    WHERE id = data->>'id'
+    RETURNING * INTO STRICT out;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 -- upsert_collection: Insert or update a collection.
--- On conflict, preserves any operator-set fragment_config; only populates it
--- from the item_assets default when it is currently NULL.
-CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content, fragment_config)
-    VALUES (data, collection_fragment_config_default(data))
+-- _partition_trunc: optional 'year' or 'month' sub-partitioning; defaults to none on insert,
+--   preserved from existing row on conflict (pass an explicit value to override).
+-- _fragment_config: explicit fragment path list; defaults to collection_fragment_config_default(data)
+--   on insert.  On conflict, any operator-configured (non-NULL) value is preserved unless an
+--   explicit _fragment_config is passed.
+CREATE OR REPLACE FUNCTION upsert_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
     ON CONFLICT (id) DO
     UPDATE
-        SET content=EXCLUDED.content,
-            -- Preserve any operator-configured fragment_config; only set from default if currently NULL.
-            fragment_config=COALESCE(collections.fragment_config, EXCLUDED.fragment_config)
+        SET content         = EXCLUDED.content,
+            -- Preserve any operator-configured fragment_config; only replace when an
+            -- explicit _fragment_config was supplied or when currently NULL.
+            fragment_config = CASE
+                WHEN _fragment_config IS NOT NULL THEN _fragment_config
+                ELSE COALESCE(collections.fragment_config, EXCLUDED.fragment_config)
+            END,
+            partition_trunc = COALESCE(EXCLUDED.partition_trunc, collections.partition_trunc)
     ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 

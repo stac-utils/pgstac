@@ -28,96 +28,19 @@ $$;
 -- Register promoted native-column queryables (v0.10 split schema).
 -- Each entry maps a STAC property name to the promoted items column via property_path.
 -- CQL2 queries and auto-created indexes will use the native column, not JSONB extraction.
--- First block: insert new rows only. Second block below: update existing rows that have
--- property_path=NULL (handles databases upgraded from pre-v0.10 without re-installing).
-WITH promoted_queryables(name, definition, property_path, property_wrapper) AS (
-    VALUES
-  ('stac_version', '{"description": "STAC specification version","type": "string","title": "STAC Version"}'::jsonb, 'stac_version', 'to_text'),
-  ('stac_extensions', '{"description": "List of STAC extension schema URIs","type": "array","title": "STAC Extensions"}'::jsonb, 'stac_extensions', 'to_text'),
-  ('created', '{"description": "Metadata creation timestamp","type": "string","format": "date-time","title": "Created"}'::jsonb, 'created', 'to_tstz'),
-  ('updated', '{"description": "Metadata update timestamp","type": "string","format": "date-time","title": "Updated"}'::jsonb, 'updated', 'to_tstz'),
-  ('platform', '{"description": "Platform name","type": "string","title": "Platform"}'::jsonb, 'platform', 'to_text'),
-  ('instruments', '{"description": "Instrument names","type": "array","title": "Instruments"}'::jsonb, 'instruments', 'to_text_array'),
-  ('constellation', '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb, 'constellation', 'to_text'),
-  ('mission', '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb, 'mission', 'to_text'),
-        ('eo:cloud_cover', '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb, 'eo_cloud_cover', 'to_float'),
-  ('eo:bands', '{"description": "EO band metadata","type": "array","title": "EO Bands"}'::jsonb, 'eo_bands', 'to_text'),
-        ('eo:snow_cover', '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb, 'eo_snow_cover', 'to_float'),
-        ('gsd', '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb, 'gsd', 'to_float'),
-  ('proj:epsg', '{"description": "EPSG code","type": "integer","title": "Projection EPSG"}'::jsonb, 'proj_epsg', 'to_int'),
-  ('proj:wkt2', '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb, 'proj_wkt2', 'to_text'),
-  ('proj:projjson', '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb, 'proj_projjson', 'to_text'),
-  ('proj:bbox', '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb, 'proj_bbox', 'to_text'),
-  ('proj:centroid', '{"description": "Projection centroid","type": "object","title": "Projection Centroid"}'::jsonb, 'proj_centroid', 'to_text'),
-  ('proj:shape', '{"description": "Projection shape","type": "array","title": "Projection Shape"}'::jsonb, 'proj_shape', 'to_text'),
-  ('proj:transform', '{"description": "Projection affine transform","type": "array","title": "Projection Transform"}'::jsonb, 'proj_transform', 'to_text'),
-  ('sci:doi', '{"description": "Scientific DOI","type": "string","title": "Scientific DOI"}'::jsonb, 'sci_doi', 'to_text'),
-  ('sci:citation', '{"description": "Scientific citation","type": "string","title": "Scientific Citation"}'::jsonb, 'sci_citation', 'to_text'),
-  ('sci:publications', '{"description": "Scientific publications","type": "array","title": "Scientific Publications"}'::jsonb, 'sci_publications', 'to_text'),
-        ('view:off_nadir', '{"description": "Viewing angle off nadir","type": "number","title": "View Off Nadir"}'::jsonb, 'view_off_nadir', 'to_float'),
-  ('view:incidence_angle', '{"description": "View incidence angle","type": "number","title": "View Incidence Angle"}'::jsonb, 'view_incidence_angle', 'to_float'),
-  ('view:azimuth', '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb, 'view_azimuth', 'to_float'),
-        ('view:sun_azimuth', '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb, 'view_sun_azimuth', 'to_float'),
-  ('view:sun_elevation', '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb, 'view_sun_elevation', 'to_float'),
-  ('file:size', '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb, 'file_size', 'to_int'),
-  ('file:header_size', '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb, 'file_header_size', 'to_int'),
-  ('file:checksum', '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb, 'file_checksum', 'to_text'),
-  ('file:byte_order', '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb, 'file_byte_order', 'to_text'),
-  ('file:values_regex', '{"description": "File values regex","type": "string","title": "File Values Regex"}'::jsonb, 'file_values_regex', 'to_text'),
-  ('sat:orbit_state', '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb, 'sat_orbit_state', 'to_text'),
-  ('sat:relative_orbit', '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb, 'sat_relative_orbit', 'to_int'),
-  ('sat:absolute_orbit', '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb, 'sat_absolute_orbit', 'to_int')
-), inserted AS (
-    INSERT INTO queryables (name, definition, property_path, property_wrapper)
-    SELECT p.name, p.definition, p.property_path, p.property_wrapper
-    FROM promoted_queryables p
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM queryables q
-        WHERE q.name = p.name
-    )
-    RETURNING name
-)
-SELECT count(*) FROM inserted;
+-- The seed data lives in promoted_queryables_defaults() (002a_queryables.sql) so it
+-- only needs to be maintained in one place.
+--
+-- Pass 1: insert rows that do not yet exist.
+INSERT INTO queryables (name, definition, property_path, property_wrapper)
+SELECT p.name, p.definition, p.property_path, p.property_wrapper
+FROM promoted_queryables_defaults() p
+WHERE NOT EXISTS (
+    SELECT 1 FROM queryables q WHERE q.name = p.name
+);
 
-WITH promoted_queryables(name, definition, property_path, property_wrapper) AS (
-    VALUES
-  ('stac_version', '{"description": "STAC specification version","type": "string","title": "STAC Version"}'::jsonb, 'stac_version', 'to_text'),
-  ('stac_extensions', '{"description": "List of STAC extension schema URIs","type": "array","title": "STAC Extensions"}'::jsonb, 'stac_extensions', 'to_text'),
-  ('created', '{"description": "Metadata creation timestamp","type": "string","format": "date-time","title": "Created"}'::jsonb, 'created', 'to_tstz'),
-  ('updated', '{"description": "Metadata update timestamp","type": "string","format": "date-time","title": "Updated"}'::jsonb, 'updated', 'to_tstz'),
-  ('platform', '{"description": "Platform name","type": "string","title": "Platform"}'::jsonb, 'platform', 'to_text'),
-  ('instruments', '{"description": "Instrument names","type": "array","title": "Instruments"}'::jsonb, 'instruments', 'to_text_array'),
-  ('constellation', '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb, 'constellation', 'to_text'),
-  ('mission', '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb, 'mission', 'to_text'),
-        ('eo:cloud_cover', '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb, 'eo_cloud_cover', 'to_float'),
-  ('eo:bands', '{"description": "EO band metadata","type": "array","title": "EO Bands"}'::jsonb, 'eo_bands', 'to_text'),
-        ('eo:snow_cover', '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb, 'eo_snow_cover', 'to_float'),
-        ('gsd', '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb, 'gsd', 'to_float'),
-  ('proj:epsg', '{"description": "EPSG code","type": "integer","title": "Projection EPSG"}'::jsonb, 'proj_epsg', 'to_int'),
-  ('proj:wkt2', '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb, 'proj_wkt2', 'to_text'),
-  ('proj:projjson', '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb, 'proj_projjson', 'to_text'),
-  ('proj:bbox', '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb, 'proj_bbox', 'to_text'),
-  ('proj:centroid', '{"description": "Projection centroid","type": "object","title": "Projection Centroid"}'::jsonb, 'proj_centroid', 'to_text'),
-  ('proj:shape', '{"description": "Projection shape","type": "array","title": "Projection Shape"}'::jsonb, 'proj_shape', 'to_text'),
-  ('proj:transform', '{"description": "Projection affine transform","type": "array","title": "Projection Transform"}'::jsonb, 'proj_transform', 'to_text'),
-  ('sci:doi', '{"description": "Scientific DOI","type": "string","title": "Scientific DOI"}'::jsonb, 'sci_doi', 'to_text'),
-  ('sci:citation', '{"description": "Scientific citation","type": "string","title": "Scientific Citation"}'::jsonb, 'sci_citation', 'to_text'),
-  ('sci:publications', '{"description": "Scientific publications","type": "array","title": "Scientific Publications"}'::jsonb, 'sci_publications', 'to_text'),
-        ('view:off_nadir', '{"description": "Viewing angle off nadir","type": "number","title": "View Off Nadir"}'::jsonb, 'view_off_nadir', 'to_float'),
-  ('view:incidence_angle', '{"description": "View incidence angle","type": "number","title": "View Incidence Angle"}'::jsonb, 'view_incidence_angle', 'to_float'),
-  ('view:azimuth', '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb, 'view_azimuth', 'to_float'),
-        ('view:sun_azimuth', '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb, 'view_sun_azimuth', 'to_float'),
-  ('view:sun_elevation', '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb, 'view_sun_elevation', 'to_float'),
-  ('file:size', '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb, 'file_size', 'to_int'),
-  ('file:header_size', '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb, 'file_header_size', 'to_int'),
-  ('file:checksum', '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb, 'file_checksum', 'to_text'),
-  ('file:byte_order', '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb, 'file_byte_order', 'to_text'),
-  ('file:values_regex', '{"description": "File values regex","type": "string","title": "File Values Regex"}'::jsonb, 'file_values_regex', 'to_text'),
-  ('sat:orbit_state', '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb, 'sat_orbit_state', 'to_text'),
-  ('sat:relative_orbit', '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb, 'sat_relative_orbit', 'to_int'),
-  ('sat:absolute_orbit', '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb, 'sat_absolute_orbit', 'to_int')
-)
+-- Pass 2: backfill property_path/property_wrapper on rows that were created by an
+-- older install (pre-v0.10) and therefore have property_path=NULL.
 UPDATE queryables q
 SET property_path = CASE
       WHEN q.property_index_type IS NULL THEN COALESCE(q.property_path, p.property_path)
@@ -128,7 +51,7 @@ SET property_path = CASE
       ELSE q.property_wrapper
     END,
     definition = COALESCE(q.definition, p.definition)
-FROM promoted_queryables p
+FROM promoted_queryables_defaults() p
 WHERE q.name = p.name;
 
 DELETE FROM queryables a USING queryables b
