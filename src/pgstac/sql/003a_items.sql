@@ -91,6 +91,7 @@ CREATE INDEX IF NOT EXISTS item_field_registry_path_idx ON item_field_registry (
 
 CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
+CREATE INDEX IF NOT EXISTS items_fragment_id_idx ON items (fragment_id) WHERE fragment_id IS NOT NULL;
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
