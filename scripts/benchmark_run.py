@@ -27,11 +27,24 @@ def run(cmd: list[str], cwd: Path) -> None:
     subprocess.run(cmd, cwd=str(cwd), check=True)
 
 
-def reset_schema(repo_root: Path) -> None:
-    dsn = os.getenv("PG_DSN") or ""
+def get_dsn() -> str:
+    dsn = os.getenv("PG_DSN")
+    if dsn:
+        return dsn
+    if any(os.getenv(name) for name in ("PGHOST", "PGDATABASE", "PGUSER", "PGPORT")):
+        return ""
+    raise RuntimeError(
+        "Database connection is not configured. Set PG_DSN or PGHOST/PGDATABASE/PGUSER/PGPORT.",
+    )
+
+
+def reset_schema(repo_root: Path, pypgstac_dir: Path) -> None:
+    dsn = get_dsn()
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute("DROP SCHEMA IF EXISTS pgstac CASCADE;")
-    run(["uv", "run", "--directory", "src/pypgstac", "pypgstac", "migrate"], cwd=repo_root)
+    if not pypgstac_dir.exists():
+        raise RuntimeError(f"pypgstac directory does not exist: {pypgstac_dir}")
+    run(["uv", "run", "--directory", str(pypgstac_dir), "pypgstac", "migrate"], cwd=repo_root)
 
 
 def discover_fixture_collections(fixtures_dir: Path) -> list[FixtureCollection]:
@@ -331,10 +344,11 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
 def run_benchmark(
     fixtures_dir: Path,
     repo_root: Path,
+    pypgstac_dir: Path,
     label: str,
     hydrate_iterations: int,
 ) -> dict[str, Any]:
-    reset_schema(repo_root)
+    reset_schema(repo_root, pypgstac_dir)
 
     collections = discover_fixture_collections(fixtures_dir)
 
@@ -346,7 +360,7 @@ def run_benchmark(
         "collections": [],
     }
 
-    dsn = os.getenv("PG_DSN") or ""
+    dsn = get_dsn()
     with psycopg.connect(dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("SET search_path TO pgstac, public;")
@@ -403,6 +417,12 @@ def main() -> int:
         required=True,
         help="Repository root whose migration stack should be benchmarked.",
     )
+    parser.add_argument(
+        "--pypgstac-dir",
+        type=Path,
+        default=Path("src/pypgstac"),
+        help="Path to the pypgstac project (relative to --repo-root if not absolute).",
+    )
     parser.add_argument("--label", type=str, required=True)
     parser.add_argument("--hydrate-iterations", type=int, default=5)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -410,9 +430,14 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    pypgstac_dir = args.pypgstac_dir
+    if not pypgstac_dir.is_absolute():
+        pypgstac_dir = args.repo_root / pypgstac_dir
+
     report = run_benchmark(
         fixtures_dir=args.fixtures_dir,
         repo_root=args.repo_root,
+        pypgstac_dir=pypgstac_dir,
         label=args.label,
         hydrate_iterations=args.hydrate_iterations,
     )

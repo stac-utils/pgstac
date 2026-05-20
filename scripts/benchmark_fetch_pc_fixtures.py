@@ -22,8 +22,11 @@ def request_json(url: str, method: str = "GET", body: dict[str, Any] | None = No
         headers["Content-Type"] = "application/json"
 
     req = Request(url=url, data=payload, method=method, headers=headers)
-    with urlopen(req, timeout=120) as response:
-        return json.load(response)
+    try:
+        with urlopen(req, timeout=120) as response:
+            return json.load(response)
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Request failed for {method} {url}: {exc}") from exc
 
 
 def hash_file(path: Path) -> str:
@@ -234,6 +237,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (HTTPError, URLError, TimeoutError) as exc:
+    except Exception as exc:
         print(f"Fixture fetch failed: {exc}", file=sys.stderr)
         raise SystemExit(2)
