@@ -245,9 +245,11 @@ BEGIN
         where_segments := where_segments || format(
             $quote$
             (
-                to_tsvector('english', content->'properties'->>'description') ||
-                to_tsvector('english', coalesce(content->'properties'->>'title', '')) ||
-                to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))
+                -- Use the split properties column directly (v0.10 schema).
+                -- Previously read from content->'properties'->>'description' etc.
+                to_tsvector('english', properties->>'description') ||
+                to_tsvector('english', coalesce(properties->>'title', '')) ||
+                to_tsvector('english', coalesce(properties->>'keywords', ''))
             ) @@ %L
             $quote$,
             ft_query
