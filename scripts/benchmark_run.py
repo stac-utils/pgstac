@@ -152,6 +152,12 @@ def get_global_storage(cur: psycopg.Cursor[Any]) -> dict[str, int]:
     }
 
 
+def per_item(value: float, rows: int) -> float | None:
+    if rows <= 0:
+        return None
+    return value / rows
+
+
 def flatten_metrics(report: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     label = report["label"]
@@ -290,13 +296,20 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
     ]
 
     for result in report["collections"]:
+        ingest_ms_per_item = result["ingest"]["ms_per_item"]
+        hydrate_ms_per_item = result["hydrate"]["ms_per_item"]
+        storage_bytes_per_item = result["storage"]["bytes_per_item"]
         lines.append(
-            "| {collection_id} | {rows} | {ingest:.3f} | {hydrate:.6f} | {bytes_per_item:.2f} | {total_bytes} |".format(
+            "| {collection_id} | {rows} | {ingest} | {hydrate} | {bytes_per_item} | {total_bytes} |".format(
                 collection_id=result["collection_id"],
                 rows=result["ingest"]["rows"],
-                ingest=result["ingest"]["ms_per_item"],
-                hydrate=result["hydrate"]["ms_per_item"],
-                bytes_per_item=result["storage"]["bytes_per_item"],
+                ingest=f"{ingest_ms_per_item:.3f}" if ingest_ms_per_item is not None else "n/a",
+                hydrate=f"{hydrate_ms_per_item:.6f}"
+                if hydrate_ms_per_item is not None
+                else "n/a",
+                bytes_per_item=f"{storage_bytes_per_item:.2f}"
+                if storage_bytes_per_item is not None
+                else "n/a",
                 total_bytes=result["storage"]["total_bytes"],
             ),
         )
@@ -357,16 +370,16 @@ def run_benchmark(
                         "ingest": {
                             "rows": rows,
                             "duration_ms": ingest_duration_ms,
-                            "ms_per_item": ingest_duration_ms / max(rows, 1),
+                            "ms_per_item": per_item(ingest_duration_ms, rows),
                         },
                         "hydrate": {
                             "rows": hydrate_rows,
                             "avg_ms": hydrate_avg_ms,
-                            "ms_per_item": hydrate_avg_ms / max(hydrate_rows, 1),
+                            "ms_per_item": per_item(hydrate_avg_ms, hydrate_rows),
                         },
                         "storage": {
                             **storage,
-                            "bytes_per_item": storage["total_bytes"] / max(rows, 1),
+                            "bytes_per_item": per_item(float(storage["total_bytes"]), rows),
                         },
                     },
                 )

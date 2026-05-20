@@ -12,6 +12,9 @@ on:
         required: true
         default: "5"
 
+permissions:
+  contents: read
+
 jobs:
   compare:
     runs-on: ubuntu-latest

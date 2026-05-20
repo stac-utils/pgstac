@@ -34,8 +34,12 @@ def compare(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
         base_entry = base_by_collection[collection_id]
         head_entry = head_by_collection[collection_id]
         for section, metric in TRACKED_METRICS:
-            base_value = float(base_entry[section][metric])
-            head_value = float(head_entry[section][metric])
+            base_raw = base_entry[section][metric]
+            head_raw = head_entry[section][metric]
+            if base_raw is None or head_raw is None:
+                continue
+            base_value = float(base_raw)
+            head_value = float(head_raw)
             delta = head_value - base_value
             delta_pct = (delta / base_value * 100.0) if base_value else None
             rows.append(
