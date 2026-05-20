@@ -130,15 +130,15 @@ EXECUTE FUNCTION partition_after_triggerfunc();
 
 DROP TRIGGER IF EXISTS items_after_update_trigger ON items;
 CREATE TRIGGER items_after_update_trigger
-AFTER DELETE ON items
-REFERENCING OLD TABLE AS newdata
+AFTER UPDATE ON items
+REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
 DROP TRIGGER IF EXISTS items_after_delete_trigger ON items;
 CREATE TRIGGER items_after_delete_trigger
-AFTER UPDATE ON items
-REFERENCING NEW TABLE AS newdata
+AFTER DELETE ON items
+REFERENCING OLD TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
