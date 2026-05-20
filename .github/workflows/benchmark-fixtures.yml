@@ -1,0 +1,70 @@
+name: Benchmark Fixtures
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark-fixtures.yml'
+      - 'scripts/benchmark_*'
+      - 'benchmarks/fixtures/**'
+      - 'src/pgstac/sql/**'
+      - 'src/pypgstac/**'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ghcr.io/stac-utils/pgstac-postgres:main-pg17
+        env:
+          POSTGRES_USER: username
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgis
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5439
+      PGUSER: username
+      PGPASSWORD: password
+      PGDATABASE: postgis
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Fetch deterministic benchmark fixtures
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_fetch_pc_fixtures.py \
+            --manifest benchmarks/fixtures/planetary-computer/manifest.json \
+            --output-dir /tmp/pgstac-benchmark-fixtures
+
+      - name: Run benchmark suite
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_run.py \
+            --fixtures-dir /tmp/pgstac-benchmark-fixtures \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --label "$GITHUB_SHA" \
+            --hydrate-iterations 5 \
+            --output-dir /tmp/pgstac-benchmark-results
+
+      - name: Publish benchmark summary
+        run: cat /tmp/pgstac-benchmark-results/"$GITHUB_SHA".md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: benchmark-fixtures-${{ github.sha }}
+          path: |
+            /tmp/pgstac-benchmark-fixtures/fixture-summary.json
+            /tmp/pgstac-benchmark-results/

@@ -15,3 +15,7 @@ See CLAUDE.md "Development Workflow" for usage. All scripts require the Docker c
 - Set `PGPKG_LOCAL_REPO_DIR` on the host when you need to force a local pgpkg checkout for `stageversion`, `makemigration`, or related container-script testing
 - Tagged releases run `.github/workflows/release.yml`, which publishes both `pypgstac` and `pgstac-migrate` to PyPI via the GitHub `pypi` environment; PyPI trusted publishers must exist for both projects
 - DO NOT run `stageversion` without understanding its side effects
+- Benchmark fixture/reporting scripts:
+  - `scripts/benchmark_fetch_pc_fixtures.py` materializes deterministic Planetary Computer fixtures from `benchmarks/fixtures/planetary-computer/manifest.json`
+  - `scripts/benchmark_run.py` runs ingest/hydrate/storage benchmarks and writes JSON/CSV/Markdown artifacts
+  - `scripts/benchmark_compare_results.py` compares two benchmark JSON reports and emits machine-readable deltas

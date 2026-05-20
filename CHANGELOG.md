@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Add deterministic SHA-256 `content_hash` to STAC items to track data changes across migrations.
 - Add `pgstac_updated_at` column to items table as part of separating STAC property updates from database metadata updates.
+- Deterministic Planetary Computer benchmark fixture manifest + fetch tooling for `naip`, `sentinel-2-l2a`, and `landsat-c2-l2` (1000 items per collection), plus CI/manual benchmark workflows that emit JSON/CSV/Markdown artifacts and branch comparison reports.
 
 ### Changed
 

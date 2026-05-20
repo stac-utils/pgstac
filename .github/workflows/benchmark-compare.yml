@@ -1,0 +1,96 @@
+name: Benchmark Compare (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Base ref to compare against"
+        required: true
+        default: "origin/main"
+      hydrate_iterations:
+        description: "Hydrate benchmark iterations"
+        required: true
+        default: "5"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ghcr.io/stac-utils/pgstac-postgres:main-pg17
+        env:
+          POSTGRES_USER: username
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgis
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5439
+      PGUSER: username
+      PGPASSWORD: password
+      PGDATABASE: postgis
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Fetch deterministic benchmark fixtures
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_fetch_pc_fixtures.py \
+            --manifest benchmarks/fixtures/planetary-computer/manifest.json \
+            --output-dir /tmp/pgstac-benchmark-fixtures
+
+      - name: Add base worktree
+        run: |
+          git fetch --no-tags origin main
+          git worktree add /tmp/pgstac-benchmark-base "${{ inputs.base_ref }}"
+
+      - name: Benchmark base ref
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_run.py \
+            --fixtures-dir /tmp/pgstac-benchmark-fixtures \
+            --repo-root /tmp/pgstac-benchmark-base \
+            --label base \
+            --hydrate-iterations "${{ inputs.hydrate_iterations }}" \
+            --output-dir /tmp/pgstac-benchmark-results
+
+      - name: Benchmark head ref
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_run.py \
+            --fixtures-dir /tmp/pgstac-benchmark-fixtures \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --label head \
+            --hydrate-iterations "${{ inputs.hydrate_iterations }}" \
+            --output-dir /tmp/pgstac-benchmark-results
+
+      - name: Compare benchmark outputs
+        run: |
+          uv run --no-project --with psycopg[binary] \
+            python scripts/benchmark_compare_results.py \
+            --base /tmp/pgstac-benchmark-results/base.json \
+            --head /tmp/pgstac-benchmark-results/head.json \
+            --output-dir /tmp/pgstac-benchmark-comparison
+
+      - name: Publish comparison summary
+        run: cat /tmp/pgstac-benchmark-comparison/comparison.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark comparison artifacts
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: benchmark-compare-${{ github.sha }}
+          path: |
+            /tmp/pgstac-benchmark-fixtures/fixture-summary.json
+            /tmp/pgstac-benchmark-results/
+            /tmp/pgstac-benchmark-comparison/

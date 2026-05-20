@@ -1,0 +1,36 @@
+{
+  "api_url": "https://planetarycomputer.microsoft.com/api/stac/v1",
+  "item_count": 1000,
+  "collections": [
+    {
+      "id": "naip",
+      "datetime": "../2025-01-01T00:00:00Z",
+      "sortby": [
+        {
+          "field": "id",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "id": "sentinel-2-l2a",
+      "datetime": "../2025-01-01T00:00:00Z",
+      "sortby": [
+        {
+          "field": "id",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "id": "landsat-c2-l2",
+      "datetime": "../2025-01-01T00:00:00Z",
+      "sortby": [
+        {
+          "field": "id",
+          "direction": "asc"
+        }
+      ]
+    }
+  ]
+}

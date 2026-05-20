@@ -53,3 +53,18 @@ Specialist in pypgstac bulk loading (`src/pypgstac/src/pypgstac/load.py`). See C
 - **Retry scope**: `CheckViolation`, `DeadlockDetected`, `SerializationFailure`, `LockNotAvailable`, `ObjectInUse`
 - **Load modes**: `insert`, `ignore`/`insert_ignore`, `upsert`, `delsert`
 - Test: `scripts/runinpypgstac --build test --pypgstac`
+
+---
+
+## benchmark-engineer
+
+Benchmark fixture and reporting specialist for PgSTAC load/hydrate/storage comparisons.
+
+### Commands
+
+- Generate deterministic Planetary Computer fixtures (1000 per collection):
+  `uv run --no-project --with psycopg[binary] python scripts/benchmark_fetch_pc_fixtures.py --manifest benchmarks/fixtures/planetary-computer/manifest.json --output-dir benchmarks/fixtures/planetary-computer/data`
+- Run benchmark suite:
+  `uv run --no-project --with psycopg[binary] python scripts/benchmark_run.py --fixtures-dir benchmarks/fixtures/planetary-computer/data --repo-root "$PWD" --label local --output-dir /tmp/pgstac-benchmark-results`
+- Compare benchmark JSON outputs:
+  `uv run --no-project --with psycopg[binary] python scripts/benchmark_compare_results.py --base <base.json> --head <head.json> --output-dir /tmp/pgstac-benchmark-comparison`

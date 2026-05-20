@@ -93,6 +93,24 @@ scripts/test --pgdump           # pg_dump/pg_restore round-trip test
 
 All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuild images first.
 
+### Benchmark Fixtures and Reporting
+
+```bash
+uv run --no-project --with psycopg[binary] python scripts/benchmark_fetch_pc_fixtures.py \
+  --manifest benchmarks/fixtures/planetary-computer/manifest.json \
+  --output-dir benchmarks/fixtures/planetary-computer/data
+
+uv run --no-project --with psycopg[binary] python scripts/benchmark_run.py \
+  --fixtures-dir benchmarks/fixtures/planetary-computer/data \
+  --repo-root "$PWD" \
+  --label local \
+  --output-dir /tmp/pgstac-benchmark-results
+```
+
+GitHub Actions:
+- `.github/workflows/benchmark-fixtures.yml` for fixture-based benchmark artifact generation
+- `.github/workflows/benchmark-compare.yml` for manual base-vs-head comparison reports
+
 ### Docker Architecture
 
 - **pgstac** container: PostgreSQL 17 + PostGIS 3 + extensions, port 5439→5432
