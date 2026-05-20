@@ -1,5 +1,3 @@
-    SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, bbox, links, assets, properties, extra, content_hash
-    FROM items WHERE collection='pgstac-test-collection';
 -- CREATE fixtures for testing search - as tests are run within a transaction, these will not persist
 
 \copy items_staging (content) FROM 'tests/testdata/items.ndjson'
