@@ -147,25 +147,31 @@ CREATE OR REPLACE FUNCTION jsonb_fields(j jsonb, f jsonb DEFAULT '{"fields":[]}'
 $$ LANGUAGE SQL IMMUTABLE;
 
 
+-- merge_jsonb: Deep-merge two JSONB values, with _a taking precedence over _b.
+-- Null semantics (v0.10+):
+--   SQL NULL _a  → return _b (no information from _a, use _b as default)
+--   JSON null _a → return JSON null (explicit null wins; STAC datetime:null must survive)
+--   '"𒍟※"'   _a  → return SQL NULL (sentinel used by strip_jsonb to mark removed values)
+-- Objects are merged key-by-key recursively; same-length arrays are merged element-by-element.
+-- Any other type: _a wins.
 CREATE OR REPLACE FUNCTION merge_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
     SELECT
     CASE
         WHEN _a = '"𒍟※"'::jsonb THEN NULL
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN _b
+        WHEN _a IS NULL THEN _b
+        WHEN jsonb_typeof(_a) = 'null' THEN 'null'::jsonb
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            merge_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(coalesce(_a,'{}'::jsonb)) as a
-                FULL JOIN
-                    jsonb_each(coalesce(_b,'{}'::jsonb)) as b
-                USING (key)
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, merge_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(coalesce(_a,'{}'::jsonb)) as a
+                    FULL JOIN
+                        jsonb_each(coalesce(_b,'{}'::jsonb)) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'
@@ -187,27 +193,30 @@ CREATE OR REPLACE FUNCTION merge_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
+    -- strip_jsonb: RETAINED FOR USE BY MIGRATION SCRIPTS ONLY.
+    -- Must not be called from any ingest, hydrate, or search code path after v0.10.
+    -- Will be removed once the migration path has been finalized and tested.
     SELECT
     CASE
 
-        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
-        WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
+        WHEN _a IS NULL AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
+        WHEN _a IS NULL THEN NULL
         WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
         WHEN _a = _b THEN NULL
+        WHEN jsonb_typeof(_a) = 'null' THEN 'null'::jsonb
+        WHEN _b IS NULL THEN _a
         WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
             (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            strip_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(_a) as a
-                FULL JOIN
-                    jsonb_each(_b) as b
-                USING (key)
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, strip_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(_a) as a
+                    FULL JOIN
+                        jsonb_each(_b) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
             )
         WHEN
             jsonb_typeof(_a) = 'array'
@@ -236,6 +245,19 @@ $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION jsonb_array_unique(j jsonb) RETURNS jsonb AS $$
     SELECT nullif_jsonbnullempty(jsonb_agg(DISTINCT a)) v FROM jsonb_array_elements(j) a;
 $$ LANGUAGE SQL IMMUTABLE;
+
+-- fragment_path_text: Serialize a root-relative path array to a dot-delimited text form
+-- suitable for storage in collections.fragment_config text[].
+-- Round-trips through fragment_path_array for simple keys without embedded dots.
+CREATE OR REPLACE FUNCTION fragment_path_text(_path text[]) RETURNS text AS $$
+    SELECT array_to_string(_path, '.');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- fragment_path_array: Convert a dot-delimited fragment path string back to a path array
+-- suitable for use with the #> operator.
+CREATE OR REPLACE FUNCTION fragment_path_array(_path_text text) RETURNS text[] AS $$
+    SELECT string_to_array(_path_text, '.');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
 CREATE OR REPLACE FUNCTION jsonb_concat_ignorenull(a jsonb, b jsonb) RETURNS jsonb AS $$
     SELECT coalesce(a,'[]'::jsonb) || coalesce(b,'[]'::jsonb);
