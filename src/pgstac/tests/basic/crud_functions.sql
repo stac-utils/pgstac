@@ -18,30 +18,30 @@ INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-cr
 
 -- Create an item
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 -- Check to see if extent got updated
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 -- Check to see if extent got updated
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- Update item with new datetime that is in a different partition
 SELECT upsert_item((SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 -- Delete an item
 SELECT delete_item('pgstactest-crudtest-1', 'pgstactest-crudtest');
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 WITH c AS (SELECT content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT create_items(items) FROM aggregated;
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 DELETE FROM items WHERE collection='pgstactest-crudtest';
 
@@ -49,13 +49,13 @@ DELETE FROM items WHERE collection='pgstactest-crudtest';
 WITH c AS (SELECT content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 -- upsert items that already exist and are to be modified
 WITH c AS (SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb as content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
-SELECT id, geometry, collection, datetime, end_datetime, content, private FROM items WHERE collection='pgstactest-crudtest';
+SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest';
 
 -- turn off update_collection_extent then add an item and verify that the extent did not get updated automatically
 SET pgstac.update_collection_extent=FALSE;
