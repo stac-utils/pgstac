@@ -358,11 +358,12 @@ BEGIN
     END IF;
 
     -- Merge: fragment provides shared asset/property values; per-item provides individual values.
-    -- No key overlap expected: the staging trigger strips fragment-covered keys from per-item columns.
-    merged_assets     := COALESCE(frag_content->'assets',     '{}'::jsonb)
-                      || COALESCE(_item.assets,               '{}'::jsonb);
-    merged_properties := COALESCE(frag_content->'properties', '{}'::jsonb)
-                      || COALESCE(_item.properties,           '{}'::jsonb);
+    -- jsonb_merge_level1 does a per-key merge one level deep so that depth-3+ fragment paths
+    -- (e.g. assets.thumbnail.type stored in fragment, assets.thumbnail.href in per-item column)
+    -- are reassembled correctly.  For depth-1/2 paths the key sets do not overlap and the
+    -- result is identical to the previous || behaviour.
+    merged_assets     := jsonb_merge_level1(frag_content->'assets',     _item.assets);
+    merged_properties := jsonb_merge_level1(frag_content->'properties', _item.properties);
 
     output := jsonb_build_object(
         'id',         _item.id,
@@ -921,17 +922,19 @@ $$ LANGUAGE SQL VOLATILE;
 -- (each element is fragment_path_text(text[]) — a dot-delimited root-relative path),
 -- extract the sparse overlay JSONB that will be stored in item_fragments for dedup.
 -- Returns NULL when fragment_paths is NULL or empty, or when no values are found.
--- Supports depth-1 paths (whole top-level key) and depth-2 paths (single named sub-key).
--- Depth-1 wins when both depths share the same top-level key.
+-- Supports paths at any depth:
+--   depth-1  (e.g. 'stac_version')                  → extracts the whole top-level key.
+--   depth-2  (e.g. 'assets.thumbnail')               → extracts a named sub-key.
+--   depth-3+ (e.g. 'assets.thumbnail.type')          → extracts a nested sub-sub-key,
+--                                                       building a sparse nested JSONB.
+-- Multiple paths sharing intermediate keys are merged correctly so that, for example,
+-- 'assets.thumbnail.type' and 'assets.thumbnail.roles' together produce
+-- {"assets": {"thumbnail": {"type": ..., "roles": ...}}} rather than overwriting.
 CREATE OR REPLACE FUNCTION extract_fragment(
     content jsonb,
     fragment_paths text[]
 ) RETURNS jsonb AS $$
 DECLARE
-    top_keys  text[];
-    top_key   text;
-    has_full  boolean;
-    sub_obj   jsonb;
     result    jsonb := '{}'::jsonb;
     p         text;
     pth       text[];
@@ -941,40 +944,16 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT array_agg(DISTINCT (fragment_path_array(fp))[1])
-    INTO top_keys
-    FROM unnest(fragment_paths) fp
-    WHERE fragment_path_array(fp) IS NOT NULL
-      AND cardinality(fragment_path_array(fp)) >= 1;
+    FOREACH p IN ARRAY fragment_paths LOOP
+        pth := fragment_path_array(p);
+        IF pth IS NULL OR cardinality(pth) = 0 THEN CONTINUE; END IF;
 
-    IF top_keys IS NULL THEN RETURN NULL; END IF;
-
-    FOREACH top_key IN ARRAY top_keys LOOP
-        has_full := false;
-        sub_obj  := '{}'::jsonb;
-
-        FOREACH p IN ARRAY fragment_paths LOOP
-            pth := fragment_path_array(p);
-            IF pth IS NULL OR pth[1] <> top_key THEN CONTINUE; END IF;
-
-            IF cardinality(pth) = 1 THEN
-                has_full := true;
-            ELSIF cardinality(pth) = 2 THEN
-                val := content #> pth;
-                IF val IS NOT NULL THEN
-                    sub_obj := sub_obj || jsonb_build_object(pth[2], val);
-                END IF;
-            END IF;
-            -- depth > 2 is intentionally not supported in v0.10; extend here if needed.
-        END LOOP;
-
-        IF has_full THEN
-            val := content->top_key;
-            IF val IS NOT NULL THEN
-                result := result || jsonb_build_object(top_key, val);
-            END IF;
-        ELSIF sub_obj <> '{}'::jsonb THEN
-            result := result || jsonb_build_object(top_key, sub_obj);
+        val := content #> pth;
+        IF val IS NOT NULL THEN
+            -- jsonb_set_nested creates intermediate empty objects as needed, so
+            -- depth-3+ paths are handled correctly and multiple paths sharing the
+            -- same intermediate keys are merged rather than overwritten.
+            result := jsonb_set_nested(result, pth, val);
         END IF;
     END LOOP;
 
@@ -1054,8 +1033,14 @@ $$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE;
 -- strip_fragment_col: Remove fragment-owned sub-keys from a split column value.
 -- col_name is the top-level STAC key that this column represents (e.g. 'assets' or 'properties').
 -- fragment_paths is the collection's fragment_config text[].
--- For depth-1 paths matching col_name, the entire column is zeroed out (empty JSONB object).
--- For depth-2 paths matching col_name, only the named sub-key is removed.
+-- Supports paths at any depth:
+--   depth-1  matching col_name  → zeroes out the entire column (returns '{}').
+--   depth-2+ matching col_name  → removes the nested sub-path using the #- operator,
+--                                  which handles arbitrary nesting without requiring a loop.
+-- Examples with col_name='assets':
+--   'assets'                  → returns '{}'  (whole column is in the fragment)
+--   'assets.thumbnail'        → removes 'thumbnail' key  (depth-2, old behaviour)
+--   'assets.thumbnail.type'   → removes 'type' from within 'thumbnail'  (depth-3, new)
 -- Returns col_value unchanged when there are no matching fragment paths.
 CREATE OR REPLACE FUNCTION strip_fragment_col(
     col_value jsonb,
@@ -1066,23 +1051,25 @@ DECLARE
     result    jsonb := col_value;
     p         text;
     pth       text[];
-    strip_keys text[] := '{}';
+    n         int;
 BEGIN
     IF col_value IS NULL OR fragment_paths IS NULL THEN RETURN col_value; END IF;
 
     FOREACH p IN ARRAY fragment_paths LOOP
         pth := fragment_path_array(p);
-        IF pth IS NULL OR pth[1] <> col_name THEN CONTINUE; END IF;
-        IF cardinality(pth) = 1 THEN
+        n   := cardinality(pth);
+        IF pth IS NULL OR n = 0 OR pth[1] <> col_name THEN CONTINUE; END IF;
+
+        IF n = 1 THEN
             RETURN '{}'::jsonb;  -- entire column goes to fragment
-        ELSIF cardinality(pth) = 2 THEN
-            strip_keys := strip_keys || pth[2];
+        ELSE
+            -- Remove the nested sub-path from the column value at any depth.
+            -- #- handles depth-2 (removes a top-level key) through depth-N (removes a
+            -- nested key) using the path tail pth[2:n].
+            result := result #- pth[2:n];
         END IF;
     END LOOP;
 
-    IF cardinality(strip_keys) > 0 THEN
-        result := result - strip_keys;
-    END IF;
     RETURN result;
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;

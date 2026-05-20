@@ -96,6 +96,37 @@ $$ LANGUAGE PLPGSQL IMMUTABLE;
 
 
 
+-- jsonb_merge_level1: Merge two JSONB objects one level deep.
+-- For each key present in either object:
+--   • key only in frag  → use frag value
+--   • key only in item  → use item value
+--   • key in both and both are objects → frag_value || item_value  (item wins on conflict)
+--   • key in both, other types         → item value wins
+-- This is the correct merge strategy for re-assembling fragment + per-item data when
+-- depth-3+ fragment paths are in use (e.g. assets.thumbnail.type stored in fragment,
+-- assets.thumbnail.href retained in per-item column).  It is backward-compatible with
+-- depth-1/2 paths because those cases produce non-overlapping key sets.
+CREATE OR REPLACE FUNCTION jsonb_merge_level1(frag jsonb, item jsonb) RETURNS jsonb AS $$
+    SELECT COALESCE(
+        (SELECT jsonb_object_agg(
+            COALESCE(f.key, i.key),
+            CASE
+                WHEN i.value IS NULL THEN f.value
+                WHEN f.value IS NULL THEN i.value
+                WHEN jsonb_typeof(f.value) = 'object' AND jsonb_typeof(i.value) = 'object'
+                    THEN f.value || i.value
+                ELSE i.value
+            END
+        )
+        FROM
+            jsonb_each(COALESCE(frag, '{}')) f
+            FULL JOIN jsonb_each(COALESCE(item, '{}')) i USING (key)
+        ),
+        '{}'::jsonb
+    );
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
 CREATE OR REPLACE FUNCTION jsonb_include(j jsonb, f jsonb) RETURNS jsonb AS $$
 DECLARE
     includes jsonb := f-> 'include';

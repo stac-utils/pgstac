@@ -1,22 +1,57 @@
 -- collection_fragment_config_default: Derive a sensible starting fragment_config for a
--- collection.  Returns the paths for values that are reliably identical across every item
--- in any STAC collection:
+-- collection.  Returns paths for values that are reliably identical across every item
+-- in a STAC collection:
 --
 --   • stac_version    — set once at the collection level, never varies per item.
 --   • stac_extensions — same extension list for every item in a collection.
 --
--- NOTE: asset sub-fields (e.g. type, title, roles) from item_assets are also good
--- candidates for fragmentation because they are constant per collection.  However,
--- the current extract_fragment implementation supports depth-1 and depth-2 paths only;
--- a depth-2 path like 'assets.thumbnail' captures the *whole* asset object, including
--- 'href', which is unique per item and eliminates any dedup benefit.  Proper support
--- requires depth-3 paths (e.g. 'assets.thumbnail.type') so that 'href' can be excluded.
--- Until that is implemented, asset paths are NOT included in the default to avoid
--- creating one unique fragment per item.  Operators may add explicit fragment_config
--- paths after collection creation via UPDATE collections SET fragment_config = ...
+-- When item_assets is present, depth-3 paths are generated for each stable asset sub-key
+-- (e.g. 'assets.B1.type', 'assets.B1.roles') so that the fragment stores the shared
+-- per-asset metadata while the per-item column retains only the fields that vary between
+-- items (primarily 'href').  Known per-item-varying sub-keys are excluded.
+--
+-- The fragment system now supports paths at arbitrary depth, so these depth-3 paths are
+-- handled correctly by extract_fragment and strip_fragment_col.
 CREATE OR REPLACE FUNCTION collection_fragment_config_default(content jsonb) RETURNS text[] AS $$
-    SELECT ARRAY['stac_version', 'stac_extensions'];
-$$ LANGUAGE SQL STABLE;
+DECLARE
+    paths text[] := ARRAY['stac_version', 'stac_extensions'];
+    asset_key text;
+    sub_key   text;
+    -- Fields within each asset that differ between items and must NOT be fragmented.
+    -- href is unique per item; file:* fields reflect per-file measurements;
+    -- alternate/storage:* are access-layer derived paths also unique per item.
+    per_item_asset_fields CONSTANT text[] := ARRAY[
+        'href',
+        'file:size', 'file:checksum', 'file:local_path',
+        'alternate',
+        'storage:path', 'storage:platform', 'storage:region',
+        'storage:requester_pays', 'storage:tier'
+    ];
+BEGIN
+    -- Always include top-level fields that are identical across all items in a collection.
+    -- stac_version and stac_extensions are set at the collection level and never vary per item.
+
+    -- For item_assets: each asset key's sub-keys (except known per-item fields like href)
+    -- are the same for every item in the collection because item_assets describes the
+    -- collection-level asset schema (type, title, roles, eo:bands, raster:bands, etc.).
+    -- Using depth-3 paths means only the stable metadata is fragmented; href and other
+    -- per-item fields stay in the per-item assets column so the dedup still works.
+    IF content->'item_assets' IS NOT NULL
+       AND jsonb_typeof(content->'item_assets') = 'object'
+       AND content->'item_assets' != '{}'::jsonb
+    THEN
+        FOR asset_key IN SELECT jsonb_object_keys(content->'item_assets') LOOP
+            FOR sub_key IN SELECT jsonb_object_keys(content->'item_assets'->asset_key) LOOP
+                IF NOT (sub_key = ANY(per_item_asset_fields)) THEN
+                    paths := paths || fragment_path_text(ARRAY['assets', asset_key, sub_key]);
+                END IF;
+            END LOOP;
+        END LOOP;
+    END IF;
+
+    RETURN paths;
+END;
+$$ LANGUAGE PLPGSQL STABLE;
 
 
 CREATE TABLE IF NOT EXISTS collections (
