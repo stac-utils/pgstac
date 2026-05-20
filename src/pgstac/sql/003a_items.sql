@@ -821,15 +821,15 @@ DECLARE
     nrows    int;
     npaths   int;
 BEGIN
-    -- Sum reltuples across all partitions for this collection.
+    -- Sum reltuples across the registered item partitions for this collection.
     -- reltuples can be -1 (never analyzed); treat negative values as zero.
     SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
-    FROM pg_class c
+    FROM partitions_view p
+    JOIN pg_class c ON c.relname = p.partition
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'pgstac'
-      AND c.relkind = 'r'
-      AND c.relname LIKE '_items_%'
-      AND c.relname LIKE '%' || regexp_replace(_collection, '[^a-zA-Z0-9_-]', '', 'g') || '%';
+    WHERE p.collection = _collection
+      AND n.nspname = 'pgstac'
+      AND c.relkind = 'r';
 
     IF est_rows > 10000 THEN
         -- Large collection: use statistical sampling to avoid full seq-scan.
