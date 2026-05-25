@@ -37,8 +37,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "types-setuptools",
-    "ruff==0.15.13",
-    "ty==0.0.37",
+    "ruff==0.15.14",
+    "ty==0.0.39",
     "pre-commit==4.6.0",
 ]
 test = [
