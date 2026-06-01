@@ -85,3 +85,66 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION gc_deleted_items_log_batch(
+    retention_interval interval DEFAULT '30 days',
+    batch_limit integer DEFAULT 10000
+) RETURNS bigint AS $$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    WITH to_delete AS (
+        SELECT ctid
+        FROM items_deleted_log
+        WHERE deleted_at < now() - retention_interval
+        ORDER BY deleted_at
+        LIMIT GREATEST(COALESCE(batch_limit, 10000), 1)
+    ),
+    deleted AS (
+        DELETE FROM items_deleted_log d
+        USING to_delete td
+        WHERE d.ctid = td.ctid
+        RETURNING 1
+    )
+    SELECT count(*)::bigint INTO batch_deleted FROM deleted;
+
+    RETURN batch_deleted;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION gc_deleted_items_log(
+    retention_interval interval,
+    batch_limit integer
+) RETURNS bigint AS $$
+DECLARE
+    deleted_count bigint := 0;
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        deleted_count := deleted_count + batch_deleted;
+        EXIT WHEN batch_deleted = 0;
+    END LOOP;
+
+    RETURN deleted_count;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION gc_deleted_items_log(retention_interval interval DEFAULT '30 days') RETURNS bigint AS $$
+    SELECT gc_deleted_items_log(retention_interval, 10000);
+$$ LANGUAGE SQL SECURITY DEFINER;
+
+CREATE OR REPLACE PROCEDURE gc_deleted_items_log_committed(
+    retention_interval interval DEFAULT '30 days',
+    batch_limit integer DEFAULT 10000
+) AS $$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        EXIT WHEN batch_deleted = 0;
+        COMMIT;
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL;
