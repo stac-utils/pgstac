@@ -197,14 +197,44 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+create sequence "pgstac"."item_fragments_id_seq";
+
+drop trigger if exists "items_after_delete_trigger" on "pgstac"."items";
+
+drop trigger if exists "items_after_update_trigger" on "pgstac"."items";
+
+drop function if exists "pgstac"."content_hydrate"(_item items, _collection collections, fields jsonb);
+
+drop function if exists "pgstac"."content_hydrate"(_item jsonb, _base_item jsonb, fields jsonb);
+
+drop function if exists "pgstac"."content_nonhydrated"(_item items, fields jsonb);
+
 drop function if exists "pgstac"."content_slim"(_item jsonb);
+
+drop function if exists "pgstac"."create_collection"(data jsonb);
+
+drop function if exists "pgstac"."format_item"(_item items, _fields jsonb, _hydrated boolean);
 
 
 drop function if exists "pgstac"."search_rows"(_where text, _orderby text, partitions text[], _limit integer);
 
+drop function if exists "pgstac"."update_collection"(data jsonb);
+
+drop function if exists "pgstac"."upsert_collection"(data jsonb);
+
 drop function if exists "pgstac"."where_stats"(inwhere text, updatestats boolean, conf jsonb);
 
+drop view if exists "pgstac"."collections_asitems";
+
+drop function if exists "pgstac"."content_hydrate"(_item items, fields jsonb);
+
+alter table "pgstac"."format_item_cache" drop constraint "format_item_cache_pkey";
+
 alter table "pgstac"."search_wheres" drop constraint "search_wheres_pkey";
+
+drop index if exists "pgstac"."format_item_cache_lastused_idx";
+
+drop index if exists "pgstac"."format_item_cache_pkey";
 
 drop index if exists "pgstac"."search_wheres_partitions";
 
@@ -212,7 +242,136 @@ drop index if exists "pgstac"."search_wheres_pkey";
 
 drop index if exists "pgstac"."search_wheres_where";
 
+drop table "pgstac"."format_item_cache";
+
 drop table "pgstac"."search_wheres";
+
+create table "pgstac"."item_field_registry" (
+    "collection" text not null,
+    "path" text not null,
+    "is_leaf" boolean default true,
+    "value_kinds" text[] default '{}'::text[],
+    "first_seen" timestamp with time zone not null default now(),
+    "last_seen" timestamp with time zone not null default now()
+);
+
+
+create table "pgstac"."item_fragments" (
+    "id" bigint not null default nextval('item_fragments_id_seq'::regclass),
+    "collection" text not null,
+    "hash" text not null,
+    "content" jsonb not null,
+    "created_at" timestamp with time zone not null default now()
+);
+
+
+create table "pgstac"."items_deleted_log" (
+    "id" bigint generated always as identity not null,
+    "item_id" text not null,
+    "collection" text not null,
+    "partition" text,
+    "datetime" timestamp with time zone,
+    "end_datetime" timestamp with time zone,
+    "content_hash" text not null default ''::text,
+    "deleted_at" timestamp with time zone not null default now()
+);
+
+
+alter table "pgstac"."collections" drop column "base_item";
+
+alter table "pgstac"."collections" add column "fragment_config" text[];
+
+alter table "pgstac"."items" drop column "content";
+
+alter table "pgstac"."items" drop column "private";
+
+alter table "pgstac"."items" add column "assets" jsonb default '{}'::jsonb;
+
+alter table "pgstac"."items" add column "bbox" jsonb;
+
+alter table "pgstac"."items" add column "constellation" text;
+
+alter table "pgstac"."items" add column "content_hash" text not null default ''::text;
+
+alter table "pgstac"."items" add column "created" timestamp with time zone;
+
+alter table "pgstac"."items" add column "datetime_is_range" boolean not null default false;
+
+alter table "pgstac"."items" add column "eo_bands" jsonb;
+
+alter table "pgstac"."items" add column "eo_cloud_cover" double precision;
+
+alter table "pgstac"."items" add column "eo_snow_cover" double precision;
+
+alter table "pgstac"."items" add column "extra" jsonb;
+
+alter table "pgstac"."items" add column "file_byte_order" text;
+
+alter table "pgstac"."items" add column "file_checksum" text;
+
+alter table "pgstac"."items" add column "file_header_size" bigint;
+
+alter table "pgstac"."items" add column "file_size" bigint;
+
+alter table "pgstac"."items" add column "file_values_regex" text;
+
+alter table "pgstac"."items" add column "fragment_id" bigint;
+
+alter table "pgstac"."items" add column "gsd" double precision;
+
+alter table "pgstac"."items" add column "instruments" text[];
+
+alter table "pgstac"."items" add column "links" jsonb default '[]'::jsonb;
+
+alter table "pgstac"."items" add column "mission" text;
+
+alter table "pgstac"."items" add column "pgstac_updated_at" timestamp with time zone not null default now();
+
+alter table "pgstac"."items" add column "platform" text;
+
+alter table "pgstac"."items" add column "proj_bbox" jsonb;
+
+alter table "pgstac"."items" add column "proj_centroid" jsonb;
+
+alter table "pgstac"."items" add column "proj_epsg" integer;
+
+alter table "pgstac"."items" add column "proj_projjson" jsonb;
+
+alter table "pgstac"."items" add column "proj_shape" jsonb;
+
+alter table "pgstac"."items" add column "proj_transform" jsonb;
+
+alter table "pgstac"."items" add column "proj_wkt2" text;
+
+alter table "pgstac"."items" add column "properties" jsonb default '{}'::jsonb;
+
+alter table "pgstac"."items" add column "sat_absolute_orbit" integer;
+
+alter table "pgstac"."items" add column "sat_orbit_state" text;
+
+alter table "pgstac"."items" add column "sat_relative_orbit" integer;
+
+alter table "pgstac"."items" add column "sci_citation" text;
+
+alter table "pgstac"."items" add column "sci_doi" text;
+
+alter table "pgstac"."items" add column "sci_publications" jsonb;
+
+alter table "pgstac"."items" add column "stac_extensions" jsonb default '[]'::jsonb;
+
+alter table "pgstac"."items" add column "stac_version" text;
+
+alter table "pgstac"."items" add column "updated" timestamp with time zone;
+
+alter table "pgstac"."items" add column "view_azimuth" double precision;
+
+alter table "pgstac"."items" add column "view_incidence_angle" double precision;
+
+alter table "pgstac"."items" add column "view_off_nadir" double precision;
+
+alter table "pgstac"."items" add column "view_sun_azimuth" double precision;
+
+alter table "pgstac"."items" add column "view_sun_elevation" double precision;
 
 alter table "pgstac"."searches" add column "context_count" bigint;
 
@@ -226,13 +385,185 @@ alter table "pgstac"."searches" add column "statslastupdated" timestamp with tim
 
 alter table "pgstac"."searches" alter column "hash" drop expression;
 
+alter sequence "pgstac"."item_fragments_id_seq" owned by "pgstac"."item_fragments"."id";
+
+CREATE INDEX item_field_registry_path_idx ON pgstac.item_field_registry USING btree (path);
+
+CREATE UNIQUE INDEX item_field_registry_pkey ON pgstac.item_field_registry USING btree (collection, path);
+
+CREATE UNIQUE INDEX item_fragments_collection_hash_key ON pgstac.item_fragments USING btree (collection, hash);
+
+CREATE INDEX item_fragments_collection_idx ON pgstac.item_fragments USING btree (collection);
+
+CREATE UNIQUE INDEX item_fragments_pkey ON pgstac.item_fragments USING btree (id);
+
+CREATE INDEX items_deleted_log_deleted_at_idx ON pgstac.items_deleted_log USING btree (deleted_at);
+
+CREATE UNIQUE INDEX items_deleted_log_pkey ON pgstac.items_deleted_log USING btree (id);
+
+CREATE INDEX items_fragment_id_idx ON ONLY pgstac.items USING btree (fragment_id) WHERE (fragment_id IS NOT NULL);
+
 CREATE INDEX searches_lastused_anon_idx ON pgstac.searches USING btree (lastused) WHERE ((name IS NULL) AND (NOT pinned));
 
 CREATE UNIQUE INDEX searches_name_key ON pgstac.searches USING btree (name);
 
+alter table "pgstac"."item_field_registry" add constraint "item_field_registry_pkey" PRIMARY KEY using index "item_field_registry_pkey";
+
+alter table "pgstac"."item_fragments" add constraint "item_fragments_pkey" PRIMARY KEY using index "item_fragments_pkey";
+
+alter table "pgstac"."items_deleted_log" add constraint "items_deleted_log_pkey" PRIMARY KEY using index "items_deleted_log_pkey";
+
+alter table "pgstac"."item_field_registry" add constraint "item_field_registry_collection_fkey" FOREIGN KEY ("collection") REFERENCES "pgstac"."collections"("id") ON DELETE CASCADE NOT VALID;
+
+alter table "pgstac"."item_field_registry" validate constraint "item_field_registry_collection_fkey";
+
+alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_fkey" FOREIGN KEY ("collection") REFERENCES "pgstac"."collections"("id") ON DELETE CASCADE NOT VALID;
+
+alter table "pgstac"."item_fragments" validate constraint "item_fragments_collection_fkey";
+
+alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_hash_key" UNIQUE using index "item_fragments_collection_hash_key";
+
 alter table "pgstac"."searches" add constraint "searches_name_key" UNIQUE using index "searches_name_key";
 
 set check_function_bodies = off;
+
+CREATE OR REPLACE FUNCTION pgstac.collection_fragment_config_default(content jsonb)
+ RETURNS text[]
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+AS $function$
+DECLARE
+    paths text[] := ARRAY[]::text[];
+    asset_key text;
+    sub_key   text;
+    -- Fields within each asset that differ between items and must NOT be fragmented.
+    -- href is unique per item; file:* fields reflect per-file measurements;
+    -- alternate/storage:* are access-layer derived paths also unique per item.
+    per_item_asset_fields CONSTANT text[] := ARRAY[
+        'href',
+        'file:size', 'file:checksum', 'file:local_path',
+        'alternate',
+        'storage:path', 'storage:platform', 'storage:region',
+        'storage:requester_pays', 'storage:tier'
+    ];
+BEGIN
+    -- For item_assets: each asset key's sub-keys (except known per-item fields like href)
+    -- are the same for every item in the collection because item_assets describes the
+    -- collection-level asset schema (type, title, roles, eo:bands, raster:bands, etc.).
+    -- Using depth-3 paths means only the stable metadata is fragmented; href and other
+    -- per-item fields stay in the per-item assets column so the dedup still works.
+    IF content->'item_assets' IS NOT NULL
+       AND jsonb_typeof(content->'item_assets') = 'object'
+       AND content->'item_assets' != '{}'::jsonb
+    THEN
+        FOR asset_key IN SELECT jsonb_object_keys(content->'item_assets') LOOP
+            FOR sub_key IN SELECT jsonb_object_keys(content->'item_assets'->asset_key) LOOP
+                IF NOT (sub_key = ANY(per_item_asset_fields)) THEN
+                    paths := paths || fragment_path_text(ARRAY['assets', asset_key, sub_key]);
+                END IF;
+            END LOOP;
+        END LOOP;
+    END IF;
+
+    IF cardinality(paths) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN paths;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.create_collection(data jsonb, _partition_trunc text DEFAULT NULL::text, _fragment_config text[] DEFAULT NULL::text[])
+ RETURNS void
+ LANGUAGE sql
+ SET search_path TO 'pgstac', 'public'
+AS $function$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.extract_fragment(content jsonb, fragment_paths text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+DECLARE
+    result    jsonb := '{}'::jsonb;
+    p         text;
+    pth       text[];
+    val       jsonb;
+BEGIN
+    IF content IS NULL OR fragment_paths IS NULL OR cardinality(fragment_paths) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    FOREACH p IN ARRAY fragment_paths LOOP
+        pth := fragment_path_array(p);
+        IF pth IS NULL OR cardinality(pth) = 0 THEN CONTINUE; END IF;
+
+        val := content #> pth;
+        IF val IS NOT NULL THEN
+            -- jsonb_set_nested creates intermediate empty objects as needed, so
+            -- depth-3+ paths are handled correctly and multiple paths sharing the
+            -- same intermediate keys are merged rather than overwritten.
+            result := jsonb_set_nested(result, pth, val);
+        END IF;
+    END LOOP;
+
+    IF result = '{}'::jsonb THEN RETURN NULL; END IF;
+    RETURN result;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.format_item(_item items, _fields jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+    RETURN content_hydrate(_item, _fields);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.fragment_path_array(_path_text text)
+ RETURNS text[]
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE STRICT SECURITY DEFINER
+AS $function$
+BEGIN
+    IF _path_text ~ '^\s*\[' THEN
+        RETURN ARRAY(
+            SELECT jsonb_array_elements_text(_path_text::jsonb)
+        );
+    END IF;
+
+    -- Legacy support for pre-JSON serialization.
+    RETURN string_to_array(_path_text, '.');
+EXCEPTION
+    WHEN others THEN
+        -- Be permissive for existing operator-configured values.
+        RETURN string_to_array(_path_text, '.');
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.fragment_path_text(_path text[])
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT SECURITY DEFINER
+AS $function$
+    SELECT to_jsonb(_path)::text;
+$function$
+;
 
 CREATE OR REPLACE FUNCTION pgstac.gc_anonymous_searches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
  RETURNS bigint
@@ -258,6 +589,97 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interval DEFAULT '30 days'::interval)
+ RETURNS bigint
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    SELECT gc_deleted_items_log(retention_interval, 10000);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log(retention_interval interval, batch_limit integer)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    deleted_count bigint := 0;
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        deleted_count := deleted_count + batch_deleted;
+        EXIT WHEN batch_deleted = 0;
+    END LOOP;
+
+    RETURN deleted_count;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_deleted_items_log_batch(retention_interval interval DEFAULT '30 days'::interval, batch_limit integer DEFAULT 10000)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    WITH to_delete AS (
+        SELECT ctid
+        FROM items_deleted_log
+        WHERE deleted_at < now() - retention_interval
+        ORDER BY deleted_at
+        LIMIT GREATEST(COALESCE(batch_limit, 10000), 1)
+    ),
+    deleted AS (
+        DELETE FROM items_deleted_log d
+        USING to_delete td
+        WHERE d.ctid = td.ctid
+        RETURNING 1
+    )
+    SELECT count(*)::bigint INTO batch_deleted FROM deleted;
+
+    RETURN batch_deleted;
+END;
+$function$
+;
+
+CREATE OR REPLACE PROCEDURE pgstac.gc_deleted_items_log_committed(IN retention_interval interval DEFAULT '30 days'::interval, IN batch_limit integer DEFAULT 10000)
+ LANGUAGE plpgsql
+AS $procedure$
+DECLARE
+    batch_deleted bigint;
+BEGIN
+    LOOP
+        batch_deleted := gc_deleted_items_log_batch(retention_interval, batch_limit);
+        EXIT WHEN batch_deleted = 0;
+        COMMIT;
+    END LOOP;
+END;
+$procedure$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.gc_fragments(_collection text DEFAULT NULL::text, retention_interval interval DEFAULT '90 days'::interval)
+ RETURNS TABLE(collection_id text, fragments_removed integer)
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    WITH deleted AS (
+        DELETE FROM item_fragments f
+        WHERE
+            (_collection IS NULL OR f.collection = _collection)
+            AND f.created_at < now() - retention_interval
+            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id)
+        RETURNING f.collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.gc_search_caches(retention_interval interval DEFAULT NULL::interval, conf jsonb DEFAULT NULL::jsonb)
  RETURNS jsonb
  LANGUAGE sql
@@ -266,6 +688,283 @@ AS $function$
     SELECT jsonb_build_object(
         'removed_searches',
         gc_anonymous_searches(retention_interval, conf)
+    );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_content_changed(left_item items, right_item items)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+DECLARE
+    changed boolean;
+BEGIN
+    EXECUTE format('SELECT %s', items_content_distinct_sql('($1)', '($2)'))
+    INTO changed
+    USING left_item, right_item;
+
+    RETURN COALESCE(changed, FALSE);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_content_distinct_sql(left_ref text, right_ref text)
+ RETURNS text
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+DECLARE
+    clauses text[];
+BEGIN
+    clauses := ARRAY[
+        format('%s.datetime_is_range IS DISTINCT FROM %s.datetime_is_range', left_ref, right_ref),
+        format('%s.datetime IS DISTINCT FROM %s.datetime', left_ref, right_ref),
+        format('%s.end_datetime IS DISTINCT FROM %s.end_datetime', left_ref, right_ref),
+        format('%s.geometry IS DISTINCT FROM %s.geometry', left_ref, right_ref),
+        format('%s.bbox IS DISTINCT FROM %s.bbox', left_ref, right_ref),
+        format('%s.links IS DISTINCT FROM %s.links', left_ref, right_ref),
+        format('%s.assets IS DISTINCT FROM %s.assets', left_ref, right_ref),
+        format('%s.properties IS DISTINCT FROM %s.properties', left_ref, right_ref),
+        format('%s.extra IS DISTINCT FROM %s.extra', left_ref, right_ref),
+        format('%s.stac_version IS DISTINCT FROM %s.stac_version', left_ref, right_ref),
+        format('%s.stac_extensions IS DISTINCT FROM %s.stac_extensions', left_ref, right_ref),
+        format('%s.fragment_id IS DISTINCT FROM %s.fragment_id', left_ref, right_ref)
+    ];
+
+    clauses := clauses || ARRAY(
+        SELECT format('%s.%I IS DISTINCT FROM %s.%I', left_ref, column_name, right_ref, column_name)
+        FROM unnest(promoted_items_column_list()) AS column_name
+    );
+
+    RETURN array_to_string(clauses, E'\n                    OR ');
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_delete_log_trigger()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+    INSERT INTO items_deleted_log (
+        item_id,
+        collection,
+        partition,
+        datetime,
+        end_datetime,
+        content_hash
+    )
+    SELECT
+        old_rows.id,
+        old_rows.collection,
+        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+        old_rows.datetime,
+        old_rows.end_datetime,
+        old_rows.content_hash
+    FROM old_rows;
+
+    RETURN NULL;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_touch_triggerfunc()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+    IF NOT items_content_changed(OLD, NEW) THEN
+        RETURN NEW;
+    END IF;
+
+    NEW.pgstac_updated_at := now();
+    NEW.content_hash := pgstac_item_hash(content_hydrate(NEW));
+    RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_common_paths_final(docs jsonb[])
+ RETURNS text[]
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    WITH normalized_docs AS (
+        SELECT content
+        FROM unnest(COALESCE(docs, '{}'::jsonb[])) AS doc(content)
+        WHERE content IS NOT NULL
+    ), doc_count AS (
+        SELECT count(*)::bigint AS n
+        FROM normalized_docs
+    ), flat AS (
+        SELECT rows.path, rows.value
+        FROM normalized_docs d
+        CROSS JOIN LATERAL jsonb_leaf_rows(d.content, '') AS rows(path, value)
+    )
+    SELECT CASE
+        WHEN (SELECT n FROM doc_count) = 0 THEN '{}'::text[]
+        ELSE COALESCE(
+            (
+                SELECT array_agg(path ORDER BY path)
+                FROM (
+                    SELECT f.path
+                    FROM flat f
+                    CROSS JOIN doc_count d
+                    GROUP BY f.path, d.n
+                    HAVING count(*) = d.n AND count(DISTINCT f.value) = 1
+                ) same_paths
+            ),
+            '{}'::text[]
+        )
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_common_paths_state(state jsonb[], next_doc jsonb)
+ RETURNS jsonb[]
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT CASE
+        WHEN next_doc IS NULL THEN COALESCE(state, '{}'::jsonb[])
+        WHEN state IS NULL THEN ARRAY[next_doc]
+        ELSE array_append(state, next_doc)
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_common_values(left_doc jsonb, right_doc jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT CASE
+        WHEN left_doc IS NULL OR right_doc IS NULL THEN NULL
+        WHEN jsonb_typeof(left_doc) = 'object' AND jsonb_typeof(right_doc) = 'object' THEN
+            CASE
+                WHEN left_doc = '{}'::jsonb AND right_doc = '{}'::jsonb THEN '{}'::jsonb
+                ELSE (
+                    SELECT CASE
+                        WHEN count(*) = 0 THEN NULL
+                        ELSE jsonb_object_agg(key, common_value)
+                    END
+                    FROM (
+                        SELECT
+                            left_fields.key,
+                            jsonb_common_values(left_fields.value, right_fields.value) AS common_value
+                        FROM jsonb_each(left_doc) left_fields
+                        JOIN jsonb_each(right_doc) right_fields USING (key)
+                    ) common_fields
+                    WHERE common_value IS NOT NULL
+                )
+            END
+        WHEN left_doc = right_doc THEN left_doc
+        ELSE NULL
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_field_rows(data jsonb, parent_path text DEFAULT ''::text, max_depth integer DEFAULT 20)
+ RETURNS TABLE(path text, is_leaf boolean, value_kind text)
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    k text;
+    v jsonb;
+    current_path text;
+    jtype text;
+BEGIN
+    IF data IS NULL OR max_depth <= 0 THEN
+        RETURN;
+    END IF;
+    jtype := jsonb_typeof(data);
+    IF jtype = 'object' THEN
+        FOR k, v IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE WHEN parent_path = '' THEN k ELSE parent_path || '.' || k END;
+            IF jsonb_typeof(v) IN ('object', 'array') THEN
+                RETURN QUERY SELECT current_path, FALSE, jsonb_typeof(v);
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, current_path, max_depth - 1);
+            ELSE
+                RETURN QUERY SELECT current_path, TRUE, jsonb_typeof(v);
+            END IF;
+        END LOOP;
+    ELSIF jtype = 'array' THEN
+        -- Walk array elements (e.g. arrays of nested objects); arrays of scalars
+        -- are already handled as leaves in the object branch above.
+        FOR v IN SELECT jsonb_array_elements(data) LOOP
+            IF jsonb_typeof(v) = 'object' THEN
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, parent_path, max_depth - 1);
+            END IF;
+        END LOOP;
+    END IF;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_leaf_rows(data jsonb, parent_path text)
+ RETURNS TABLE(path text, value jsonb)
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+DECLARE
+    key_text text;
+    child jsonb;
+    current_path text;
+BEGIN
+    IF data IS NULL THEN
+        RETURN;
+    END IF;
+
+    IF jsonb_typeof(data) = 'object' THEN
+        IF data = '{}'::jsonb THEN
+            IF parent_path <> '' THEN
+                RETURN QUERY SELECT parent_path, data;
+            END IF;
+            RETURN;
+        END IF;
+
+        FOR key_text, child IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE
+                WHEN parent_path = '' THEN key_text
+                ELSE parent_path || '.' || key_text
+            END;
+            RETURN QUERY SELECT * FROM jsonb_leaf_rows(child, current_path);
+        END LOOP;
+        RETURN;
+    END IF;
+
+    IF parent_path <> '' THEN
+        RETURN QUERY SELECT parent_path, data;
+    END IF;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.jsonb_merge_level1(frag jsonb, item jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT COALESCE(
+        (SELECT jsonb_object_agg(
+            COALESCE(f.key, i.key),
+            CASE
+                WHEN i.value IS NULL THEN f.value
+                WHEN f.value IS NULL THEN i.value
+                WHEN jsonb_typeof(f.value) = 'object' AND jsonb_typeof(i.value) = 'object'
+                    THEN f.value || i.value
+                ELSE i.value
+            END
+        )
+        FROM
+            jsonb_each(COALESCE(frag, '{}')) f
+            FULL JOIN jsonb_each(COALESCE(item, '{}')) i USING (key)
+        ),
+        '{}'::jsonb
     );
 $function$
 ;
@@ -305,6 +1004,27 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.pgstac_hash_fragment(fragment jsonb)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+SELECT pgstac_hash(fragment::text);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.pgstac_item_hash(item_json jsonb)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT SECURITY DEFINER
+AS $function$
+    SELECT encode(sha256(
+        (SELECT jsonb_object_agg(key, value ORDER BY key)
+         FROM jsonb_each(item_json))::text::bytea
+    ), 'hex');
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.pin_search(_name text)
  RETURNS searches
  LANGUAGE plpgsql
@@ -327,6 +1047,174 @@ BEGIN
 
     RETURN pinned_search;
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.promoted_item_property_defs()
+ RETURNS TABLE(name text, definition jsonb, property_path text, property_wrapper text)
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT * FROM (VALUES
+      ('created',             '{"description": "Metadata creation timestamp","type": "string","format": "date-time","title": "Created"}'::jsonb,                         'created',              'to_tstz'),
+      ('updated',             '{"description": "Metadata update timestamp","type": "string","format": "date-time","title": "Updated"}'::jsonb,                           'updated',              'to_tstz'),
+      ('platform',            '{"description": "Platform name","type": "string","title": "Platform"}'::jsonb,                                                            'platform',             'to_text'),
+      ('instruments',         '{"description": "Instrument names","type": "array","title": "Instruments"}'::jsonb,                                                       'instruments',          'to_text_array'),
+      ('constellation',       '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb,                                                 'constellation',        'to_text'),
+      ('mission',             '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb,                                                              'mission',              'to_text'),
+      ('eo:cloud_cover',      '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb,                                             'eo_cloud_cover',       'to_float'),
+      ('eo:bands',            '{"description": "EO band metadata","type": "array","title": "EO Bands"}'::jsonb,                                                          'eo_bands',             'to_text'),
+      ('eo:snow_cover',       '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb,                                               'eo_snow_cover',        'to_float'),
+      ('gsd',                 '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb,                                     'gsd',                  'to_float'),
+      ('proj:epsg',           '{"description": "EPSG code","type": "integer","title": "Projection EPSG"}'::jsonb,                                                        'proj_epsg',            'to_int'),
+      ('proj:wkt2',           '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb,                                               'proj_wkt2',            'to_text'),
+      ('proj:projjson',       '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb,                          'proj_projjson',        'to_text'),
+      ('proj:bbox',           '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb,                                                   'proj_bbox',            'to_text'),
+      ('proj:centroid',       '{"description": "Projection centroid","type": "object","title": "Projection Centroid"}'::jsonb,                                          'proj_centroid',        'to_text'),
+      ('proj:shape',          '{"description": "Projection shape","type": "array","title": "Projection Shape"}'::jsonb,                                                 'proj_shape',           'to_text'),
+      ('proj:transform',      '{"description": "Projection affine transform","type": "array","title": "Projection Transform"}'::jsonb,                                  'proj_transform',       'to_text'),
+      ('sci:doi',             '{"description": "Scientific DOI","type": "string","title": "Scientific DOI"}'::jsonb,                                                    'sci_doi',              'to_text'),
+      ('sci:citation',        '{"description": "Scientific citation","type": "string","title": "Scientific Citation"}'::jsonb,                                          'sci_citation',         'to_text'),
+      ('sci:publications',    '{"description": "Scientific publications","type": "array","title": "Scientific Publications"}'::jsonb,                                   'sci_publications',     'to_text'),
+      ('view:off_nadir',      '{"description": "Viewing angle off nadir","type": "number","title": "View Off Nadir"}'::jsonb,                                            'view_off_nadir',       'to_float'),
+      ('view:incidence_angle','{"description": "View incidence angle","type": "number","title": "View Incidence Angle"}'::jsonb,                                       'view_incidence_angle', 'to_float'),
+      ('view:azimuth',        '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb,                                                  'view_azimuth',         'to_float'),
+      ('view:sun_azimuth',    '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb,                                                'view_sun_azimuth',     'to_float'),
+      ('view:sun_elevation',  '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb,                                            'view_sun_elevation',   'to_float'),
+      ('file:size',           '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb,                                                    'file_size',            'to_int'),
+      ('file:header_size',    '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb,                                      'file_header_size',     'to_int'),
+      ('file:checksum',       '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb,                                                      'file_checksum',        'to_text'),
+      ('file:byte_order',     '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb,                                                  'file_byte_order',      'to_text'),
+      ('file:values_regex',   '{"description": "File values regex","type": "string","title": "File Values Regex"}'::jsonb,                                              'file_values_regex',    'to_text'),
+      ('sat:orbit_state',     '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb,                                                'sat_orbit_state',      'to_text'),
+      ('sat:relative_orbit',  '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb,                                         'sat_relative_orbit',   'to_int'),
+      ('sat:absolute_orbit',  '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb,                                         'sat_absolute_orbit',   'to_int')
+    ) AS t(name, definition, property_path, property_wrapper);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.promoted_items_column_list()
+ RETURNS text[]
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT ARRAY[
+        'created', 'updated', 'platform', 'instruments', 'constellation', 'mission',
+        'eo_cloud_cover', 'eo_bands', 'eo_snow_cover', 'gsd',
+        'proj_epsg', 'proj_wkt2', 'proj_projjson', 'proj_bbox', 'proj_centroid', 'proj_shape', 'proj_transform',
+        'sci_doi', 'sci_citation', 'sci_publications',
+        'view_off_nadir', 'view_incidence_angle', 'view_azimuth', 'view_sun_azimuth', 'view_sun_elevation',
+        'file_size', 'file_header_size', 'file_checksum', 'file_byte_order', 'file_values_regex',
+        'sat_orbit_state', 'sat_relative_orbit', 'sat_absolute_orbit'
+    ]::text[];
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.promoted_properties_from_item(_item items)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    WITH promoted_values(property_path, value) AS (
+        VALUES
+            ('created', CASE WHEN _item.created IS NULL THEN NULL ELSE to_jsonb(tstz_to_stac_text(_item.created)) END),
+            ('updated', CASE WHEN _item.updated IS NULL THEN NULL ELSE to_jsonb(tstz_to_stac_text(_item.updated)) END),
+            ('platform', to_jsonb(_item.platform)),
+            ('instruments', to_jsonb(_item.instruments)),
+            ('constellation', to_jsonb(_item.constellation)),
+            ('mission', to_jsonb(_item.mission)),
+            ('eo_cloud_cover', to_jsonb(_item.eo_cloud_cover)),
+            ('eo_bands', to_jsonb(_item.eo_bands)),
+            ('eo_snow_cover', to_jsonb(_item.eo_snow_cover)),
+            ('gsd', to_jsonb(_item.gsd)),
+            ('proj_epsg', to_jsonb(_item.proj_epsg)),
+            ('proj_wkt2', to_jsonb(_item.proj_wkt2)),
+            ('proj_projjson', to_jsonb(_item.proj_projjson)),
+            ('proj_bbox', to_jsonb(_item.proj_bbox)),
+            ('proj_centroid', to_jsonb(_item.proj_centroid)),
+            ('proj_shape', to_jsonb(_item.proj_shape)),
+            ('proj_transform', to_jsonb(_item.proj_transform)),
+            ('sci_doi', to_jsonb(_item.sci_doi)),
+            ('sci_citation', to_jsonb(_item.sci_citation)),
+            ('sci_publications', to_jsonb(_item.sci_publications)),
+            ('view_off_nadir', to_jsonb(_item.view_off_nadir)),
+            ('view_incidence_angle', to_jsonb(_item.view_incidence_angle)),
+            ('view_azimuth', to_jsonb(_item.view_azimuth)),
+            ('view_sun_azimuth', to_jsonb(_item.view_sun_azimuth)),
+            ('view_sun_elevation', to_jsonb(_item.view_sun_elevation)),
+            ('file_size', to_jsonb(_item.file_size)),
+            ('file_header_size', to_jsonb(_item.file_header_size)),
+            ('file_checksum', to_jsonb(_item.file_checksum)),
+            ('file_byte_order', to_jsonb(_item.file_byte_order)),
+            ('file_values_regex', to_jsonb(_item.file_values_regex)),
+            ('sat_orbit_state', to_jsonb(_item.sat_orbit_state)),
+            ('sat_relative_orbit', to_jsonb(_item.sat_relative_orbit)),
+            ('sat_absolute_orbit', to_jsonb(_item.sat_absolute_orbit))
+    )
+    SELECT temporal_properties_from_item(_item)
+        || COALESCE(
+            (
+                SELECT jsonb_object_agg(defs.name, promoted_values.value ORDER BY defs.name)
+                FROM promoted_item_property_defs() defs
+                JOIN promoted_values USING (property_path)
+                WHERE promoted_values.value IS NOT NULL
+                    AND promoted_values.value <> 'null'::jsonb
+            ),
+            '{}'::jsonb
+        );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.promoted_queryables_defaults()
+ RETURNS TABLE(name text, definition jsonb, property_path text, property_wrapper text)
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT * FROM (VALUES
+      ('stac_version',       '{"description": "STAC specification version","type": "string","title": "STAC Version"}'::jsonb,                                            'stac_version',       'to_text'),
+            ('stac_extensions',    '{"description": "List of STAC extension schema URIs","type": "array","title": "STAC Extensions"}'::jsonb,                                  'stac_extensions',    'to_text')
+        ) AS top_level(name, definition, property_path, property_wrapper)
+        UNION ALL
+        SELECT p.name, p.definition, p.property_path, p.property_wrapper
+        FROM promoted_item_property_defs() p;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.queryable_index_field(q queryables)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+    SELECT CASE
+        WHEN q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN q.property_path
+        ELSE q.name
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.queryable_uses_native_path(path text)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+    SELECT path ~ '^[a-zA-Z_][a-zA-Z0-9_]*$';
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.refresh_field_registry(_collection text DEFAULT NULL::text, retention_interval interval DEFAULT '90 days'::interval)
+ RETURNS TABLE(collection_id text, expired_paths integer)
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    WITH deleted AS (
+        DELETE FROM item_field_registry
+        WHERE (_collection IS NULL OR collection = _collection)
+          AND last_seen < now() - retention_interval
+        RETURNING collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
 $function$
 ;
 
@@ -495,6 +1383,82 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.strip_fragment_col(col_value jsonb, col_name text, fragment_paths text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+DECLARE
+    result    jsonb := col_value;
+    p         text;
+    pth       text[];
+    n         int;
+BEGIN
+    IF col_value IS NULL OR fragment_paths IS NULL THEN RETURN col_value; END IF;
+
+    FOREACH p IN ARRAY fragment_paths LOOP
+        pth := fragment_path_array(p);
+        n   := cardinality(pth);
+        IF pth IS NULL OR n = 0 OR pth[1] <> col_name THEN CONTINUE; END IF;
+
+        IF n = 1 THEN
+            RETURN '{}'::jsonb;  -- entire column goes to fragment
+        ELSE
+            -- Remove the nested sub-path from the column value at any depth.
+            -- #- handles depth-2 (removes a top-level key) through depth-N (removes a
+            -- nested key) using the path tail pth[2:n].
+            result := result #- pth[2:n];
+        END IF;
+    END LOOP;
+
+    RETURN result;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.strip_promoted_properties(props jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT COALESCE(props, '{}'::jsonb) - COALESCE(
+        (SELECT array_agg(name ORDER BY name) FROM promoted_item_property_defs()),
+        '{}'::text[]
+    ) - ARRAY['datetime', 'start_datetime', 'end_datetime'];
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.temporal_properties_from_item(_item items)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT CASE
+        WHEN _item.datetime_is_range THEN jsonb_build_object('datetime', NULL)
+            || jsonb_strip_nulls(jsonb_build_object(
+                'start_datetime', tstz_to_stac_text(_item.datetime),
+                'end_datetime', tstz_to_stac_text(_item.end_datetime)
+            ))
+        ELSE jsonb_build_object('datetime', tstz_to_stac_text(_item.datetime))
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.tstz_to_stac_text(value timestamp with time zone)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE SECURITY DEFINER
+AS $function$
+    SELECT CASE
+        WHEN value IS NULL THEN NULL
+        ELSE trim(trailing '.' FROM trim(trailing '0' FROM to_char(
+            value AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US'
+        ))) || 'Z'
+    END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.unname_search(_name text)
  RETURNS searches
  LANGUAGE plpgsql
@@ -543,6 +1507,161 @@ BEGIN
 
     RETURN unpinned_search;
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.update_collection(data jsonb, _partition_trunc text DEFAULT NULL::text, _fragment_config text[] DEFAULT NULL::text[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SET search_path TO 'pgstac', 'public'
+AS $function$
+DECLARE
+    out collections%ROWTYPE;
+BEGIN
+    UPDATE collections
+    SET content         = data,
+        partition_trunc = COALESCE(_partition_trunc, partition_trunc),
+        fragment_config = COALESCE(_fragment_config, fragment_config)
+    WHERE id = data->>'id'
+    RETURNING * INTO STRICT out;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.update_field_registry_from_items(_collection text)
+ RETURNS TABLE(registered_paths integer, rows_processed integer)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    est_rows bigint;
+    nrows    int;
+    npaths   int;
+BEGIN
+    -- Sum reltuples across the registered item partitions for this collection.
+    -- reltuples can be -1 (never analyzed); treat negative values as zero.
+    SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
+    FROM partitions_view p
+    JOIN pg_class c ON c.relname = p.partition
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.collection = _collection
+      AND n.nspname = 'pgstac'
+      AND c.relkind = 'r';
+
+    IF est_rows > 10000 THEN
+        -- Large collection: use statistical sampling to avoid full seq-scan.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i TABLESAMPLE BERNOULLI(5) WHERE i.collection = _collection
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    ELSE
+        -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i WHERE i.collection = _collection LIMIT 1000
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    END IF;
+
+    RETURN QUERY SELECT npaths, nrows;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.update_field_registry_from_sample(_collection text, item_contents jsonb[])
+ RETURNS void
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$
+    INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+    SELECT
+        _collection,
+        r.path,
+        bool_and(r.is_leaf)                                                       AS is_leaf,
+        array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+        now(),
+        now()
+    FROM unnest(item_contents) AS item(content)
+    CROSS JOIN LATERAL jsonb_field_rows(item.content) AS r(path, is_leaf, value_kind)
+    GROUP BY r.path
+    ON CONFLICT (collection, path) DO UPDATE SET
+        is_leaf     = EXCLUDED.is_leaf,
+        value_kinds = (
+            SELECT array_agg(DISTINCT v)
+            FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+        ),
+        last_seen   = now()
+    ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.upsert_collection(data jsonb, _partition_trunc text DEFAULT NULL::text, _fragment_config text[] DEFAULT NULL::text[])
+ RETURNS void
+ LANGUAGE sql
+ SET search_path TO 'pgstac', 'public'
+AS $function$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
+    ON CONFLICT (id) DO
+    UPDATE
+        SET content         = EXCLUDED.content,
+            -- Preserve any operator-configured fragment_config; only replace when an
+            -- explicit _fragment_config was supplied or when currently NULL.
+            fragment_config = CASE
+                WHEN _fragment_config IS NOT NULL THEN _fragment_config
+                ELSE COALESCE(collections.fragment_config, EXCLUDED.fragment_config)
+            END,
+            partition_trunc = COALESCE(EXCLUDED.partition_trunc, collections.partition_trunc)
+    ;
 $function$
 ;
 
@@ -672,23 +1791,1061 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.collection_base_item(cid text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE PARALLEL SAFE
+AS $function$
+    SELECT collection_base_item(content)
+    FROM collections
+    WHERE id = cid
+    LIMIT 1;
+$function$
+;
+
+create or replace view "pgstac"."collections_asitems" as  SELECT id,
+    geometry,
+    'collections'::text AS collection,
+    datetime,
+    end_datetime,
+    content - '{links,assets,stac_version,stac_extensions}'::text AS properties,
+    jsonb_build_object('properties', content - '{links,assets,stac_version,stac_extensions}'::text, 'links', content -> 'links'::text, 'assets', content -> 'assets'::text, 'stac_version', content -> 'stac_version'::text, 'stac_extensions', content -> 'stac_extensions'::text) AS content,
+    content AS collectionjson
+   FROM collections;
+
+
 CREATE OR REPLACE FUNCTION pgstac.content_dehydrate(content jsonb)
  RETURNS items
- LANGUAGE sql
+ LANGUAGE plpgsql
  STABLE
 AS $function$
+DECLARE
+    out items;
+    props jsonb;
+BEGIN
+    out.id := content->>'id';
+    out.geometry := stac_geom(content);
+    out.collection := content->>'collection';
+    props := content->'properties';
+    out.datetime := stac_datetime(content);
+    out.end_datetime := stac_end_datetime(content);
+    out.datetime_is_range := CASE
+        WHEN props->'datetime' IS NOT NULL AND props->'datetime' <> 'null'::jsonb THEN FALSE
+        ELSE (
+            (props->'start_datetime' IS NOT NULL AND props->'start_datetime' <> 'null'::jsonb)
+            OR (props->'end_datetime' IS NOT NULL AND props->'end_datetime' <> 'null'::jsonb)
+        )
+    END;
+    out.stac_version := content->>'stac_version';
+    out.stac_extensions := COALESCE(content->'stac_extensions', '[]'::jsonb);
+    out.pgstac_updated_at := now();
+    out.content_hash := pgstac_item_hash(content);
+
+    -- Split columns: dedicated storage for standard top-level STAC fields.
+    -- These enable index-only scans on promoted queryables and JSONB-free hot paths.
+    out.bbox       := content->'bbox';
+    out.links      := COALESCE(content->'links', '[]'::jsonb);
+    out.assets     := COALESCE(content->'assets', '{}'::jsonb);
+    out.properties := strip_promoted_properties(props);
+    out.extra      := content - '{id,geometry,collection,type,bbox,links,assets,properties,stac_version,stac_extensions}'::text[];
+
+    out.created             := (props->>'created')::timestamptz;
+    out.updated             := (props->>'updated')::timestamptz;
+    out.platform            := props->>'platform';
+    out.instruments         := to_text_array(props->'instruments');
+    out.constellation       := props->>'constellation';
+    out.mission             := props->>'mission';
+    out.eo_cloud_cover    := (props->>'eo:cloud_cover')::float8;
+    out.eo_bands          := props->'eo:bands';
+    out.eo_snow_cover     := (props->>'eo:snow_cover')::float8;
+    out.gsd               := (props->>'gsd')::float8;
+    out.proj_epsg         := (props->>'proj:epsg')::integer;
+    out.proj_wkt2         := props->>'proj:wkt2';
+    out.proj_projjson     := props->'proj:projjson';
+    out.proj_bbox         := props->'proj:bbox';
+    out.proj_centroid     := props->'proj:centroid';
+    out.proj_shape        := props->'proj:shape';
+    out.proj_transform    := props->'proj:transform';
+    out.sci_doi           := props->>'sci:doi';
+    out.sci_citation      := props->>'sci:citation';
+    out.sci_publications  := props->'sci:publications';
+    out.view_off_nadir    := (props->>'view:off_nadir')::float8;
+    out.view_incidence_angle := (props->>'view:incidence_angle')::float8;
+    out.view_azimuth      := (props->>'view:azimuth')::float8;
+    out.view_sun_azimuth  := (props->>'view:sun_azimuth')::float8;
+    out.view_sun_elevation := (props->>'view:sun_elevation')::float8;
+    out.file_size         := (props->>'file:size')::bigint;
+    out.file_header_size  := (props->>'file:header_size')::bigint;
+    out.file_checksum     := props->>'file:checksum';
+    out.file_byte_order   := props->>'file:byte_order';
+    out.file_values_regex := props->>'file:values_regex';
+    out.sat_orbit_state   := props->>'sat:orbit_state';
+    out.sat_relative_orbit := (props->>'sat:relative_orbit')::integer;
+    out.sat_absolute_orbit := (props->>'sat:absolute_orbit')::integer;
+
+    -- fragment_id is NULL on initial dehydration; assigned by the staging trigger.
+    out.fragment_id := NULL;
+    RETURN out;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    geom jsonb;
+    output jsonb;
+    frag_content jsonb;
+    merged_assets jsonb;
+    merged_properties jsonb;
+    hydrated_stac_version text;
+    hydrated_stac_extensions jsonb;
+BEGIN
+    IF include_field('geometry', fields) THEN
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
+    END IF;
+
+    -- Fetch shared fragment content (NULL when item has no fragment).
+    IF _item.fragment_id IS NOT NULL THEN
+        SELECT content INTO frag_content FROM item_fragments WHERE id = _item.fragment_id;
+    END IF;
+
+    -- Merge: fragment provides shared asset/property values; per-item provides individual values.
+    merged_assets     := jsonb_merge_level1(frag_content->'assets',     _item.assets);
+    merged_properties := jsonb_merge_level1(frag_content->'properties', _item.properties);
+    merged_properties := promoted_properties_from_item(_item) || COALESCE(merged_properties, '{}'::jsonb);
+    hydrated_stac_version := COALESCE(_item.stac_version, frag_content->>'stac_version');
+    hydrated_stac_extensions := CASE
+        WHEN _item.stac_extensions IS NOT NULL AND _item.stac_extensions <> '[]'::jsonb THEN _item.stac_extensions
+        ELSE COALESCE(frag_content->'stac_extensions', _item.stac_extensions)
+    END;
+
+    output := jsonb_build_object(
+        'id',         _item.id,
+        'geometry',   geom,
+        'collection', _item.collection,
+        'type',       'Feature'
+    );
+    IF _item.bbox IS NOT NULL THEN
+        output := output || jsonb_build_object('bbox', _item.bbox);
+    END IF;
+    IF hydrated_stac_version IS NOT NULL THEN
+        output := output || jsonb_build_object('stac_version', hydrated_stac_version);
+    END IF;
+    IF hydrated_stac_extensions IS NOT NULL AND hydrated_stac_extensions <> '[]'::jsonb THEN
+        output := output || jsonb_build_object('stac_extensions', hydrated_stac_extensions);
+    END IF;
+    IF _item.links IS NOT NULL THEN
+        output := output || jsonb_build_object('links', _item.links);
+    END IF;
+    IF merged_assets != '{}'::jsonb THEN
+        output := output || jsonb_build_object('assets', merged_assets);
+    END IF;
+    IF merged_properties IS NOT NULL THEN
+        output := output || jsonb_build_object('properties', merged_properties);
+    END IF;
+    IF _item.extra IS NOT NULL THEN
+        output := output || _item.extra;
+    END IF;
+
+    RETURN jsonb_fields(output, fields);
+END;
+$function$
+;
+
+create or replace view "pgstac"."pgstac_indexes" as  SELECT schemaname,
+    tablename,
+    indexname,
+    regexp_replace(btrim(replace(replace(indexdef, indexname::text, ''::text), 'pgstac.'::text, ''::text), ' \t\n'::text), '[ ]+'::text, ' '::text, 'g'::text) AS idx,
+    COALESCE("substring"(indexdef, '\(([a-zA-Z0-9_]+)\)'::text), "substring"(indexdef, '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'::text),
+        CASE
+            WHEN indexdef ~* '\(datetime desc, end_datetime\)'::text THEN 'datetime'::text
+            ELSE NULL::text
+        END) AS field,
+    pg_table_size(indexname::text::regclass) AS index_size,
+    pg_size_pretty(pg_table_size(indexname::text::regclass)) AS index_size_pretty
+   FROM pg_indexes i
+  WHERE schemaname = 'pgstac'::name AND tablename ~ '_items_'::text AND indexdef !~* ' only '::text;
+
+
+create or replace view "pgstac"."pgstac_indexes_stats" as  SELECT i.schemaname,
+    i.tablename,
+    i.indexname,
+    i.indexdef,
+    COALESCE("substring"(i.indexdef, '\(([a-zA-Z0-9_]+)\)'::text), "substring"(i.indexdef, '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'::text),
+        CASE
+            WHEN i.indexdef ~* '\(datetime desc, end_datetime\)'::text THEN 'datetime_end_datetime'::text
+            ELSE NULL::text
+        END) AS field,
+    pg_table_size(i.indexname::text::regclass) AS index_size,
+    pg_size_pretty(pg_table_size(i.indexname::text::regclass)) AS index_size_pretty,
+    s.n_distinct,
+    s.most_common_vals::text::text[] AS most_common_vals,
+    s.most_common_freqs::text::text[] AS most_common_freqs,
+    s.histogram_bounds::text::text[] AS histogram_bounds,
+    s.correlation
+   FROM pg_indexes i
+     LEFT JOIN pg_stats s ON s.tablename = i.indexname
+  WHERE i.schemaname = 'pgstac'::name AND i.tablename ~ '_items_'::text;
+
+
+CREATE TRIGGER items_before_update_trigger BEFORE UPDATE ON pgstac.items FOR EACH ROW EXECUTE FUNCTION items_touch_triggerfunc();
+
+CREATE TRIGGER items_delete_log_after_delete_trigger AFTER DELETE ON pgstac.items REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
+
+CREATE TRIGGER items_after_delete_trigger AFTER DELETE ON pgstac.items REFERENCING OLD TABLE AS newdata FOR EACH STATEMENT EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE TRIGGER items_after_update_trigger AFTER UPDATE ON pgstac.items REFERENCING NEW TABLE AS newdata FOR EACH STATEMENT EXECUTE FUNCTION partition_after_triggerfunc();
+
+CREATE OR REPLACE FUNCTION pgstac.collection_base_item(cid text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE PARALLEL SAFE
+AS $function$
+    SELECT collection_base_item(content)
+    FROM collections
+    WHERE id = cid
+    LIMIT 1;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.content_dehydrate(content jsonb)
+ RETURNS items
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+    out items;
+    props jsonb;
+BEGIN
+    out.id := content->>'id';
+    out.geometry := stac_geom(content);
+    out.collection := content->>'collection';
+    props := content->'properties';
+    out.datetime := stac_datetime(content);
+    out.end_datetime := stac_end_datetime(content);
+    out.datetime_is_range := CASE
+        WHEN props->'datetime' IS NOT NULL AND props->'datetime' <> 'null'::jsonb THEN FALSE
+        ELSE (
+            (props->'start_datetime' IS NOT NULL AND props->'start_datetime' <> 'null'::jsonb)
+            OR (props->'end_datetime' IS NOT NULL AND props->'end_datetime' <> 'null'::jsonb)
+        )
+    END;
+    out.stac_version := content->>'stac_version';
+    out.stac_extensions := COALESCE(content->'stac_extensions', '[]'::jsonb);
+    out.pgstac_updated_at := now();
+    out.content_hash := pgstac_item_hash(content);
+
+    -- Split columns: dedicated storage for standard top-level STAC fields.
+    -- These enable index-only scans on promoted queryables and JSONB-free hot paths.
+    out.bbox       := content->'bbox';
+    out.links      := COALESCE(content->'links', '[]'::jsonb);
+    out.assets     := COALESCE(content->'assets', '{}'::jsonb);
+    out.properties := strip_promoted_properties(props);
+    out.extra      := content - '{id,geometry,collection,type,bbox,links,assets,properties,stac_version,stac_extensions}'::text[];
+
+    out.created             := (props->>'created')::timestamptz;
+    out.updated             := (props->>'updated')::timestamptz;
+    out.platform            := props->>'platform';
+    out.instruments         := to_text_array(props->'instruments');
+    out.constellation       := props->>'constellation';
+    out.mission             := props->>'mission';
+    out.eo_cloud_cover    := (props->>'eo:cloud_cover')::float8;
+    out.eo_bands          := props->'eo:bands';
+    out.eo_snow_cover     := (props->>'eo:snow_cover')::float8;
+    out.gsd               := (props->>'gsd')::float8;
+    out.proj_epsg         := (props->>'proj:epsg')::integer;
+    out.proj_wkt2         := props->>'proj:wkt2';
+    out.proj_projjson     := props->'proj:projjson';
+    out.proj_bbox         := props->'proj:bbox';
+    out.proj_centroid     := props->'proj:centroid';
+    out.proj_shape        := props->'proj:shape';
+    out.proj_transform    := props->'proj:transform';
+    out.sci_doi           := props->>'sci:doi';
+    out.sci_citation      := props->>'sci:citation';
+    out.sci_publications  := props->'sci:publications';
+    out.view_off_nadir    := (props->>'view:off_nadir')::float8;
+    out.view_incidence_angle := (props->>'view:incidence_angle')::float8;
+    out.view_azimuth      := (props->>'view:azimuth')::float8;
+    out.view_sun_azimuth  := (props->>'view:sun_azimuth')::float8;
+    out.view_sun_elevation := (props->>'view:sun_elevation')::float8;
+    out.file_size         := (props->>'file:size')::bigint;
+    out.file_header_size  := (props->>'file:header_size')::bigint;
+    out.file_checksum     := props->>'file:checksum';
+    out.file_byte_order   := props->>'file:byte_order';
+    out.file_values_regex := props->>'file:values_regex';
+    out.sat_orbit_state   := props->>'sat:orbit_state';
+    out.sat_relative_orbit := (props->>'sat:relative_orbit')::integer;
+    out.sat_absolute_orbit := (props->>'sat:absolute_orbit')::integer;
+
+    -- fragment_id is NULL on initial dehydration; assigned by the staging trigger.
+    out.fragment_id := NULL;
+    RETURN out;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    geom jsonb;
+    output jsonb;
+    frag_content jsonb;
+    merged_assets jsonb;
+    merged_properties jsonb;
+    hydrated_stac_version text;
+    hydrated_stac_extensions jsonb;
+BEGIN
+    IF include_field('geometry', fields) THEN
+        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
+    END IF;
+
+    -- Fetch shared fragment content (NULL when item has no fragment).
+    IF _item.fragment_id IS NOT NULL THEN
+        SELECT content INTO frag_content FROM item_fragments WHERE id = _item.fragment_id;
+    END IF;
+
+    -- Merge: fragment provides shared asset/property values; per-item provides individual values.
+    merged_assets     := jsonb_merge_level1(frag_content->'assets',     _item.assets);
+    merged_properties := jsonb_merge_level1(frag_content->'properties', _item.properties);
+    merged_properties := promoted_properties_from_item(_item) || COALESCE(merged_properties, '{}'::jsonb);
+    hydrated_stac_version := COALESCE(_item.stac_version, frag_content->>'stac_version');
+    hydrated_stac_extensions := CASE
+        WHEN _item.stac_extensions IS NOT NULL AND _item.stac_extensions <> '[]'::jsonb THEN _item.stac_extensions
+        ELSE COALESCE(frag_content->'stac_extensions', _item.stac_extensions)
+    END;
+
+    output := jsonb_build_object(
+        'id',         _item.id,
+        'geometry',   geom,
+        'collection', _item.collection,
+        'type',       'Feature'
+    );
+    IF _item.bbox IS NOT NULL THEN
+        output := output || jsonb_build_object('bbox', _item.bbox);
+    END IF;
+    IF hydrated_stac_version IS NOT NULL THEN
+        output := output || jsonb_build_object('stac_version', hydrated_stac_version);
+    END IF;
+    IF hydrated_stac_extensions IS NOT NULL AND hydrated_stac_extensions <> '[]'::jsonb THEN
+        output := output || jsonb_build_object('stac_extensions', hydrated_stac_extensions);
+    END IF;
+    IF _item.links IS NOT NULL THEN
+        output := output || jsonb_build_object('links', _item.links);
+    END IF;
+    IF merged_assets != '{}'::jsonb THEN
+        output := output || jsonb_build_object('assets', merged_assets);
+    END IF;
+    IF merged_properties IS NOT NULL THEN
+        output := output || jsonb_build_object('properties', merged_properties);
+    END IF;
+    IF _item.extra IS NOT NULL THEN
+        output := output || _item.extra;
+    END IF;
+
+    RETURN jsonb_fields(output, fields);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.cql2_query(j jsonb, wrapper text DEFAULT NULL::text)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+#variable_conflict use_variable
+DECLARE
+    args jsonb := j->'args';
+    arg jsonb;
+    op text := lower(j->>'op');
+    cql2op RECORD;
+    literal text;
+    _wrapper text;
+    leftarg text;
+    rightarg text;
+    prop text;
+    extra_props bool := pgstac.additional_properties();
+    queryable_row RECORD;
+BEGIN
+    IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
+        RETURN NULL;
+    END IF;
+    RAISE NOTICE 'CQL2_QUERY: %', j;
+
+    -- check if all properties are represented in the queryables
+    IF NOT extra_props THEN
+        FOR prop IN
+            SELECT DISTINCT p->>0
+            FROM jsonb_path_query(j, 'strict $.**.property') p
+            WHERE p->>0 NOT IN ('id', 'datetime', 'geometry', 'end_datetime', 'collection')
+        LOOP
+            IF (queryable(prop)).nulled_wrapper IS NULL THEN
+                RAISE EXCEPTION 'Term % is not found in queryables.', prop;
+            END IF;
+        END LOOP;
+    END IF;
+
+    IF j ? 'filter' THEN
+        RETURN cql2_query(j->'filter');
+    END IF;
+
+    IF j ? 'upper' THEN
+        RETURN  cql2_query(jsonb_build_object('op', 'upper', 'args', j->'upper'));
+    END IF;
+
+    IF j ? 'lower' THEN
+        RETURN  cql2_query(jsonb_build_object('op', 'lower', 'args', j->'lower'));
+    END IF;
+
+    -- Temporal Query
+    IF op ilike 't_%' or op = 'anyinteracts' THEN
+        RETURN temporal_op_query(op, args);
+    END IF;
+
+    -- If property is a timestamp convert it to text to use with
+    -- general operators
+    IF j ? 'timestamp' THEN
+        RETURN format('%L::timestamptz', to_tstz(j->'timestamp'));
+    END IF;
+    IF j ? 'interval' THEN
+        RAISE EXCEPTION 'Please use temporal operators when using intervals.';
+        RETURN NONE;
+    END IF;
+
+    -- Spatial Query
+    IF op ilike 's_%' or op = 'intersects' THEN
+        RETURN spatial_op_query(op, args);
+    END IF;
+
+    IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
+        IF args->0 ? 'property' THEN
+            leftarg := format('to_text_array(%s)', (queryable(args->0->>'property')).path);
+        END IF;
+        IF args->1 ? 'property' THEN
+            rightarg := format('to_text_array(%s)', (queryable(args->1->>'property')).path);
+        END IF;
+        RETURN FORMAT(
+            '%s %s %s',
+            COALESCE(leftarg, quote_literal(to_text_array(args->0))),
+            CASE op
+                WHEN 'a_equals' THEN '='
+                WHEN 'a_contains' THEN '@>'
+                WHEN 'a_contained_by' THEN '<@'
+                WHEN 'a_overlaps' THEN '&&'
+            END,
+            COALESCE(rightarg, quote_literal(to_text_array(args->1)))
+        );
+    END IF;
+
+    IF op = 'in' THEN
+        RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
+        args := jsonb_build_array(args->0) || (args->1);
+        RAISE NOTICE 'IN2 : %', args;
+    END IF;
+
+
+
+    IF op = 'between' THEN
+        args = jsonb_build_array(
+            args->0,
+            args->1,
+            args->2
+        );
+    END IF;
+
+    -- Make sure that args is an array and run cql2_query on
+    -- each element of the array
+    RAISE NOTICE 'ARGS PRE: %', args;
+    IF j ? 'args' THEN
+        IF jsonb_typeof(args) != 'array' THEN
+            args := jsonb_build_array(args);
+        END IF;
+
+        IF jsonb_path_exists(args, '$[*] ? (@.property == "id" || @.property == "datetime" || @.property == "end_datetime" || @.property == "collection")') THEN
+            wrapper := NULL;
+        ELSE
+            -- if any of the arguments are a property, try to get the property_wrapper
+            FOR arg IN SELECT jsonb_path_query(args, '$[*] ? (@.property != null)') LOOP
+                RAISE NOTICE 'Arg: %', arg;
+                wrapper := (queryable(arg->>'property')).nulled_wrapper;
+                RAISE NOTICE 'Property: %, Wrapper: %', arg, wrapper;
+                IF wrapper IS NOT NULL THEN
+                    EXIT;
+                END IF;
+            END LOOP;
+
+            -- if the property was not in queryables, see if any args were numbers
+            IF
+                wrapper IS NULL
+                AND jsonb_path_exists(args, '$[*] ? (@.type()=="number")')
+            THEN
+                wrapper := 'to_float';
+            END IF;
+            wrapper := coalesce(wrapper, 'to_text');
+        END IF;
+
+        SELECT jsonb_agg(cql2_query(a, wrapper))
+            INTO args
+        FROM jsonb_array_elements(args) a;
+    END IF;
+    RAISE NOTICE 'ARGS: %', args;
+
+    IF op IN ('and', 'or') THEN
+        RETURN
+            format(
+                '(%s)',
+                array_to_string(to_text_array(args), format(' %s ', upper(op)))
+            );
+    END IF;
+
+    IF op = 'in' THEN
+        RAISE NOTICE 'IN --  % %', args->0, to_text(args->0);
+        RETURN format(
+            '%s IN (%s)',
+            to_text(args->0),
+            array_to_string((to_text_array(args))[2:], ',')
+        );
+    END IF;
+
+    -- Look up template from cql2_ops
+    IF j ? 'op' THEN
+        SELECT * INTO cql2op FROM cql2_ops WHERE  cql2_ops.op ilike op;
+        IF FOUND THEN
+            -- If specific index set in queryables for a property cast other arguments to that type
+
+            RETURN format(
+                cql2op.template,
+                VARIADIC (to_text_array(args))
+            );
+        ELSE
+            RAISE EXCEPTION 'Operator % Not Supported.', op;
+        END IF;
+    END IF;
+
+
+    IF wrapper IS NOT NULL THEN
+        RAISE NOTICE 'Wrapping % with %', j, wrapper;
+        IF j ? 'property' THEN
+            SELECT * INTO queryable_row FROM queryable(j->>'property');
+            -- For native promoted columns (expression = path, no JSONB extraction),
+            -- the column's type already matches; applying a cast wrapper like to_int()
+            -- is redundant and prevents index-only scans.  Return the bare expression.
+            IF
+                wrapper = ANY (ARRAY['to_int', 'to_float', 'to_tstz', 'to_text', 'to_text_array'])
+                AND queryable_row.expression = queryable_row.path
+            THEN
+                RETURN queryable_row.expression;
+            END IF;
+            RETURN format('%I(%s)', wrapper, queryable_row.path);
+        ELSE
+            RETURN format('%I(%L)', wrapper, j);
+        END IF;
+    ELSIF j ? 'property' THEN
+        RETURN quote_ident(j->>'property');
+    END IF;
+
+    RETURN quote_literal(to_text(j));
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.indexdef(q queryables)
+ RETURNS text
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+    DECLARE
+        out text;
+    BEGIN
+        IF q.name = 'id' THEN
+            out := 'CREATE UNIQUE INDEX ON %I USING btree (id)';
+        ELSIF q.name = 'datetime' THEN
+            out := 'CREATE INDEX ON %I USING btree (datetime DESC, end_datetime)';
+        ELSIF q.name = 'geometry' THEN
+            out := 'CREATE INDEX ON %I USING gist (geometry)';
+        ELSIF q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN
+            -- Native promoted column: index the column directly, no type-cast wrapper needed.
+            out := format(
+                'CREATE INDEX ON %%I USING %s (%s)',
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                q.property_path
+            );
+        ELSE
+            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                lower(COALESCE(q.property_wrapper, 'to_text')),
+                q.name
+            );
+        END IF;
+        RETURN btrim(out, ' \n\t');
+    END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.items_staging_triggerfunc()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    part text;
+    ts timestamptz := clock_timestamp();
+    nrows int;
+BEGIN
+    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+
+    FOR part IN WITH t AS (
+        SELECT
+            n.content->>'collection' as collection,
+            stac_daterange(n.content->'properties') as dtr,
+            partition_trunc
+        FROM newdata n JOIN collections ON (n.content->>'collection'=collections.id)
+    ), p AS (
+        SELECT
+            collection,
+            COALESCE(date_trunc(partition_trunc::text, lower(dtr)),'-infinity') as d,
+            tstzrange(min(lower(dtr)),max(lower(dtr)),'[]') as dtrange,
+            tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
+        FROM t
+        GROUP BY 1,2
+    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+        RAISE NOTICE 'Partition %', part;
+    END LOOP;
+
+    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
+    -- TEMP tables are session-scoped. Reusing the tmpdata name here is safe even
+    -- with concurrent ingest sessions because each session gets its own temp schema.
+    DROP TABLE IF EXISTS tmpdata;
+    CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
     SELECT
-            content->>'id' as id,
-            stac_geom(content) as geometry,
-            content->>'collection' as collection,
-            stac_datetime(content) as datetime,
-            stac_end_datetime(content) as end_datetime,
-            strip_jsonb(
-                content - '{id,geometry,collection,type}'::text[],
-                collection_base_item(content->>'collection')
-            ) - '{id,geometry,collection,type}'::text[] as content,
-            null::jsonb as private
+        -- orig_content stores the full STAC JSON so we can extract fragment keys later.
+        -- It is NOT a column in items; we use an explicit column list on INSERT below.
+        n.content AS orig_content,
+        (content_dehydrate(n.content)).*
+    FROM newdata n;
+    GET DIAGNOSTICS nrows = ROW_COUNT;
+    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
+
+    -- Batch fragment dedup: compute the configured fragment payload per row using
+    -- fragment_config from the collection row, insert unique fragments, then assign
+    -- fragment_id and strip the fragment-covered keys from per-item assets/properties.
+    RAISE NOTICE 'Batch inserting fragments. %', clock_timestamp() - ts;
+    INSERT INTO item_fragments (collection, hash, content)
+    SELECT DISTINCT ON (collection, pgstac_hash_fragment(fragment_content))
+        collection,
+        pgstac_hash_fragment(fragment_content) AS hash,
+        fragment_content
+    FROM (
+        SELECT
+            t.collection,
+            extract_fragment(t.orig_content, c.fragment_config) AS fragment_content
+        FROM tmpdata t
+        JOIN collections c ON c.id = t.collection
+    ) fragments
+    WHERE fragment_content IS NOT NULL AND fragment_content != '{}'::jsonb
+    ON CONFLICT (collection, hash) DO NOTHING;
+
+    RAISE NOTICE 'Assigning fragment_id. %', clock_timestamp() - ts;
+    UPDATE tmpdata t
+    SET
+        fragment_id = f.id,
+        -- Strip the fragment-covered keys from per-item columns so items.assets/properties
+        -- only contain per-item-specific values; fragment provides the shared baseline.
+        stac_version = CASE
+            WHEN 'stac_version' = ANY(c.fragment_config) THEN NULL
+            ELSE t.stac_version
+        END,
+        stac_extensions = CASE
+            WHEN 'stac_extensions' = ANY(c.fragment_config) THEN '[]'::jsonb
+            ELSE t.stac_extensions
+        END,
+        assets     = strip_fragment_col(t.assets,     'assets',     c.fragment_config),
+        properties = strip_fragment_col(t.properties, 'properties', c.fragment_config)
+    FROM collections c,
+         item_fragments f
+    WHERE c.id = t.collection
+      AND f.collection = t.collection
+      AND c.fragment_config IS NOT NULL
+      AND f.hash = pgstac_hash_fragment(extract_fragment(t.orig_content, c.fragment_config));
+
+    -- Queue registry sampling per collection (async via run_or_queue so it does not
+    -- block the ingest transaction).  One queued call per distinct collection in the batch.
+    PERFORM run_or_queue(format('SELECT update_field_registry_from_items(%L);', c))
+    FROM (SELECT DISTINCT collection FROM tmpdata) AS cte(c);
+
+    -- Explicit column list excludes the orig_content extra column we added to tmpdata.
+    RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
+    IF TG_TABLE_NAME = 'items_staging' THEN
+        INSERT INTO items (id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit)
+        SELECT id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit
+        FROM tmpdata;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+    ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
+        INSERT INTO items (id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit)
+        SELECT id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit
+        FROM tmpdata ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+    ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
+        EXECUTE format(
+            $sql$
+            DELETE FROM items i USING tmpdata s
+            WHERE
+                i.id = s.id
+                AND i.collection = s.collection
+                AND (
+                    %s
+                )
+            $sql$,
+            items_content_distinct_sql('i', 's')
+        );
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
+        INSERT INTO items (id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit)
+        SELECT id, geometry, collection, datetime, end_datetime, pgstac_updated_at,
+            datetime_is_range, stac_version, stac_extensions, content_hash, fragment_id, bbox, links, assets, properties, extra,
+            created, updated, platform, instruments, constellation, mission,
+            eo_cloud_cover, eo_bands, eo_snow_cover, gsd,
+            proj_epsg, proj_wkt2, proj_projjson, proj_bbox, proj_centroid, proj_shape, proj_transform,
+            sci_doi, sci_citation, sci_publications,
+            view_off_nadir, view_incidence_angle, view_azimuth, view_sun_azimuth, view_sun_elevation,
+            file_size, file_header_size, file_checksum, file_byte_order, file_values_regex,
+            sat_orbit_state, sat_relative_orbit, sat_absolute_orbit
+        FROM tmpdata ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS nrows = ROW_COUNT;
+        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+    END IF;
+
+    RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
+    -- Use TG_TABLE_NAME so the correct staging table is cleared.
+    -- The previous hard-coded 'DELETE FROM items_staging' was a bug that left
+    -- items_staging_ignore and items_staging_upsert un-cleared after processing.
+    EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
+    RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+
+    RETURN NULL;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.merge_jsonb(_a jsonb, _b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    SELECT
+    CASE
+        WHEN _a = '"𒍟※"'::jsonb THEN NULL
+        WHEN _a IS NULL THEN _b
+        WHEN jsonb_typeof(_a) = 'null' THEN 'null'::jsonb
+        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
+            (
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, merge_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(coalesce(_a,'{}'::jsonb)) as a
+                    FULL JOIN
+                        jsonb_each(coalesce(_b,'{}'::jsonb)) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
+            )
+        WHEN
+            jsonb_typeof(_a) = 'array'
+            AND jsonb_typeof(_b) = 'array'
+            AND jsonb_array_length(_a) = jsonb_array_length(_b)
+        THEN
+            (
+                SELECT jsonb_agg(m) FROM
+                    ( SELECT
+                        merge_jsonb(
+                            jsonb_array_elements(_a),
+                            jsonb_array_elements(_b)
+                        ) as m
+                    ) as l
+            )
+        ELSE _a
+    END
     ;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.missing_queryables(_collection text, _tablesample double precision DEFAULT 5, minrows double precision DEFAULT 10)
+ RETURNS TABLE(collection text, name text, definition jsonb, property_wrapper text)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    q text;
+    _partition text;
+    explain_json json;
+    psize float;
+    estrows float;
+BEGIN
+    SELECT format('_items_%s', key) INTO _partition FROM collections WHERE id=_collection;
+
+    EXECUTE format('EXPLAIN (format json) SELECT 1 FROM %I;', _partition)
+    INTO explain_json;
+    psize := explain_json->0->'Plan'->'Plan Rows';
+    estrows := _tablesample * .01 * psize;
+    IF estrows < minrows THEN
+        _tablesample := least(100,greatest(_tablesample, (estrows / psize) / 100));
+        RAISE NOTICE '%', (psize / estrows) / 100;
+    END IF;
+    RAISE NOTICE 'Using tablesample % to find missing queryables from % % that has ~% rows estrows: %', _tablesample, _collection, _partition, psize, estrows;
+
+    q := format(
+        $q$
+            WITH q AS (
+                SELECT * FROM queryables
+                WHERE
+                    collection_ids IS NULL
+                    OR %L = ANY(collection_ids)
+            ), t AS (
+                SELECT
+                    properties
+                FROM
+                    %I
+                TABLESAMPLE SYSTEM(%L)
+            ), p AS (
+                SELECT DISTINCT ON (key)
+                    key,
+                    value,
+                    s.definition
+                FROM t
+                JOIN LATERAL jsonb_each(properties) ON TRUE
+                LEFT JOIN q ON (q.name=key)
+                LEFT JOIN stac_extension_queryables s ON (s.name=key)
+                WHERE q.definition IS NULL
+            )
+            SELECT
+                %L,
+                key,
+                COALESCE(definition, jsonb_build_object('type',jsonb_typeof(value))) as definition,
+                CASE
+                    WHEN definition->>'type' = 'integer' THEN 'to_int'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'number' THEN 'to_float'
+                    WHEN COALESCE(definition->>'type', jsonb_typeof(value)) = 'array' THEN 'to_text_array'
+                    ELSE 'to_text'
+                END
+            FROM p;
+        $q$,
+        _collection,
+        _partition,
+        _tablesample,
+        _collection
+    );
+    RETURN QUERY EXECUTE q;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.partition_after_triggerfunc()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    p text;
+    t timestamptz := clock_timestamp();
+BEGIN
+    RAISE NOTICE 'Updating partition stats %', t;
+    FOR p IN SELECT DISTINCT partition
+        FROM newdata n JOIN partition_sys_meta p
+        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
+    LOOP
+        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
+    END LOOP;
+    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
+    RETURN NULL;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.queryable(dotpath text, OUT path text, OUT expression text, OUT wrapper text, OUT nulled_wrapper text)
+ RETURNS record
+ LANGUAGE plpgsql
+ STABLE STRICT
+AS $function$
+DECLARE
+    q RECORD;
+    path_elements text[];
+BEGIN
+    dotpath := replace(dotpath, 'properties.', '');
+    IF dotpath = 'start_datetime' THEN
+        dotpath := 'datetime';
+    END IF;
+    IF dotpath IN ('id', 'geometry', 'datetime', 'end_datetime', 'collection') THEN
+        path := dotpath;
+        expression := dotpath;
+        wrapper := NULL;
+        RETURN;
+    END IF;
+
+    SELECT * INTO q FROM queryables
+        WHERE
+            name=dotpath
+            OR name = 'properties.' || dotpath
+            OR name = replace(dotpath, 'properties.', '')
+    ;
+    IF q.property_wrapper IS NULL THEN
+        IF q.definition->>'type' = 'number' THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSE
+            nulled_wrapper := NULL;
+            wrapper := 'to_text';
+        END IF;
+    ELSE
+        wrapper := q.property_wrapper;
+        nulled_wrapper := wrapper;
+    END IF;
+    IF q.property_path IS NOT NULL THEN
+        path := q.property_path;
+    ELSE
+        path_elements := string_to_array(dotpath, '.');
+        IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
+            -- links, assets, stac_version, stac_extensions are now split columns.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := path_elements[1];
+            ELSE
+                path := format('%I->%s', path_elements[1], array_to_path(path_elements[2:]));
+            END IF;
+        ELSIF path_elements[1] = 'properties' THEN
+            -- properties is a split JSONB column; generate properties->... path.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := 'properties';
+            ELSE
+                path := format('properties->%s', array_to_path(path_elements[2:]));
+            END IF;
+        ELSE
+            -- Non-prefixed queryable names are assumed to live in properties.
+            path := format($F$properties->%s$F$, array_to_path(path_elements));
+        END IF;
+    END IF;
+    IF queryable_uses_native_path(path) THEN
+        IF q.definition->>'type' IN ('number', 'integer') OR q.property_wrapper IN ('to_int', 'to_float') THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSIF q.property_wrapper IS NULL THEN
+            wrapper := 'to_text';
+            nulled_wrapper := NULL;
+        END IF;
+    END IF;
+    IF wrapper IS NULL OR queryable_uses_native_path(path) THEN
+        expression := path;
+    ELSE
+        expression := format('%I(%s)', wrapper, path);
+    END IF;
+    RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.queryable_indexes(treeroot text DEFAULT 'items'::text, changes boolean DEFAULT false, OUT collection text, OUT partition text, OUT field text, OUT indexname text, OUT existing_idx text, OUT queryable_idx text)
+ RETURNS SETOF record
+ LANGUAGE sql
+AS $function$
+WITH p AS (
+        SELECT
+            relid::text as partition,
+            replace(replace(
+                CASE
+                    WHEN parentrelid::regclass::text='items' THEN pg_get_expr(c.relpartbound, c.oid)
+                    ELSE pg_get_expr(parent.relpartbound, parent.oid)
+                END,
+                'FOR VALUES IN (''',''), ''')',
+                ''
+            ) AS collection
+        FROM pg_partition_tree(treeroot)
+        JOIN pg_class c ON (relid::regclass = c.oid)
+        JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
+    ), i AS (
+        SELECT
+            partition,
+            indexname,
+            regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
+            COALESCE(
+                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
+                CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
+            ) AS field
+        FROM
+            pg_indexes
+            JOIN p ON (tablename=partition)
+    ), q AS (
+        SELECT
+            queryable_index_field(queryables) AS field,
+            collection,
+            partition,
+            format(indexdef(queryables), partition) as qidx
+        FROM queryables, unnest_collection(queryables.collection_ids) collection
+            JOIN p USING (collection)
+        WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
+    )
+    SELECT
+        collection,
+        partition,
+        field,
+        indexname,
+        iidx as existing_idx,
+        qidx as queryable_idx
+    FROM i FULL JOIN q USING (field, partition)
+    WHERE CASE WHEN changes THEN lower(iidx) IS DISTINCT FROM lower(qidx) ELSE TRUE END;
+;
 $function$
 ;
 
@@ -709,7 +2866,6 @@ DECLARE
     full_where text;
     init_ts timestamptz := clock_timestamp();
     timer timestamptz := clock_timestamp();
-    hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
     collection jsonb;
@@ -756,15 +2912,10 @@ BEGIN
     RAISE NOTICE 'Time to get counts and build query %', age_ms(timer);
     timer := clock_timestamp();
 
-    IF hydrate THEN
-        RAISE NOTICE 'Getting hydrated data.';
-    ELSE
-        RAISE NOTICE 'Getting non-hydrated data.';
-    END IF;
-    RAISE NOTICE 'CACHE SET TO %', get_setting_bool('format_cache');
+    RAISE NOTICE 'Getting hydrated data.';
     RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
-    SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
+    SELECT jsonb_agg(format_item(i, _fields)) INTO out_records
     FROM search_rows(
         full_where,
         orderby,
@@ -970,6 +3121,152 @@ BEGIN
 END;
 $function$
 ;
+
+CREATE OR REPLACE FUNCTION pgstac.stac_search_to_where(j jsonb)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+    where_segments text[];
+    _where text;
+    dtrange tstzrange;
+    collections text[];
+    geom geometry;
+    sdate timestamptz;
+    edate timestamptz;
+    filterlang text;
+    filter jsonb := j->'filter';
+    ft_query tsquery;
+BEGIN
+    IF j ? 'ids' THEN
+        where_segments := where_segments || format('id = ANY (%L) ', to_text_array(j->'ids'));
+    END IF;
+
+    IF j ? 'collections' THEN
+        collections := to_text_array(j->'collections');
+        where_segments := where_segments || format('collection = ANY (%L) ', collections);
+    END IF;
+
+    IF j ? 'datetime' THEN
+        dtrange := parse_dtrange(j->'datetime');
+        sdate := lower(dtrange);
+        edate := upper(dtrange);
+
+        where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
+            edate,
+            sdate
+        );
+    END IF;
+
+    IF j ? 'q' THEN
+        ft_query := q_to_tsquery(j->'q');
+        where_segments := where_segments || format(
+            $quote$
+            (
+                -- Use the split properties column directly (v0.10 schema).
+                -- Previously read from content->'properties'->>'description' etc.
+                to_tsvector('english', properties->>'description') ||
+                to_tsvector('english', coalesce(properties->>'title', '')) ||
+                to_tsvector('english', coalesce(properties->>'keywords', ''))
+            ) @@ %L
+            $quote$,
+            ft_query
+        );
+    END IF;
+
+    geom := stac_geom(j);
+    IF geom IS NOT NULL THEN
+        where_segments := where_segments || format('st_intersects(geometry, %L)',geom);
+    END IF;
+
+    filterlang := COALESCE(
+        j->>'filter-lang',
+        get_setting('default_filter_lang', j->'conf')
+    );
+    IF NOT filter @? '$.**.op' THEN
+        filterlang := 'cql-json';
+    END IF;
+
+    IF filterlang NOT IN ('cql-json','cql2-json') AND j ? 'filter' THEN
+        RAISE EXCEPTION '% is not a supported filter-lang. Please use cql-json or cql2-json.', filterlang;
+    END IF;
+
+    IF j ? 'query' AND j ? 'filter' THEN
+        RAISE EXCEPTION 'Can only use either query or filter at one time.';
+    END IF;
+
+    IF j ? 'query' THEN
+        filter := query_to_cql2(j->'query');
+    ELSIF filterlang = 'cql-json' THEN
+        filter := cql1_to_cql2(filter);
+    END IF;
+    RAISE NOTICE 'FILTER: %', filter;
+    where_segments := where_segments || cql2_query(filter);
+    IF cardinality(where_segments) < 1 THEN
+        RETURN ' TRUE ';
+    END IF;
+
+    _where := array_to_string(array_remove(where_segments, NULL), ' AND ');
+
+    IF _where IS NULL OR BTRIM(_where) = '' THEN
+        RETURN ' TRUE ';
+    END IF;
+    RETURN _where;
+
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.strip_jsonb(_a jsonb, _b jsonb)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    -- strip_jsonb: RETAINED FOR USE BY MIGRATION SCRIPTS ONLY.
+    -- Must not be called from any ingest, hydrate, or search code path after v0.10.
+    -- Will be removed once the migration path has been finalized and tested.
+    SELECT
+    CASE
+
+        WHEN _a IS NULL AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
+        WHEN _a IS NULL THEN NULL
+        WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
+        WHEN _a = _b THEN NULL
+        WHEN jsonb_typeof(_a) = 'null' THEN 'null'::jsonb
+        WHEN _b IS NULL THEN _a
+        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
+            (
+                SELECT coalesce(jsonb_object_agg(sub.key, sub.val), '{}'::jsonb)
+                FROM (
+                    SELECT key, strip_jsonb(a.value, b.value) AS val
+                    FROM
+                        jsonb_each(_a) as a
+                    FULL JOIN
+                        jsonb_each(_b) as b
+                    USING (key)
+                ) sub
+                WHERE sub.val IS NOT NULL
+            )
+        WHEN
+            jsonb_typeof(_a) = 'array'
+            AND jsonb_typeof(_b) = 'array'
+            AND jsonb_array_length(_a) = jsonb_array_length(_b)
+        THEN
+            (
+                SELECT jsonb_agg(m) FROM
+                    ( SELECT
+                        strip_jsonb(
+                            jsonb_array_elements(_a),
+                            jsonb_array_elements(_b)
+                        ) as m
+                    ) as l
+            )
+        ELSE _a
+    END
+    ;
+$function$
+;
 DO $$
   BEGIN
     INSERT INTO queryables (name, definition, property_wrapper, property_index_type) VALUES
@@ -996,6 +3293,35 @@ DO $$
     RAISE NOTICE '%', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+
+-- Register promoted native-column queryables (v0.10 split schema).
+-- Each entry maps a STAC property name to the promoted items column via property_path.
+-- CQL2 queries and auto-created indexes will use the native column, not JSONB extraction.
+-- The seed data lives in promoted_queryables_defaults() (002a_queryables.sql) so it
+-- only needs to be maintained in one place.
+--
+-- Pass 1: insert rows that do not yet exist.
+INSERT INTO queryables (name, definition, property_path, property_wrapper)
+SELECT p.name, p.definition, p.property_path, p.property_wrapper
+FROM promoted_queryables_defaults() p
+WHERE NOT EXISTS (
+    SELECT 1 FROM queryables q WHERE q.name = p.name
+);
+
+-- Pass 2: backfill property_path/property_wrapper on rows that were created by an
+-- older install (pre-v0.10) and therefore have property_path=NULL.
+UPDATE queryables q
+SET property_path = CASE
+      WHEN q.property_index_type IS NULL THEN COALESCE(q.property_path, p.property_path)
+      ELSE q.property_path
+    END,
+    property_wrapper = CASE
+      WHEN q.property_index_type IS NULL THEN COALESCE(q.property_wrapper, p.property_wrapper)
+      ELSE q.property_wrapper
+    END,
+    definition = COALESCE(q.definition, p.definition)
+FROM promoted_queryables_defaults() p
+WHERE q.name = p.name;
 
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
@@ -1075,8 +3401,34 @@ ALTER FUNCTION pin_search SECURITY DEFINER;
 ALTER FUNCTION unpin_search SECURITY DEFINER;
 ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
+ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
+ALTER FUNCTION pgstac_item_hash(jsonb) SECURITY DEFINER;
+ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
+ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
+ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
+ALTER FUNCTION items_touch_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION items_delete_log_trigger SECURITY DEFINER;
+ALTER FUNCTION strip_promoted_properties(jsonb) SECURITY DEFINER;
+ALTER FUNCTION tstz_to_stac_text(timestamptz) SECURITY DEFINER;
+ALTER FUNCTION temporal_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION promoted_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION extract_fragment(jsonb, text[]) SECURITY DEFINER;
+ALTER FUNCTION pgstac_hash_fragment(jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_fragments(text, interval) SECURITY DEFINER;
+ALTER FUNCTION strip_fragment_col(jsonb, text, text[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_sample(text, jsonb[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_items(text) SECURITY DEFINER;
+ALTER FUNCTION refresh_field_registry(text, interval) SECURITY DEFINER;
+ALTER FUNCTION collection_fragment_config_default(jsonb) SECURITY DEFINER;
+ALTER FUNCTION jsonb_leaf_rows(jsonb, text) SECURITY DEFINER;
+ALTER FUNCTION jsonb_common_values(jsonb, jsonb) SECURITY DEFINER;
+ALTER FUNCTION jsonb_merge_level1(jsonb, jsonb) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_text(text[]) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_array(text) SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -1087,6 +3439,9 @@ GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
+GRANT EXECUTE ON FUNCTION pgstac_item_hash TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 
@@ -1099,6 +3454,9 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
+
+REVOKE ALL PRIVILEGES ON PROCEDURE gc_deleted_items_log_committed(interval, integer) FROM public;
+GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgstac_admin;
 
 RESET ROLE;
 
