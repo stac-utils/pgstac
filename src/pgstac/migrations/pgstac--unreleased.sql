@@ -660,13 +660,56 @@ CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
     END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
--- pgstac_item_hash: sha256 of the canonical (RFC 8785-aligned) STAC item JSON.
--- Externally reproducible: a client canonicalizes its local STAC item with the
--- recipe documented on jsonb_canonical and hashes it to compare against
--- content_hash, deciding whether an upload is needed without a DB round-trip.
-CREATE OR REPLACE FUNCTION pgstac_item_hash(item_json jsonb) RETURNS text AS $$
-    SELECT encode(sha256(convert_to(jsonb_canonical(item_json), 'UTF8')), 'hex');
+-- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
+-- Returns bytea so callers store the compact binary digest directly (32 B vs
+-- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
+-- needed for display or external comparison.
+-- Externally reproducible: sha256(utf8_bytes(jsonb_canonical(j))).
+-- The private jsonb column on items/collections is intentionally excluded — it
+-- stores operator metadata outside the STAC item identity contract.
+CREATE OR REPLACE FUNCTION jsonb_hash(j jsonb) RETURNS bytea AS $$
+    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
+-- max_depth guards against runaway recursion on pathologically nested documents.
+-- Used by the field registry to track which paths exist in a collection's items.
+CREATE OR REPLACE FUNCTION jsonb_field_rows(
+    data jsonb,
+    parent_path text DEFAULT '',
+    max_depth int DEFAULT 20
+) RETURNS TABLE (path text, is_leaf boolean, value_kind text) AS $$
+DECLARE
+    k text;
+    v jsonb;
+    current_path text;
+    jtype text;
+BEGIN
+    IF data IS NULL OR max_depth <= 0 THEN
+        RETURN;
+    END IF;
+    jtype := jsonb_typeof(data);
+    IF jtype = 'object' THEN
+        FOR k, v IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE WHEN parent_path = '' THEN k ELSE parent_path || '.' || k END;
+            IF jsonb_typeof(v) IN ('object', 'array') THEN
+                RETURN QUERY SELECT current_path, FALSE, jsonb_typeof(v);
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, current_path, max_depth - 1);
+            ELSE
+                RETURN QUERY SELECT current_path, TRUE, jsonb_typeof(v);
+            END IF;
+        END LOOP;
+    ELSIF jtype = 'array' THEN
+        -- Walk array elements (e.g. arrays of nested objects); arrays of scalars
+        -- are already handled as leaves in the object branch above.
+        FOR v IN SELECT jsonb_array_elements(data) LOOP
+            IF jsonb_typeof(v) = 'object' THEN
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, parent_path, max_depth - 1);
+            END IF;
+        END LOOP;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- jsonb_leaf_rows: Recursively flatten JSONB into dot-path/value rows.
 -- Arrays, explicit JSON nulls, and empty objects are treated as atomic values.
@@ -2504,7 +2547,10 @@ CREATE TABLE items (
     stac_version text,
     stac_extensions jsonb DEFAULT '[]'::jsonb,
     pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
-    content_hash text NOT NULL DEFAULT '',
+    -- 32-byte sha256 of the canonical (RFC 8785-aligned) STAC item JSON set at
+    -- ingest time. Allows external clients to detect unchanged items without a
+    -- full fetch. Does NOT include the private column (operator metadata).
+    item_hash bytea NOT NULL DEFAULT '\x'::bytea,
     -- Split columns. Keep fragment_id unmanaged by an FK
     -- because incremental NOT VALID FKs on partitioned items are not supported.
     fragment_id bigint,
@@ -2547,7 +2593,10 @@ CREATE TABLE items (
     sat_orbit_state text,
     sat_relative_orbit integer,
     sat_absolute_orbit integer,
-    link_hrefs text[]
+    link_hrefs text[],
+    -- Operator-private metadata: not returned by the STAC API, not included in
+    -- item_hash, not part of the dehydrate/hydrate path. Set via direct UPDATE.
+    private jsonb
 )
 PARTITION BY LIST (collection)
 ;
@@ -2559,7 +2608,7 @@ CREATE TABLE IF NOT EXISTS items_deleted_log (
     partition text,
     datetime timestamptz,
     end_datetime timestamptz,
-    content_hash text NOT NULL DEFAULT '',
+    item_hash bytea NOT NULL DEFAULT '\x'::bytea,
     deleted_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS items_deleted_log_deleted_at_idx ON items_deleted_log (deleted_at);
@@ -2639,7 +2688,7 @@ BEGIN
         format('%s.datetime_is_range IS DISTINCT FROM %s.datetime_is_range', left_ref, right_ref),
         format('%s.datetime IS DISTINCT FROM %s.datetime', left_ref, right_ref),
         format('%s.end_datetime IS DISTINCT FROM %s.end_datetime', left_ref, right_ref),
-        format('%s.content_hash IS DISTINCT FROM %s.content_hash', left_ref, right_ref),
+        format('%s.item_hash IS DISTINCT FROM %s.item_hash', left_ref, right_ref),
         format('%s.geometry IS DISTINCT FROM %s.geometry', left_ref, right_ref),
         format('%s.bbox IS DISTINCT FROM %s.bbox', left_ref, right_ref),
         format('%s.links IS DISTINCT FROM %s.links', left_ref, right_ref),
@@ -2674,14 +2723,11 @@ END;
 $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- items_touch_triggerfunc: refresh pgstac_updated_at when a direct UPDATE changes
--- the stored item content. It deliberately does NOT recompute content_hash:
--- content_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
+-- the stored item content. It deliberately does NOT recompute item_hash:
+-- item_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
 -- through create_item / upsert_item / update_item (set once in content_dehydrate),
--- so it stays externally reproducible by a client hashing its own copy. The old
--- implementation recomputed pgstac_item_hash(content_hydrate(NEW)) here, which
--- hashed the *hydrated* output (promoted-column coercions, timestamp
--- canonicalization) and therefore never matched the ingest hash. A raw
--- `UPDATE items SET ...` that bypasses the staging path leaves content_hash
+-- so it stays externally reproducible by a client hashing its own copy.
+-- A raw `UPDATE items SET ...` that bypasses the staging path leaves item_hash
 -- referring to the last ingested document; re-ingest via upsert_item to refresh.
 CREATE OR REPLACE FUNCTION items_touch_triggerfunc() RETURNS TRIGGER AS $$
 BEGIN
@@ -2709,7 +2755,7 @@ BEGIN
         partition,
         datetime,
         end_datetime,
-        content_hash
+        item_hash
     )
     SELECT
         old_rows.id,
@@ -2717,7 +2763,7 @@ BEGIN
         (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
         old_rows.datetime,
         old_rows.end_datetime,
-        old_rows.content_hash
+        old_rows.item_hash
     FROM old_rows;
 
     RETURN NULL;
@@ -2887,7 +2933,7 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
         content->>'stac_version' AS stac_version,
         COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
         now() AS pgstac_updated_at,
-        pgstac_item_hash(content) AS content_hash,
+        pgstac.jsonb_hash(content) AS item_hash,
         NULL::bigint AS fragment_id,
         content->'bbox' AS bbox,
         CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,
@@ -2933,7 +2979,9 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
         ((content->'properties')->>'sat:orbit_state') AS sat_orbit_state,
         ((content->'properties')->>'sat:relative_orbit')::integer AS sat_relative_orbit,
         ((content->'properties')->>'sat:absolute_orbit')::integer AS sat_absolute_orbit,
-        stac_links_href_array(content->'links') AS link_hrefs;
+        stac_links_href_array(content->'links') AS link_hrefs,
+        -- private is operator-managed metadata outside the STAC item; always NULL from ingest
+        NULL::jsonb AS private;
 $$ LANGUAGE SQL STABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
@@ -3145,7 +3193,7 @@ CREATE OR REPLACE FUNCTION items_staging_dehydrate(_contents jsonb[]) RETURNS SE
                     ELSE r.stac_extensions
                 END AS stac_extensions,
                 r.pgstac_updated_at,
-                r.content_hash,
+                r.item_hash,
                 af.id AS fragment_id,
                 r.bbox,
                 CASE
@@ -3188,7 +3236,8 @@ CREATE OR REPLACE FUNCTION items_staging_dehydrate(_contents jsonb[]) RETURNS SE
                 r.sat_orbit_state,
                 r.sat_relative_orbit,
                 r.sat_absolute_orbit,
-                r.link_hrefs
+                r.link_hrefs,
+                NULL::jsonb AS private
             FROM fragmented r
             LEFT JOIN fragments f ON f.collection = r.collection AND f.frag_hash = r.frag_hash
             LEFT JOIN all_fragments af ON af.collection = f.collection AND af.hash = f.frag_hash
@@ -3368,46 +3417,8 @@ $$ LANGUAGE SQL;
 -- ---------------------------------------------------------------------------
 -- Field Registry: walks JSONB item content to track which paths exist in each
 -- collection.  Used to auto-populate queryables and support schema inference.
+-- jsonb_field_rows is defined in 001a_jsonutils.sql (loaded first).
 -- ---------------------------------------------------------------------------
-
--- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
--- max_depth guards against runaway recursion on pathologically nested documents.
-CREATE OR REPLACE FUNCTION jsonb_field_rows(
-    data jsonb,
-    parent_path text DEFAULT '',
-    max_depth int DEFAULT 20
-) RETURNS TABLE (path text, is_leaf boolean, value_kind text) AS $$
-DECLARE
-    k text;
-    v jsonb;
-    current_path text;
-    jtype text;
-BEGIN
-    IF data IS NULL OR max_depth <= 0 THEN
-        RETURN;
-    END IF;
-    jtype := jsonb_typeof(data);
-    IF jtype = 'object' THEN
-        FOR k, v IN SELECT * FROM jsonb_each(data) LOOP
-            current_path := CASE WHEN parent_path = '' THEN k ELSE parent_path || '.' || k END;
-            IF jsonb_typeof(v) IN ('object', 'array') THEN
-                RETURN QUERY SELECT current_path, FALSE, jsonb_typeof(v);
-                RETURN QUERY SELECT * FROM jsonb_field_rows(v, current_path, max_depth - 1);
-            ELSE
-                RETURN QUERY SELECT current_path, TRUE, jsonb_typeof(v);
-            END IF;
-        END LOOP;
-    ELSIF jtype = 'array' THEN
-        -- Walk array elements (e.g. arrays of nested objects); arrays of scalars
-        -- are already handled as leaves in the object branch above.
-        FOR v IN SELECT jsonb_array_elements(data) LOOP
-            IF jsonb_typeof(v) = 'object' THEN
-                RETURN QUERY SELECT * FROM jsonb_field_rows(v, parent_path, max_depth - 1);
-            END IF;
-        END LOOP;
-    END IF;
-END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- update_field_registry_from_sample: UPSERT registry rows from a pre-selected array of
 -- raw item content JSONBs.  Callers supply the sample to decouple sampling strategy
@@ -6153,7 +6164,7 @@ ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
-ALTER FUNCTION pgstac_item_hash(jsonb) SECURITY DEFINER;
+ALTER FUNCTION pgstac.jsonb_hash(jsonb) SECURITY DEFINER;
 ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
 ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
 ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
@@ -6187,7 +6198,7 @@ GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
 GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
 GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
-GRANT EXECUTE ON FUNCTION pgstac_item_hash TO pgstac_read;
+GRANT EXECUTE ON FUNCTION pgstac.jsonb_hash(jsonb) TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 
