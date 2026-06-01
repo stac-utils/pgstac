@@ -695,8 +695,8 @@ BEGIN
     INSERT INTO collections (content) VALUES ('{"id":"pgstac-test-collection2"}'::jsonb) ON CONFLICT DO NOTHING;
     PERFORM check_partition('pgstac-test-collection2', '[2011-01-01,2012-01-01)', '[2011-01-01,2012-01-01)');
 
-    INSERT INTO items (id, collection, datetime, end_datetime, geometry, bbox, links, assets, properties, extra, content_hash)
-        SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, bbox, links, assets, properties, extra, content_hash
+    INSERT INTO items (id, collection, datetime, end_datetime, geometry, bbox, links, assets, properties, extra, item_hash)
+        SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, bbox, links, assets, properties, extra, item_hash
         FROM items WHERE collection='pgstac-test-collection';
 
     UPDATE items SET properties = properties || '{"testsort":1}'::jsonb

@@ -76,8 +76,8 @@ SELECT ok(
     'create_item populates pgstac_updated_at'
 );
 SELECT ok(
-    (SELECT length(content_hash) = 64 FROM items WHERE id='pgstac-test-item-0003' AND collection='pgstac-test-collection'),
-    'create_item generates sha256 content_hash'
+    (SELECT octet_length(item_hash) = 32 FROM items WHERE id='pgstac-test-item-0003' AND collection='pgstac-test-collection'),
+    'create_item generates sha256 item_hash'
 );
 
 SELECT update_item('{"id": "pgstac-test-item-0003", "bbox": [-85.379245, 30.933949, -85.308201, 31.003555], "type": "Feature", "links": [], "assets": {"image": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "roles": ["data"], "title": "RGBIR COG tile", "eo:bands": [{"name": "Red", "common_name": "red"}, {"name": "Green", "common_name": "green"}, {"name": "Blue", "common_name": "blue"}, {"name": "NIR", "common_name": "nir", "description": "near-infrared"}]}, "metadata": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_fgdc_2011/30085/m_3008506_nw_16_1_20110825.txt", "type": "text/plain", "roles": ["metadata"], "title": "FGDC Metdata"}, "thumbnail": {"href": "https://naipeuwest.blob.core.windows.net/naip/v002/al/2011/al_100cm_2011/30085/m_3008506_nw_16_1_20110825.200.jpg", "type": "image/jpeg", "roles": ["thumbnail"], "title": "Thumbnail"}}, "geometry": {"type": "Polygon", "coordinates": [[[-85.309412, 30.933949], [-85.308201, 31.002658], [-85.378084, 31.003555], [-85.379245, 30.934843], [-85.309412, 30.933949]]]}, "collection": "pgstac-test-collection", "properties": {"gsd": 1, "datetime": "2011-08-25T00:00:00Z", "naip:year": "2011", "proj:bbox": [654842, 3423507, 661516, 3431125], "proj:epsg": 26916, "providers": [{"url": "https://www.fsa.usda.gov/programs-and-services/aerial-photography/imagery-programs/naip-imagery/", "name": "USDA Farm Service Agency", "roles": ["producer", "licensor"]}], "naip:state": "al", "proj:shape": [7618, 6674], "eo:cloud_cover": 29, "proj:transform": [1, 0, 654842, 0, -1, 3431125, 0, 0, 1]}, "stac_version": "1.0.0-beta.2", "stac_extensions": ["eo", "projection"]}');
@@ -107,8 +107,8 @@ SELECT results_eq($$
     'updates refresh pgstac_updated_at through items_touch_triggerfunc'
 );
 SELECT ok(
-    (SELECT length(content_hash) = 64 FROM items WHERE id='pgstac-test-item-0003' AND collection='pgstac-test-collection'),
-    'update path generates new sha256 content_hash'
+    (SELECT octet_length(item_hash) = 32 FROM items WHERE id='pgstac-test-item-0003' AND collection='pgstac-test-collection'),
+    'update path generates new sha256 item_hash'
 );
 
 SELECT results_eq(
@@ -175,7 +175,7 @@ SELECT lives_ok($$
         partition,
         datetime,
         end_datetime,
-        content_hash,
+        item_hash,
         deleted_at
     )
     VALUES (
@@ -184,7 +184,7 @@ SELECT lives_ok($$
         NULL,
         now() - '41 days'::interval,
         now() - '41 days'::interval,
-        repeat('a', 64),
+        decode(repeat('aa', 32), 'hex'),
         now() - '40 days'::interval
     );
 $$, 'Insert aged tombstone row for batched gc_deleted_items_log test');
@@ -243,24 +243,24 @@ SELECT ok(
 );
 SELECT results_eq($$
     WITH old_row AS (
-        SELECT pgstac_updated_at, content_hash
+        SELECT pgstac_updated_at, item_hash
         FROM items
         WHERE id='pgstac-test-item-0004' AND collection='pgstac-test-collection'
     ), rewritten AS (
         UPDATE items
         SET datetime = datetime + interval '1 second'
         WHERE id='pgstac-test-item-0004' AND collection='pgstac-test-collection'
-        RETURNING pgstac_updated_at, content_hash
+        RETURNING pgstac_updated_at, item_hash
     )
-    -- pgstac_updated_at refreshes, but content_hash is the canonical hash of the
+    -- pgstac_updated_at refreshes, but item_hash is the canonical hash of the
     -- item *as ingested* and must NOT change on a direct UPDATE (it stays
-    -- externally reproducible). Re-ingest via upsert_item to refresh the hash.
+    -- externally reproducible). Re-ingest via upsert_item to refresh.
     SELECT (SELECT pgstac_updated_at FROM rewritten) >= (SELECT pgstac_updated_at FROM old_row)
-        AND (SELECT content_hash FROM rewritten) = (SELECT content_hash FROM old_row);
+        AND (SELECT item_hash FROM rewritten) = (SELECT item_hash FROM old_row);
     $$,$$
     SELECT TRUE;
     $$,
-    'items_touch_triggerfunc refreshes pgstac_updated_at but leaves content_hash stable on direct updates'
+    'items_touch_triggerfunc refreshes pgstac_updated_at but leaves item_hash stable on direct updates'
 );
 SELECT results_eq($$
     SELECT count(DISTINCT fragment_id)::bigint
@@ -770,7 +770,7 @@ SELECT lives_ok($$
         stac_version,
         stac_extensions,
         pgstac_updated_at,
-        content_hash,
+        item_hash,
         bbox,
         links,
         assets,
@@ -788,7 +788,7 @@ SELECT lives_ok($$
         (item).stac_version,
         (item).stac_extensions,
         (item).pgstac_updated_at,
-        (item).content_hash,
+        (item).item_hash,
         (item).bbox,
         (item).links,
         (item).assets,

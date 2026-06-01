@@ -107,8 +107,10 @@ SELECT results_eq(
     'jsonb_merge_recursive returns the fragment when the item is empty'
 );
 
--- jsonb_canonical / pgstac_item_hash: RFC 8785-aligned, externally reproducible.
+-- jsonb_canonical / jsonb_hash / jsonb_field_rows: RFC 8785-aligned, externally reproducible.
 SELECT has_function('pgstac'::name, 'jsonb_canonical', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'jsonb_hash', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'jsonb_field_rows', ARRAY['jsonb', 'text', 'integer']);
 
 SELECT results_eq(
     $$ SELECT pgstac.jsonb_canonical('{"id":1,"bbox":2}'::jsonb) $$,
@@ -123,7 +125,7 @@ SELECT results_eq(
 );
 
 SELECT results_eq(
-    $$ SELECT pgstac.pgstac_item_hash('{"b":1.0,"a":[3,2,1],"c":{"y":0.10,"x":true},"d":null,"id":"x"}'::jsonb) $$,
-    $$ SELECT '77f18c0a2c2c9f9e4836045bae644ba3d00c0308c9d2c0bd024624c22d532bf7'::text $$,
-    'pgstac_item_hash matches an externally-computed sha256 of the canonical form'
+    $$ SELECT pgstac.jsonb_hash('{"b":1.0,"a":[3,2,1],"c":{"y":0.10,"x":true},"d":null,"id":"x"}'::jsonb) $$,
+    $$ SELECT decode('77f18c0a2c2c9f9e4836045bae644ba3d00c0308c9d2c0bd024624c22d532bf7', 'hex') $$,
+    'jsonb_hash returns a 32-byte bytea matching an externally-computed sha256 of the canonical form'
 );

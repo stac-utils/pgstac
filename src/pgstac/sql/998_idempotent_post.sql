@@ -137,7 +137,7 @@ ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
-ALTER FUNCTION pgstac_item_hash(jsonb) SECURITY DEFINER;
+ALTER FUNCTION pgstac.jsonb_hash(jsonb) SECURITY DEFINER;
 ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
 ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
 ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
@@ -171,7 +171,7 @@ GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
 GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
 GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
-GRANT EXECUTE ON FUNCTION pgstac_item_hash TO pgstac_read;
+GRANT EXECUTE ON FUNCTION pgstac.jsonb_hash(jsonb) TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 

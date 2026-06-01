@@ -126,13 +126,56 @@ CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
     END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
--- pgstac_item_hash: sha256 of the canonical (RFC 8785-aligned) STAC item JSON.
--- Externally reproducible: a client canonicalizes its local STAC item with the
--- recipe documented on jsonb_canonical and hashes it to compare against
--- content_hash, deciding whether an upload is needed without a DB round-trip.
-CREATE OR REPLACE FUNCTION pgstac_item_hash(item_json jsonb) RETURNS text AS $$
-    SELECT encode(sha256(convert_to(jsonb_canonical(item_json), 'UTF8')), 'hex');
+-- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
+-- Returns bytea so callers store the compact binary digest directly (32 B vs
+-- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
+-- needed for display or external comparison.
+-- Externally reproducible: sha256(utf8_bytes(jsonb_canonical(j))).
+-- The private jsonb column on items/collections is intentionally excluded — it
+-- stores operator metadata outside the STAC item identity contract.
+CREATE OR REPLACE FUNCTION jsonb_hash(j jsonb) RETURNS bytea AS $$
+    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
+-- max_depth guards against runaway recursion on pathologically nested documents.
+-- Used by the field registry to track which paths exist in a collection's items.
+CREATE OR REPLACE FUNCTION jsonb_field_rows(
+    data jsonb,
+    parent_path text DEFAULT '',
+    max_depth int DEFAULT 20
+) RETURNS TABLE (path text, is_leaf boolean, value_kind text) AS $$
+DECLARE
+    k text;
+    v jsonb;
+    current_path text;
+    jtype text;
+BEGIN
+    IF data IS NULL OR max_depth <= 0 THEN
+        RETURN;
+    END IF;
+    jtype := jsonb_typeof(data);
+    IF jtype = 'object' THEN
+        FOR k, v IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE WHEN parent_path = '' THEN k ELSE parent_path || '.' || k END;
+            IF jsonb_typeof(v) IN ('object', 'array') THEN
+                RETURN QUERY SELECT current_path, FALSE, jsonb_typeof(v);
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, current_path, max_depth - 1);
+            ELSE
+                RETURN QUERY SELECT current_path, TRUE, jsonb_typeof(v);
+            END IF;
+        END LOOP;
+    ELSIF jtype = 'array' THEN
+        -- Walk array elements (e.g. arrays of nested objects); arrays of scalars
+        -- are already handled as leaves in the object branch above.
+        FOR v IN SELECT jsonb_array_elements(data) LOOP
+            IF jsonb_typeof(v) = 'object' THEN
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, parent_path, max_depth - 1);
+            END IF;
+        END LOOP;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- jsonb_leaf_rows: Recursively flatten JSONB into dot-path/value rows.
 -- Arrays, explicit JSON nulls, and empty objects are treated as atomic values.
