@@ -85,12 +85,10 @@ Note that when pgstac.readonly is set to TRUE that pgstac is unable to use a cac
 
 Runtime configuration of variables can be made with search by passing in configuration in the search json "conf" item.
 
-Runtime configuration is available for **context**, **context_estimated_count**, **context_estimated_cost**, **context_stats_ttl**, and **nohydrate**.
+Runtime configuration is available for **context**, **context_estimated_count**, **context_estimated_cost**, and **context_stats_ttl**.
 
-The nohydrate conf item returns an unhydrated item bypassing the CPU intensive step of rehydrating data with data from the collection metadata. When using the nohydrate conf, the only fields that are respected in the fields extension are geometry and bbox.
-```sql
-SELECT search('{"conf":{"nohydrate"=true}}');
-```
+The legacy `conf.nohydrate` flag is still accepted in the request JSON for backward
+compatibility, but split-storage search always returns hydrated items.
 
 #### PgSTAC Partitioning
 By default PgSTAC partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
