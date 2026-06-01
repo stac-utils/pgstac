@@ -14,7 +14,14 @@ src/pypgstac/python/pypgstac/*.so
 .venv
 .pytest_cache
 .plans/
+.compound-engineering/
+docs/plans/
+STRATEGY.md
+.benchmarks-local/
 .env
+.explorations/
+benchmarks/results/
+scripts/benchmarkv0910
 src/pgstacrust/target/
 src/pgstac-migrate/dist/
 src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst

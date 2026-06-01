@@ -20,6 +20,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         postgresql-contrib-$PG_MAJOR \
         postgresql-$PG_MAJOR-pgtap \
         postgresql-$PG_MAJOR-plpgsql-check \
+        postgresql-$PG_MAJOR-plprofiler \
+        plprofiler \
         postgresql-$PG_MAJOR-partman \
         postgresql-server-dev-$PG_MAJOR \
         build-essential \
@@ -33,8 +35,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && make -C /tmp/pg_tle \
     && make -C /tmp/pg_tle install \
     && rm -rf /tmp/pg_tle \
-    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron'/" /usr/share/postgresql/$PG_MAJOR/postgresql.conf.sample \
-    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron'/" /usr/share/postgresql/postgresql.conf.sample \
+    && sed -i 's/\.readfp(/.read_file(/' /usr/lib/python3/dist-packages/plprofiler/plprofiler_tool.py \
+    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron,plprofiler'/" /usr/share/postgresql/$PG_MAJOR/postgresql.conf.sample \
+    && sed -i "s/^#shared_preload_libraries = .*/shared_preload_libraries = 'pg_tle,pg_stat_statements,pg_cron,plprofiler'/" /usr/share/postgresql/postgresql.conf.sample \
     && apt-get purge -y --auto-remove \
         postgresql-server-dev-$PG_MAJOR \
         build-essential \
@@ -45,6 +48,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libkrb5-dev \
     && apt-get clean && apt-get -y autoremove \
     && rm -rf /var/lib/apt/lists/*
+
+ENV EDITOR=/bin/true
+ENV VISUAL=/bin/true
 
 # The pgstacbase image with latest version of pgstac installed
 FROM pgstacbase AS pgstac

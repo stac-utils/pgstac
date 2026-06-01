@@ -7,6 +7,7 @@ applyTo: "scripts/**"
 See CLAUDE.md "Development Workflow" for usage. All scripts require the Docker compose environment.
 
 - `runinpypgstac` is the foundation — most scripts delegate to it
+- `loadsampledata` has a host wrapper at `scripts/loadsampledata`; prefer that wrapper over calling `runinpypgstac` directly
 - `runinpypgstac` uses the published-package path by default; set `PGPKG_LOCAL_REPO_DIR` to mount a local `pgpkg` checkout at `/pgpkg` when you need an override
 - `scripts/container-scripts/` contains the in-container script payload copied into the pypgstac image; keep host wrappers in `scripts/`
 - `stageversion` modifies version files AND generates migrations — see CLAUDE.md "Migration Process"

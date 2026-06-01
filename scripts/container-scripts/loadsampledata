@@ -1,9 +1,29 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd ${PGSTAC_PGSTAC_DIR:-/opt/src/pgstac}
+cd "${PGSTAC_PGSTAC_DIR:-/opt/src/pgstac}"
+
+fixture_root="tests/testdata/planetary-computer/data"
+fixture_names=(landsat-c2-l2 sentinel-2-l2a naip)
+fixture_items=()
+
+for fixture_name in "${fixture_names[@]}"; do
+    fixture_dir="$fixture_root/$fixture_name"
+    if [[ -f "$fixture_dir/collection.json" && -f "$fixture_dir/items.ndjson" ]]; then
+        fixture_items+=("$fixture_dir/items.ndjson")
+    fi
+done
+
 psql -f pgstac.sql
 psql -v ON_ERROR_STOP=1 <<-EOSQL
     \copy collections (content) FROM 'tests/testdata/collections.ndjson'
     \copy items_staging (content) FROM 'tests/testdata/items.ndjson'
 EOSQL
+
+if [[ ${#fixture_items[@]} -gt 0 ]]; then
+    psql -v ON_ERROR_STOP=1 -c "\\copy collections (content) FROM 'tests/testdata/planetary-computer/collections.ndjson'"
+fi
+
+for fixture_items_file in "${fixture_items[@]}"; do
+    psql -v ON_ERROR_STOP=1 -c "\\copy items_staging (content) FROM '$fixture_items_file'"
+done
