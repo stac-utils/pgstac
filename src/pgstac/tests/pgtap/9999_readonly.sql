@@ -41,4 +41,16 @@ SELECT throws_ok(
     $$ SELECT gc_anonymous_searches(NULL, '{"search_gc_retention_interval":"1 second"}'::jsonb); $$,
     '25006'
 );
+SELECT throws_ok(
+    $$ SELECT gc_deleted_items_log('1 second'::interval); $$,
+    '25006'
+);
+SELECT throws_ok(
+    $$ SELECT gc_deleted_items_log('1 second'::interval, 1); $$,
+    '25006'
+);
+SELECT throws_ok(
+    $$ SELECT gc_deleted_items_log_batch('1 second'::interval, 1); $$,
+    '25006'
+);
 RESET pgstac.readonly;
