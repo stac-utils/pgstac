@@ -264,6 +264,7 @@ DECLARE
     rightarg text;
     prop text;
     extra_props bool := pgstac.additional_properties();
+    queryable_row RECORD;
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -424,7 +425,17 @@ BEGIN
     IF wrapper IS NOT NULL THEN
         RAISE NOTICE 'Wrapping % with %', j, wrapper;
         IF j ? 'property' THEN
-            RETURN format('%I(%s)', wrapper, (queryable(j->>'property')).path);
+            SELECT * INTO queryable_row FROM queryable(j->>'property');
+            -- For native promoted columns (expression = path, no JSONB extraction),
+            -- the column's type already matches; applying a cast wrapper like to_int()
+            -- is redundant and prevents index-only scans.  Return the bare expression.
+            IF
+                wrapper = ANY (ARRAY['to_int', 'to_float', 'to_tstz', 'to_text', 'to_text_array'])
+                AND queryable_row.expression = queryable_row.path
+            THEN
+                RETURN queryable_row.expression;
+            END IF;
+            RETURN format('%I(%s)', wrapper, queryable_row.path);
         ELSE
             RETURN format('%I(%L)', wrapper, j);
         END IF;

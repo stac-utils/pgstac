@@ -112,6 +112,14 @@ CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
     ) FROM unnest(arr) v;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+-- queryable_uses_native_path: Returns true when a queryable path string is a
+-- bare identifier (e.g. 'proj_epsg', 'platform') that maps to a native promoted
+-- column on the items table. Such paths do not need a content->'properties'->...
+-- expression or a type-cast wrapper; the column type already matches.
+CREATE OR REPLACE FUNCTION queryable_uses_native_path(path text) RETURNS boolean AS $$
+    SELECT path ~ '^[a-zA-Z_][a-zA-Z0-9_]*$';
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 
 
@@ -163,14 +171,41 @@ BEGIN
     ELSE
         path_elements := string_to_array(dotpath, '.');
         IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- links, assets, stac_version, stac_extensions are now split columns.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := path_elements[1];
+            ELSE
+                path := format('%I->%s', path_elements[1], array_to_path(path_elements[2:]));
+            END IF;
         ELSIF path_elements[1] = 'properties' THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- properties is a split JSONB column; generate properties->... path.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := 'properties';
+            ELSE
+                path := format('properties->%s', array_to_path(path_elements[2:]));
+            END IF;
         ELSE
-            path := format($F$content->'properties'->%s$F$, array_to_path(path_elements));
+            -- Non-prefixed queryable names are assumed to live in properties.
+            path := format($F$properties->%s$F$, array_to_path(path_elements));
         END IF;
     END IF;
-    expression := format('%I(%s)', wrapper, path);
+    IF queryable_uses_native_path(path) THEN
+        IF q.definition->>'type' IN ('number', 'integer') OR q.property_wrapper IN ('to_int', 'to_float') THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSIF q.property_wrapper IS NULL THEN
+            wrapper := 'to_text';
+            nulled_wrapper := NULL;
+        END IF;
+    END IF;
+    IF wrapper IS NULL OR queryable_uses_native_path(path) THEN
+        expression := path;
+    ELSE
+        expression := format('%I(%s)', wrapper, path);
+    END IF;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
@@ -194,6 +229,17 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+-- queryable_index_field: Returns the index field name for a queryable row.
+-- For promoted native columns (property_path is a bare identifier) the field name
+-- is the column name itself. For JSON-path queryables it is the STAC property name.
+-- Used by the index consistency view to correlate existing indexes with queryables.
+CREATE OR REPLACE FUNCTION queryable_index_field(q queryables) RETURNS text AS $$
+    SELECT CASE
+        WHEN q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN q.property_path
+        ELSE q.name
+    END;
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
@@ -205,6 +251,13 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
             out := 'CREATE INDEX ON %I USING btree (datetime DESC, end_datetime)';
         ELSIF q.name = 'geometry' THEN
             out := 'CREATE INDEX ON %I USING gist (geometry)';
+        ELSIF q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN
+            -- Native promoted column: index the column directly, no type-cast wrapper needed.
+            out := format(
+                'CREATE INDEX ON %%I USING %s (%s)',
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                q.property_path
+            );
         ELSE
             out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
@@ -224,8 +277,8 @@ SELECT
     i.indexname,
     regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -242,8 +295,8 @@ SELECT
     i.indexname,
     indexdef,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -288,8 +341,8 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM
@@ -297,7 +350,7 @@ WITH p AS (
             JOIN p ON (tablename=partition)
     ), q AS (
         SELECT
-            name AS field,
+            queryable_index_field(queryables) AS field,
             collection,
             partition,
             format(indexdef(queryables), partition) as qidx
@@ -515,7 +568,7 @@ BEGIN
                     OR %L = ANY(collection_ids)
             ), t AS (
                 SELECT
-                    content->'properties' AS properties
+                    properties
                 FROM
                     %I
                 TABLESAMPLE SYSTEM(%L)
@@ -567,3 +620,83 @@ CREATE OR REPLACE FUNCTION missing_queryables(_tablesample float DEFAULT 5) RETU
     ORDER BY 2,1
     ;
 $$ LANGUAGE SQL;
+
+-- promoted_item_property_defs: Shared STAC-property mapping for promoted native
+-- item columns. This function lives with queryables metadata so queryable seeding
+-- and items-table property extraction reference the same source of truth.
+CREATE OR REPLACE FUNCTION promoted_item_property_defs()
+RETURNS TABLE (
+    name           text,
+    definition     jsonb,
+    property_path  text
+) AS $$
+    SELECT * FROM (VALUES
+      ('created',             '{"description": "Metadata creation timestamp","type": "string","format": "date-time","title": "Created"}'::jsonb,                         'created'),
+      ('updated',             '{"description": "Metadata update timestamp","type": "string","format": "date-time","title": "Updated"}'::jsonb,                           'updated'),
+      ('platform',            '{"description": "Platform name","type": "string","title": "Platform"}'::jsonb,                                                            'platform'),
+      ('instruments',         '{"description": "Instrument names","type": "array","title": "Instruments"}'::jsonb,                                                       'instruments'),
+      ('constellation',       '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb,                                                 'constellation'),
+      ('mission',             '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb,                                                              'mission'),
+      ('eo:cloud_cover',      '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb,                                             'eo_cloud_cover'),
+      ('eo:bands',            '{"description": "EO band metadata","type": "array","title": "EO Bands"}'::jsonb,                                                          'eo_bands'),
+      ('eo:snow_cover',       '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb,                                               'eo_snow_cover'),
+      ('gsd',                 '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb,                                     'gsd'),
+      ('proj:epsg',           '{"description": "EPSG code","type": "integer","title": "Projection EPSG"}'::jsonb,                                                        'proj_epsg'),
+      ('proj:wkt2',           '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb,                                               'proj_wkt2'),
+      ('proj:projjson',       '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb,                          'proj_projjson'),
+      ('proj:bbox',           '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb,                                                   'proj_bbox'),
+      ('proj:centroid',       '{"description": "Projection centroid","type": "object","title": "Projection Centroid"}'::jsonb,                                          'proj_centroid'),
+      ('proj:shape',          '{"description": "Projection shape","type": "array","title": "Projection Shape"}'::jsonb,                                                 'proj_shape'),
+      ('proj:transform',      '{"description": "Projection affine transform","type": "array","title": "Projection Transform"}'::jsonb,                                  'proj_transform'),
+      ('sci:doi',             '{"description": "Scientific DOI","type": "string","title": "Scientific DOI"}'::jsonb,                                                    'sci_doi'),
+      ('sci:citation',        '{"description": "Scientific citation","type": "string","title": "Scientific Citation"}'::jsonb,                                          'sci_citation'),
+      ('sci:publications',    '{"description": "Scientific publications","type": "array","title": "Scientific Publications"}'::jsonb,                                   'sci_publications'),
+      ('view:off_nadir',      '{"description": "Viewing angle off nadir","type": "number","title": "View Off Nadir"}'::jsonb,                                            'view_off_nadir'),
+      ('view:incidence_angle','{"description": "View incidence angle","type": "number","title": "View Incidence Angle"}'::jsonb,                                       'view_incidence_angle'),
+      ('view:azimuth',        '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb,                                                  'view_azimuth'),
+      ('view:sun_azimuth',    '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb,                                                'view_sun_azimuth'),
+      ('view:sun_elevation',  '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb,                                            'view_sun_elevation'),
+      ('file:size',           '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb,                                                    'file_size'),
+      ('file:header_size',    '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb,                                      'file_header_size'),
+      ('file:checksum',       '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb,                                                      'file_checksum'),
+      ('file:byte_order',     '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb,                                                  'file_byte_order'),
+      ('file:values_regex',   '{"description": "File values regex","type": "string","title": "File Values Regex"}'::jsonb,                                              'file_values_regex'),
+      ('sat:orbit_state',     '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb,                                                'sat_orbit_state'),
+      ('sat:relative_orbit',  '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb,                                         'sat_relative_orbit'),
+      ('sat:absolute_orbit',  '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb,                                         'sat_absolute_orbit')
+    ) AS t(name, definition, property_path);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- promoted_items_column_list: Ordered list of promoted items-table columns.
+-- Keep this in sync with promoted_item_property_defs().
+CREATE OR REPLACE FUNCTION promoted_items_column_list() RETURNS text[] AS $$
+    SELECT ARRAY[
+        'created', 'updated', 'platform', 'instruments', 'constellation', 'mission',
+        'eo_cloud_cover', 'eo_bands', 'eo_snow_cover', 'gsd',
+        'proj_epsg', 'proj_wkt2', 'proj_projjson', 'proj_bbox', 'proj_centroid', 'proj_shape', 'proj_transform',
+        'sci_doi', 'sci_citation', 'sci_publications',
+        'view_off_nadir', 'view_incidence_angle', 'view_azimuth', 'view_sun_azimuth', 'view_sun_elevation',
+        'file_size', 'file_header_size', 'file_checksum', 'file_byte_order', 'file_values_regex',
+        'sat_orbit_state', 'sat_relative_orbit', 'sat_absolute_orbit'
+    ]::text[];
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- promoted_queryables_defaults: Single source of truth for the promoted native-column
+-- queryable seed data. Property-level promoted metadata lives in
+-- promoted_item_property_defs() so item hydration, property stripping, and
+-- queryable registration share the same STAC-property mapping.
+CREATE OR REPLACE FUNCTION promoted_queryables_defaults()
+RETURNS TABLE (
+    name            text,
+    definition      jsonb,
+    property_path   text,
+    property_wrapper text
+) AS $$
+    SELECT * FROM (VALUES
+      ('stac_version',       '{"description": "STAC specification version","type": "string","title": "STAC Version"}'::jsonb,                                            'stac_version',       NULL),
+            ('stac_extensions',    '{"description": "List of STAC extension schema URIs","type": "array","title": "STAC Extensions"}'::jsonb,                                  'stac_extensions',    NULL)
+        ) AS top_level(name, definition, property_path, property_wrapper)
+        UNION ALL
+        SELECT p.name, p.definition, p.property_path, NULL::text
+        FROM promoted_item_property_defs() p;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;

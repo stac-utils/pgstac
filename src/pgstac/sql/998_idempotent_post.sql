@@ -25,6 +25,35 @@ DO $$
   END
 $$;
 
+-- Register promoted native-column queryables (v0.10 split schema).
+-- Each entry maps a STAC property name to the promoted items column via property_path.
+-- CQL2 queries and auto-created indexes will use the native column, not JSONB extraction.
+-- The seed data lives in promoted_queryables_defaults() (002a_queryables.sql) so it
+-- only needs to be maintained in one place.
+--
+-- Pass 1: insert rows that do not yet exist.
+INSERT INTO queryables (name, definition, property_path, property_wrapper)
+SELECT p.name, p.definition, p.property_path, p.property_wrapper
+FROM promoted_queryables_defaults() p
+WHERE NOT EXISTS (
+    SELECT 1 FROM queryables q WHERE q.name = p.name
+);
+
+-- Pass 2: backfill property_path on older rows and normalize promoted wrappers
+-- to the defaults (NULL for native promoted columns).
+UPDATE queryables q
+SET property_path = CASE
+      WHEN q.property_index_type IS NULL THEN COALESCE(q.property_path, p.property_path)
+      ELSE q.property_path
+    END,
+    property_wrapper = CASE
+      WHEN q.property_index_type IS NULL THEN p.property_wrapper
+      ELSE q.property_wrapper
+    END,
+    definition = COALESCE(q.definition, p.definition)
+FROM promoted_queryables_defaults() p
+WHERE q.name = p.name;
+
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
 
@@ -108,6 +137,28 @@ ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
+ALTER FUNCTION pgstac_item_hash(jsonb) SECURITY DEFINER;
+ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
+ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
+ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
+ALTER FUNCTION items_touch_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION items_delete_log_trigger SECURITY DEFINER;
+ALTER FUNCTION strip_promoted_properties(jsonb) SECURITY DEFINER;
+ALTER FUNCTION tstz_to_stac_text(timestamptz) SECURITY DEFINER;
+ALTER FUNCTION temporal_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION promoted_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION extract_fragment(jsonb, text[]) SECURITY DEFINER;
+ALTER FUNCTION pgstac_hash_fragment(jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_fragments(text, interval) SECURITY DEFINER;
+ALTER FUNCTION strip_fragment_col(jsonb, text, text[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_sample(text, jsonb[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_items(text) SECURITY DEFINER;
+ALTER FUNCTION refresh_field_registry(text, interval) SECURITY DEFINER;
+ALTER FUNCTION collection_fragment_config_default(jsonb) SECURITY DEFINER;
+ALTER FUNCTION jsonb_leaf_rows(jsonb, text) SECURITY DEFINER;
+ALTER FUNCTION jsonb_common_values(jsonb, jsonb) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_text(text[]) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_array(text) SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -118,6 +169,9 @@ GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
+GRANT EXECUTE ON FUNCTION pgstac_item_hash TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 

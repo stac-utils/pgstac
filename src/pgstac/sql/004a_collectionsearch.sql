@@ -1,3 +1,7 @@
+-- collections_asitems: Exposes collections as pseudo-items for CQL2 filtering.
+-- The 'properties' column is the collection content with the standard top-level
+-- STAC fields stripped, so CQL2 expressions like {"property":"title"} resolve
+-- correctly when filtering collections via /collections?filter=... endpoints.
 CREATE OR REPLACE VIEW collections_asitems AS
 SELECT
     id,
@@ -5,6 +9,8 @@ SELECT
     'collections' AS collection,
     datetime,
     end_datetime,
+    -- Expose collection metadata as properties so CQL2 {"property":"title"} etc. work.
+    content - '{links,assets,stac_version,stac_extensions}' AS properties,
     jsonb_build_object(
         'properties', content - '{links,assets,stac_version,stac_extensions}',
         'links', content->'links',

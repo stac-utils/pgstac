@@ -245,9 +245,11 @@ BEGIN
         where_segments := where_segments || format(
             $quote$
             (
-                to_tsvector('english', content->'properties'->>'description') ||
-                to_tsvector('english', coalesce(content->'properties'->>'title', '')) ||
-                to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))
+                -- Use the split properties column directly (v0.10 schema).
+                -- Previously read from content->'properties'->>'description' etc.
+                to_tsvector('english', properties->>'description') ||
+                to_tsvector('english', coalesce(properties->>'title', '')) ||
+                to_tsvector('english', coalesce(properties->>'keywords', ''))
             ) @@ %L
             $quote$,
             ft_query
@@ -1019,46 +1021,9 @@ END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
-CREATE UNLOGGED TABLE format_item_cache(
-    id text,
-    collection text,
-    fields text,
-    hydrated bool,
-    output jsonb,
-    lastused timestamptz DEFAULT now(),
-    usecount int DEFAULT 1,
-    timetoformat float,
-    PRIMARY KEY (collection, id, fields, hydrated)
-);
-CREATE INDEX ON format_item_cache (lastused);
-
-CREATE OR REPLACE FUNCTION format_item(_item items, _fields jsonb DEFAULT '{}', _hydrated bool DEFAULT TRUE) RETURNS jsonb AS $$
-DECLARE
-    cache bool := get_setting_bool('format_cache');
-    _output jsonb := null;
-    t timestamptz := clock_timestamp();
+CREATE OR REPLACE FUNCTION format_item(_item items, _fields jsonb DEFAULT '{}') RETURNS jsonb AS $$
 BEGIN
-    IF cache THEN
-        SELECT output INTO _output FROM format_item_cache
-        WHERE id=_item.id AND collection=_item.collection AND fields=_fields::text AND hydrated=_hydrated;
-    END IF;
-    IF _output IS NULL THEN
-        IF _hydrated THEN
-            _output := content_hydrate(_item, _fields);
-        ELSE
-            _output := content_nonhydrated(_item, _fields);
-        END IF;
-    END IF;
-    IF cache THEN
-        INSERT INTO format_item_cache (id, collection, fields, hydrated, output, timetoformat)
-            VALUES (_item.id, _item.collection, _fields::text, _hydrated, _output, age_ms(t))
-            ON CONFLICT(collection, id, fields, hydrated) DO
-                UPDATE
-                    SET lastused=now(), usecount = format_item_cache.usecount + 1
-        ;
-    END IF;
-    RETURN _output;
-
+    RETURN content_hydrate(_item, _fields);
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -1078,7 +1043,6 @@ DECLARE
     full_where text;
     init_ts timestamptz := clock_timestamp();
     timer timestamptz := clock_timestamp();
-    hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
     collection jsonb;
@@ -1125,15 +1089,10 @@ BEGIN
     RAISE NOTICE 'Time to get counts and build query %', age_ms(timer);
     timer := clock_timestamp();
 
-    IF hydrate THEN
-        RAISE NOTICE 'Getting hydrated data.';
-    ELSE
-        RAISE NOTICE 'Getting non-hydrated data.';
-    END IF;
-    RAISE NOTICE 'CACHE SET TO %', get_setting_bool('format_cache');
+    RAISE NOTICE 'Getting hydrated data.';
     RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
-    SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
+    SELECT jsonb_agg(format_item(i, _fields)) INTO out_records
     FROM search_rows(
         full_where,
         orderby,
