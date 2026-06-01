@@ -21,3 +21,6 @@ SELECT properties ? 'datetime' FROM items WHERE id='temporal-range-item';
 
 -- Verify datetime:null is preserved after hydration
 SELECT get_item('temporal-range-item', 'pgstactest-hydration')->'properties'->'datetime';
+
+-- Verify datetime:null is preserved in search results (fixes #158 / #425)
+SELECT search('{"ids":["temporal-range-item"]}')->'features'->0->'properties'->'datetime';

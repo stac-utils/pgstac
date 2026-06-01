@@ -15,7 +15,7 @@ SELECT create_item('{
         "end_datetime": "2026-01-31T23:00:00Z"
     }
 }');
-
+ 
 
 -- Verify datetime is stripped from stored properties (promoted temporal field)
 SELECT properties ? 'datetime' FROM items WHERE id='temporal-range-item';
@@ -24,3 +24,8 @@ SELECT properties ? 'datetime' FROM items WHERE id='temporal-range-item';
 -- Verify datetime:null is preserved after hydration
 SELECT get_item('temporal-range-item', 'pgstactest-hydration')->'properties'->'datetime';
  null
+
+-- Verify datetime:null is preserved in search results (fixes #158 / #425)
+SELECT search('{"ids":["temporal-range-item"]}')->'features'->0->'properties'->'datetime';
+ null
+

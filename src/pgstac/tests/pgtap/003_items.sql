@@ -811,3 +811,53 @@ SELECT results_eq($$
 );
 
 SELECT delete_item('pgstac-test-item-direct', 'pgstac-test-collection');
+
+-- ---------------------------------------------------------------------------
+-- datetime: null round-trip — fixes #158 and #425
+--
+-- The STAC spec requires that items using start_datetime/end_datetime carry
+-- an explicit "datetime": null in their properties. Earlier pgstac versions
+-- used jsonb_strip_nulls on the full properties object, silently removing it
+-- and producing invalid STAC output. The new split-storage hydration applies
+-- jsonb_strip_nulls only to the promoted-property block, so datetime: null
+-- is preserved end-to-end.
+-- ---------------------------------------------------------------------------
+
+SELECT create_item('{
+  "id": "pgstac-test-range-datetime",
+  "collection": "pgstac-test-collection",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [0, 0]},
+  "bbox": [0, 0, 0, 0],
+  "links": [], "assets": {},
+  "properties": {
+    "datetime": null,
+    "start_datetime": "2024-01-01T00:00:00Z",
+    "end_datetime": "2024-01-02T00:00:00Z"
+  }
+}'::jsonb);
+
+SELECT ok(
+    (get_item('pgstac-test-range-datetime', 'pgstac-test-collection') -> 'properties') ? 'datetime',
+    'get_item: properties.datetime key is present for a range item (not stripped)'
+);
+
+SELECT results_eq(
+    $$ SELECT get_item('pgstac-test-range-datetime', 'pgstac-test-collection') -> 'properties' -> 'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'get_item: properties.datetime is JSON null for a range item (fixes #425)'
+);
+
+SELECT ok(
+    (search('{"ids": ["pgstac-test-range-datetime"]}') -> 'features' -> 0 -> 'properties') ? 'datetime',
+    'search: properties.datetime key is present for a range item (not stripped)'
+);
+
+SELECT results_eq(
+    $$ SELECT search('{"ids": ["pgstac-test-range-datetime"]}') -> 'features' -> 0 -> 'properties' -> 'datetime' $$,
+    $$ SELECT 'null'::jsonb $$,
+    'search: properties.datetime is JSON null for a range item (fixes #158)'
+);
+
+SELECT delete_item('pgstac-test-range-datetime', 'pgstac-test-collection');
