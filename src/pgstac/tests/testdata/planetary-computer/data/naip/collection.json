@@ -1,0 +1,224 @@
+{
+  "assets": {
+    "geoparquet-items": {
+      "description": "Snapshot of the collection's STAC items exported to GeoParquet format.",
+      "href": "abfs://items/naip.parquet",
+      "msft:partition_info": {
+        "is_partitioned": true,
+        "partition_frequency": "AS"
+      },
+      "roles": [
+        "stac-items"
+      ],
+      "table:storage_options": {
+        "account_name": "pcstacitems"
+      },
+      "title": "GeoParquet STAC items",
+      "type": "application/x-parquet"
+    },
+    "thumbnail": {
+      "href": "https://ai4edatasetspublicassets.blob.core.windows.net/assets/pc_thumbnails/naip.png",
+      "roles": [
+        "thumbnail"
+      ],
+      "title": "NAIP thumbnail",
+      "type": "image/png"
+    }
+  },
+  "description": "The [National Agriculture Imagery Program](https://www.fsa.usda.gov/programs-and-services/aerial-photography/imagery-programs/naip-imagery/) (NAIP) \nprovides U.S.-wide, high-resolution aerial imagery, with four spectral bands (R, G, B, IR). \nNAIP is administered by the [Aerial Field Photography Office](https://www.fsa.usda.gov/programs-and-services/aerial-photography/) (AFPO) \nwithin the [US Department of Agriculture](https://www.usda.gov/) (USDA). \nData are captured at least once every three years for each state. \nThis dataset represents NAIP data from 2010-present, in [cloud-optimized GeoTIFF](https://www.cogeo.org/) format.\nYou can visualize the coverage of current and past collections [here](https://naip-usdaonline.hub.arcgis.com/). \n",
+  "extent": {
+    "spatial": {
+      "bbox": [
+        [
+          -124.784,
+          24.744,
+          -66.951,
+          49.346
+        ],
+        [
+          -156.003,
+          19.059,
+          -154.809,
+          20.127
+        ],
+        [
+          -67.316,
+          17.871,
+          -65.596,
+          18.565
+        ],
+        [
+          -64.94,
+          17.622,
+          -64.56,
+          17.814
+        ]
+      ]
+    },
+    "temporal": {
+      "interval": [
+        [
+          "2010-01-01T00:00:00Z",
+          "2023-12-31T00:00:00Z"
+        ]
+      ]
+    }
+  },
+  "id": "naip",
+  "item_assets": {
+    "image": {
+      "eo:bands": [
+        {
+          "common_name": "red",
+          "name": "Red"
+        },
+        {
+          "common_name": "green",
+          "name": "Green"
+        },
+        {
+          "common_name": "blue",
+          "name": "Blue"
+        },
+        {
+          "common_name": "nir",
+          "description": "near-infrared",
+          "name": "NIR"
+        }
+      ],
+      "roles": [
+        "data"
+      ],
+      "title": "RGBIR COG tile",
+      "type": "image/tiff; application=geotiff; profile=cloud-optimized"
+    },
+    "metadata": {
+      "roles": [
+        "metadata"
+      ],
+      "title": "FGDC Metdata",
+      "type": "text/plain"
+    },
+    "thumbnail": {
+      "roles": [
+        "thumbnail"
+      ],
+      "title": "Thumbnail",
+      "type": "image/jpeg"
+    }
+  },
+  "keywords": [
+    "NAIP",
+    "Aerial",
+    "Imagery",
+    "USDA",
+    "AFPO",
+    "Agriculture",
+    "United States"
+  ],
+  "license": "proprietary",
+  "links": [
+    {
+      "href": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/items",
+      "rel": "items",
+      "type": "application/geo+json"
+    },
+    {
+      "href": "https://planetarycomputer.microsoft.com/api/stac/v1/",
+      "rel": "parent",
+      "type": "application/json"
+    },
+    {
+      "href": "https://planetarycomputer.microsoft.com/api/stac/v1/",
+      "rel": "root",
+      "type": "application/json"
+    },
+    {
+      "href": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip",
+      "rel": "self",
+      "type": "application/json"
+    },
+    {
+      "href": "https://www.fsa.usda.gov/help/policies-and-links/",
+      "rel": "license",
+      "title": "Public Domain"
+    },
+    {
+      "href": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/queryables",
+      "rel": "http://www.opengis.net/def/rel/ogc/1.0/queryables",
+      "title": "Queryables",
+      "type": "application/schema+json"
+    },
+    {
+      "href": "https://planetarycomputer.microsoft.com/dataset/naip",
+      "rel": "describedby",
+      "title": "Human readable dataset overview and reference",
+      "type": "text/html"
+    }
+  ],
+  "msft:container": "naip",
+  "msft:region": "westeurope",
+  "msft:short_description": "NAIP provides US-wide, high-resolution aerial imagery.  This dataset includes NAIP images from 2010 to the present.",
+  "msft:storage_account": "naipeuwest",
+  "providers": [
+    {
+      "name": "USDA Farm Service Agency",
+      "roles": [
+        "producer",
+        "licensor"
+      ],
+      "url": "https://www.fsa.usda.gov/programs-and-services/aerial-photography/imagery-programs/naip-imagery/"
+    },
+    {
+      "name": "Esri",
+      "roles": [
+        "processor"
+      ],
+      "url": "https://www.esri.com/"
+    },
+    {
+      "name": "Microsoft",
+      "roles": [
+        "host",
+        "processor"
+      ],
+      "url": "https://planetarycomputer.microsoft.com"
+    }
+  ],
+  "stac_extensions": [
+    "https://stac-extensions.github.io/item-assets/v1.0.0/schema.json",
+    "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+  ],
+  "stac_version": "1.0.0",
+  "summaries": {
+    "eo:bands": [
+      {
+        "common_name": "red",
+        "description": "visible red",
+        "name": "Red"
+      },
+      {
+        "common_name": "green",
+        "description": "visible green",
+        "name": "Green"
+      },
+      {
+        "common_name": "blue",
+        "description": "visible blue",
+        "name": "Blue"
+      },
+      {
+        "common_name": "nir",
+        "description": "near-infrared",
+        "name": "NIR"
+      }
+    ],
+    "gsd": [
+      0.3,
+      0.6,
+      1.0
+    ]
+  },
+  "title": "NAIP: National Agriculture Imagery Program",
+  "type": "Collection"
+}

@@ -1,0 +1,21 @@
+{
+  "api_url": "https://planetarycomputer.microsoft.com/api/stac/v1",
+  "collections": {
+    "landsat-c2-l2": {
+      "collection_sha256": "a1194fa03598ed7b10438ee1499c2b9c22ad613b2bf23f0bfeb22644ba406104",
+      "items_sha256": "9d8d6fc7a38e74c696009ceb2eb16442ee97bf9c7181268019d6cbc3cd5daa80",
+      "reused_existing": false
+    },
+    "naip": {
+      "collection_sha256": "072e15e7b089ebd1122c84c696a6fe105ccf74987bbbd472e117d2ee0c52f3f4",
+      "items_sha256": "0fe22e59cd9f5de60bd54348891c65355fb9886870bd6f220e8ab86480866f4d",
+      "reused_existing": false
+    },
+    "sentinel-2-l2a": {
+      "collection_sha256": "9620bd85c60a0a3c6dd8b6a817cc59d9be518a334552c700d1deb818b4d7c5c9",
+      "items_sha256": "58e6a7871e7e4166dd421f3fd206ac1ad5de440436979c8c880d813ec1536bdc",
+      "reused_existing": false
+    }
+  },
+  "item_count": 1000
+}
