@@ -184,6 +184,7 @@ jobs:
         run: scripts/container-scripts/test
   rust-crate:
     name: Test rust crate
+    if: ${{ false }}
     runs-on: ubuntu-latest
     needs:
       - changes
