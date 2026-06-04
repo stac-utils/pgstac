@@ -17,12 +17,12 @@ SELECT results_eq(
 );
 
 SELECT results_eq(
-    $$ SELECT count(*)::int FROM queryables WHERE name IN ('proj:epsg', 'platform') AND collection_ids IS NULL; $$,
+    $$ SELECT count(*)::int FROM queryables WHERE name IN ('proj:code', 'platform') AND collection_ids IS NULL; $$,
     $$ SELECT 2; $$,
     'Promoted projection and platform queryables are pre-registered by the schema.'
 );
     SELECT lives_ok(
-        $$ DELETE FROM queryables WHERE name IN ('proj:epsg', 'platform') AND collection_ids IS NULL;
+        $$ DELETE FROM queryables WHERE name IN ('proj:code', 'platform') AND collection_ids IS NULL;
            INSERT INTO queryables (
                name,
                definition,
@@ -30,15 +30,15 @@ SELECT results_eq(
                property_wrapper,
                property_index_type
            ) VALUES
-               ('proj:epsg', '{"type":"integer"}'::jsonb, 'proj_epsg', 'to_int', 'BTREE'),
+               ('proj:code', '{"type":"string"}'::jsonb, 'proj_code', 'to_text', 'BTREE'),
                ('platform', '{"type":"string"}'::jsonb, 'platform', 'to_text', NULL); $$,
         'Can register promoted projection and platform queryables.'
     );
 
 SELECT results_eq(
-    $$ SELECT (queryable('proj:epsg')).path; $$,
-    $$ SELECT 'proj_epsg'; $$,
-    'Projection EPSG queryable resolves to a native promoted column path.'
+    $$ SELECT (queryable('proj:code')).path; $$,
+    $$ SELECT 'proj_code'; $$,
+    'Projection code queryable resolves to a native promoted column path.'
 );
 
 SELECT results_eq(
@@ -50,8 +50,8 @@ SELECT results_eq(
 SELECT results_eq(
     $$ SELECT indexdef(q)
        FROM queryables q
-       WHERE name = 'proj:epsg' AND collection_ids IS NULL; $$,
-    $$ SELECT 'CREATE INDEX ON %I USING btree (proj_epsg)'; $$,
+       WHERE name = 'proj:code' AND collection_ids IS NULL; $$,
+    $$ SELECT 'CREATE INDEX ON %I USING btree (proj_code)'; $$,
     'Managed indexes for promoted projection fields target native columns.'
 );
 

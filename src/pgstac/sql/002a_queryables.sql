@@ -638,10 +638,11 @@ RETURNS TABLE (
       ('constellation',       '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb,                                                 'constellation'),
       ('mission',             '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb,                                                              'mission'),
       ('eo:cloud_cover',      '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb,                                             'eo_cloud_cover'),
-      ('eo:bands',            '{"description": "EO band metadata","type": "array","title": "EO Bands"}'::jsonb,                                                          'eo_bands'),
+      ('bands',               '{"description": "Bands metadata (STAC 1.1 common bands, successor of eo:bands)","type": "array","title": "Bands"}'::jsonb,                 'bands'),
       ('eo:snow_cover',       '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb,                                               'eo_snow_cover'),
       ('gsd',                 '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb,                                     'gsd'),
-      ('proj:epsg',           '{"description": "EPSG code","type": "integer","title": "Projection EPSG"}'::jsonb,                                                        'proj_epsg'),
+      ('proj:code',           '{"description": "Authority and code of the CRS, e.g. EPSG:32659","type": "string","title": "Projection Code"}'::jsonb,                    'proj_code'),
+      ('proj:geometry',       '{"description": "Footprint of the Item in its native CRS","type": "object","title": "Projection Geometry"}'::jsonb,                       'proj_geometry'),
       ('proj:wkt2',           '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb,                                               'proj_wkt2'),
       ('proj:projjson',       '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb,                          'proj_projjson'),
       ('proj:bbox',           '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb,                                                   'proj_bbox'),
@@ -656,14 +657,17 @@ RETURNS TABLE (
       ('view:azimuth',        '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb,                                                  'view_azimuth'),
       ('view:sun_azimuth',    '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb,                                                'view_sun_azimuth'),
       ('view:sun_elevation',  '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb,                                            'view_sun_elevation'),
+      ('view:moon_azimuth',   '{"description": "Moon azimuth angle","type": "number","title": "View Moon Azimuth"}'::jsonb,                                              'view_moon_azimuth'),
+      ('view:moon_elevation', '{"description": "Moon elevation angle","type": "number","title": "View Moon Elevation"}'::jsonb,                                          'view_moon_elevation'),
       ('file:size',           '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb,                                                    'file_size'),
       ('file:header_size',    '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb,                                      'file_header_size'),
       ('file:checksum',       '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb,                                                      'file_checksum'),
       ('file:byte_order',     '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb,                                                  'file_byte_order'),
-      ('file:values_regex',   '{"description": "File values regex","type": "string","title": "File Values Regex"}'::jsonb,                                              'file_values_regex'),
       ('sat:orbit_state',     '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb,                                                'sat_orbit_state'),
       ('sat:relative_orbit',  '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb,                                         'sat_relative_orbit'),
-      ('sat:absolute_orbit',  '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb,                                         'sat_absolute_orbit')
+      ('sat:absolute_orbit',  '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb,                                         'sat_absolute_orbit'),
+      ('sat:platform_international_designator', '{"description": "Platform International Designator","type": "string","title": "Platform International Designator"}'::jsonb, 'sat_platform_international_designator'),
+      ('sat:anx_datetime',    '{"description": "Ascending node crossing time","type": "string","format": "date-time","title": "ANX Datetime"}'::jsonb,                  'sat_anx_datetime')
     ) AS t(name, definition, property_path);
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
@@ -672,12 +676,12 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION promoted_items_column_list() RETURNS text[] AS $$
     SELECT ARRAY[
         'created', 'updated', 'platform', 'instruments', 'constellation', 'mission',
-        'eo_cloud_cover', 'eo_bands', 'eo_snow_cover', 'gsd',
-        'proj_epsg', 'proj_wkt2', 'proj_projjson', 'proj_bbox', 'proj_centroid', 'proj_shape', 'proj_transform',
+        'eo_cloud_cover', 'bands', 'eo_snow_cover', 'gsd',
+        'proj_code', 'proj_geometry', 'proj_wkt2', 'proj_projjson', 'proj_bbox', 'proj_centroid', 'proj_shape', 'proj_transform',
         'sci_doi', 'sci_citation', 'sci_publications',
-        'view_off_nadir', 'view_incidence_angle', 'view_azimuth', 'view_sun_azimuth', 'view_sun_elevation',
-        'file_size', 'file_header_size', 'file_checksum', 'file_byte_order', 'file_values_regex',
-        'sat_orbit_state', 'sat_relative_orbit', 'sat_absolute_orbit'
+        'view_off_nadir', 'view_incidence_angle', 'view_azimuth', 'view_sun_azimuth', 'view_sun_elevation', 'view_moon_azimuth', 'view_moon_elevation',
+        'file_size', 'file_header_size', 'file_checksum', 'file_byte_order',
+        'sat_orbit_state', 'sat_relative_orbit', 'sat_absolute_orbit', 'sat_platform_international_designator', 'sat_anx_datetime'
     ]::text[];
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
