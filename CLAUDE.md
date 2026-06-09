@@ -212,5 +212,5 @@ ON CONFLICT DO NOTHING;
 ### Loading test data
 
 ```bash
-scripts/runinpypgstac --build loadsampledata
+scripts/loadsampledata
 ```

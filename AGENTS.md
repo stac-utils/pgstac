@@ -52,4 +52,5 @@ Specialist in pypgstac bulk loading (`src/pypgstac/src/pypgstac/load.py`). See C
 - **Retry safety**: `item.pop("partition", None)` with `None` default; `before_sleep` sets `partition.requires_update = True` on `CheckViolation`
 - **Retry scope**: `CheckViolation`, `DeadlockDetected`, `SerializationFailure`, `LockNotAvailable`, `ObjectInUse`
 - **Load modes**: `insert`, `ignore`/`insert_ignore`, `upsert`, `delsert`
+- **Sample data load**: `scripts/loadsampledata`
 - Test: `scripts/runinpypgstac --build test --pypgstac`

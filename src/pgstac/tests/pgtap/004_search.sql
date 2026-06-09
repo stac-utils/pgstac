@@ -41,7 +41,7 @@ SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean'])
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, to_int(content->''properties''->''eo:cloud_cover'') ASC, id DESC';
+    SELECT 'datetime DESC, eo_cloud_cover ASC, id DESC';
     $$,
     'Test creation of sort sql'
 );
@@ -50,7 +50,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, to_int(content->''properties''->''eo:cloud_cover'') DESC, id ASC';
+    SELECT 'datetime ASC, eo_cloud_cover DESC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
@@ -310,7 +310,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (collection = 'landsat8_l1tp' AND to_int(content->'properties'->'eo:cloud_cover') <= to_int('"10"') AND datetime >= '2021-04-08 04:39:23+00'::timestamptz AND st_intersects(geometry, '0103000020E6100000010000000B000000894160E5D0CA4540ED9E3C2CD4E253C0849ECDAACFCD4540B37BF2B050DF53C038F8C264AAC8454076E09C11A5DD53C0F5DBD78173CE454085EB51B81ED953C08126C286A7CF4540789CA223B9D453C0C0EC9E3C2CD4454063EE5A423ED453C004560E2DB2E5454001DE02098AC753C063EE5A423EE84540C442AD69DEC953C02FDD240681ED454034A2B437F8CA53C08048BF7D1DE0454037894160E5E853C0894160E5D0CA4540ED9E3C2CD4E253C0'::geometry))
+    (collection = 'landsat8_l1tp' AND eo_cloud_cover <= to_float('"10"') AND datetime >= '2021-04-08 04:39:23+00'::timestamptz AND st_intersects(geometry, '0103000020E6100000010000000B000000894160E5D0CA4540ED9E3C2CD4E253C0849ECDAACFCD4540B37BF2B050DF53C038F8C264AAC8454076E09C11A5DD53C0F5DBD78173CE454085EB51B81ED953C08126C286A7CF4540789CA223B9D453C0C0EC9E3C2CD4454063EE5A423ED453C004560E2DB2E5454001DE02098AC753C063EE5A423EE84540C442AD69DEC953C02FDD240681ED454034A2B437F8CA53C08048BF7D1DE0454037894160E5E853C0894160E5D0CA4540ED9E3C2CD4E253C0'::geometry))
     $r$,E' \n');
     $$, 'Test Example 2'
 );
@@ -337,7 +337,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_text(content->'properties'->'sentinel:data_coverage') > to_text('"50"') AND to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
+    (to_text(properties->'sentinel:data_coverage') > to_text('"50"') AND eo_cloud_cover < to_float('10'))
     $r$,E' \n');
     $$, 'Test Example 3'
 );
@@ -365,7 +365,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_float(content->'properties'->'sentinel:data_coverage') > to_float('50') OR to_int(content->'properties'->'eo:cloud_cover') < to_int('10'))
+    (to_float(properties->'sentinel:data_coverage') > to_float('50') OR eo_cloud_cover < to_float('10'))
     $r$,E' \n');
     $$, 'Test Example 4'
 );
@@ -387,7 +387,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    to_text(content->'properties'->'prop1') = to_text(content->'properties'->'prop2')
+    to_text(properties->'prop1') = to_text(properties->'prop2')
     $r$,E' \n');
     $$, 'Test Example 5'
 );
@@ -524,7 +524,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    (to_float(content->'properties'->'sentinel:data_coverage') >= to_float('50') OR to_float(content->'properties'->'landsat:coverage_percent') >= to_float('50') OR (to_text(content->'properties'->'sentinel:data_coverage') IS NULL AND to_text(content->'properties'->'landsat:coverage_percent') IS NULL))
+    (to_float(properties->'sentinel:data_coverage') >= to_float('50') OR to_float(properties->'landsat:coverage_percent') >= to_float('50') OR (to_text(properties->'sentinel:data_coverage') IS NULL AND to_text(properties->'landsat:coverage_percent') IS NULL))
     $r$,E' \n');
     $$, 'Test Example 9'
 );
@@ -545,7 +545,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    to_int(content->'properties'->'eo:cloud_cover') BETWEEN to_int('0') AND to_int('50')
+    eo_cloud_cover BETWEEN to_float('0') AND to_float('50')
     $r$,E' \n');
     $$, 'Test Example 10'
 );
@@ -565,8 +565,8 @@ SELECT results_eq($$
     }
     $q$),E' \n');
     $$, $$
-    SELECT BTRIM($r$
-    to_text(content->'properties'->'mission') LIKE to_text('"sentinel%"')
+        SELECT BTRIM($r$
+        mission LIKE to_text('"sentinel%"')
     $r$,E' \n');
     $$, 'Test Example 11'
 );
@@ -585,8 +585,8 @@ SELECT results_eq($$
     }
     $q$),E' \n');
     $$, $$
-    SELECT BTRIM($r$
-    upper(to_text(content->'properties'->'mission')) = upper(to_text('"sentinel"'))
+        SELECT BTRIM($r$
+        upper(mission) = upper(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test upper'
 );
@@ -605,8 +605,8 @@ SELECT results_eq($$
     }
     $q$),E' \n');
     $$, $$
-    SELECT BTRIM($r$
-    lower(to_text(content->'properties'->'mission')) = lower(to_text('"sentinel"'))
+        SELECT BTRIM($r$
+        lower(mission) = lower(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test lower'
 );
@@ -625,8 +625,8 @@ SELECT results_eq($$
     }
     $q$),E' \n');
     $$, $$
-    SELECT BTRIM($r$
-    upper(to_text(content->'properties'->'mission')) = upper(to_text('"sentinel"'))
+        SELECT BTRIM($r$
+        upper(mission) = upper(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test casei'
 );
@@ -645,8 +645,8 @@ SELECT results_eq($$
     }
     $q$),E' \n');
     $$, $$
-    SELECT BTRIM($r$
-    unaccent(to_text(content->'properties'->'mission')) = unaccent(to_text('"sentinel"'))
+        SELECT BTRIM($r$
+        unaccent(mission) = unaccent(to_text('"sentinel"'))
     $r$,E' \n');
     $$, 'Test accenti'
 );
@@ -695,16 +695,17 @@ BEGIN
     INSERT INTO collections (content) VALUES ('{"id":"pgstac-test-collection2"}'::jsonb) ON CONFLICT DO NOTHING;
     PERFORM check_partition('pgstac-test-collection2', '[2011-01-01,2012-01-01)', '[2011-01-01,2012-01-01)');
 
-    INSERT INTO items (id, collection, datetime, end_datetime, geometry, content)
-        SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, content FROM items WHERE collection='pgstac-test-collection';
+    INSERT INTO items (id, collection, datetime, end_datetime, geometry, bbox, links, assets, properties, extra, item_hash)
+        SELECT concat(id, '_2'), 'pgstac-test-collection2', datetime, end_datetime, geometry, bbox, links, assets, properties, extra, item_hash
+        FROM items WHERE collection='pgstac-test-collection';
 
-    UPDATE items SET content = '{"properties":{"testsort":1}}'::jsonb
+    UPDATE items SET properties = properties || '{"testsort":1}'::jsonb
         WHERE collection = 'pgstac-test-collection2' AND
         id <= 'pgstac-test-item-0005_2';
-    UPDATE items SET content = '{"properties":{"testsort":2}}'::jsonb
+    UPDATE items SET properties = properties || '{"testsort":2}'::jsonb
         WHERE collection = 'pgstac-test-collection2' AND
         id > 'pgstac-test-item-0005_2' and id <= 'pgstac-test-item-0010_2';
-    UPDATE items SET content = '{"properties":{"testsort":3}}'::jsonb
+    UPDATE items SET properties = properties || '{"testsort":3}'::jsonb
         WHERE collection = 'pgstac-test-collection2' AND
         id > 'pgstac-test-item-0010' and id <= 'pgstac-test-item-0015_2';
 
@@ -735,7 +736,7 @@ BEGIN
                 SELECT id
                 FROM items
                 WHERE collection='pgstac-test-collection2'
-                ORDER BY content->'properties'->>'testsort' %s, id %s
+                ORDER BY properties->>'testsort' %s, id %s
                 OFFSET %L LIMIT 10
                 ) SELECT string_agg(id, ',') FROM t
                 $q$,
@@ -753,7 +754,7 @@ BEGIN
                 SELECT id
                 FROM items
                 WHERE collection='pgstac-test-collection2'
-                ORDER BY content->'properties'->>'testsort' %s, id %s
+                ORDER BY properties->>'testsort' %s, id %s
                 OFFSET %L LIMIT 10
                 $q$,
                 testsortdir,
@@ -795,7 +796,7 @@ BEGIN
                 SELECT id
                 FROM items
                 WHERE collection='pgstac-test-collection2'
-                ORDER BY content->'properties'->>'testsort' %s, id %s
+                ORDER BY properties->>'testsort' %s, id %s
                 OFFSET %L LIMIT 10
                 ) SELECT string_agg(id, ',') FROM t
                 $q$,
@@ -813,7 +814,7 @@ BEGIN
                 SELECT id
                 FROM items
                 WHERE collection='pgstac-test-collection2'
-                ORDER BY content->'properties'->>'testsort' %s, id %s
+                ORDER BY properties->>'testsort' %s, id %s
                 OFFSET %L LIMIT 10
                 $q$,
                 testsortdir,

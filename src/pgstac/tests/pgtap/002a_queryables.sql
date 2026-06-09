@@ -4,6 +4,82 @@ SELECT results_eq(
     'Make sure that sortby with/without properties prefix return the same sort statement.'
 );
 
+SELECT results_eq(
+    $$ SELECT (queryable('eo:cloud_cover')).path; $$,
+    $$ SELECT 'eo_cloud_cover'; $$,
+    'Promoted queryables resolve to the native item column path.'
+);
+
+SELECT results_eq(
+    $$ SELECT (queryable('properties.eo:cloud_cover')).expression; $$,
+    $$ SELECT 'eo_cloud_cover'; $$,
+    'Promoted queryables use the native column expression even with a properties prefix.'
+);
+
+SELECT results_eq(
+    $$ SELECT count(*)::int FROM queryables WHERE name IN ('proj:code', 'platform') AND collection_ids IS NULL; $$,
+    $$ SELECT 2; $$,
+    'Promoted projection and platform queryables are pre-registered by the schema.'
+);
+    SELECT lives_ok(
+        $$ DELETE FROM queryables WHERE name IN ('proj:code', 'platform') AND collection_ids IS NULL;
+           INSERT INTO queryables (
+               name,
+               definition,
+               property_path,
+               property_wrapper,
+               property_index_type
+           ) VALUES
+               ('proj:code', '{"type":"string"}'::jsonb, 'proj_code', 'to_text', 'BTREE'),
+               ('platform', '{"type":"string"}'::jsonb, 'platform', 'to_text', NULL); $$,
+        'Can register promoted projection and platform queryables.'
+    );
+
+SELECT results_eq(
+    $$ SELECT (queryable('proj:code')).path; $$,
+    $$ SELECT 'proj_code'; $$,
+    'Projection code queryable resolves to a native promoted column path.'
+);
+
+SELECT results_eq(
+    $$ SELECT (queryable('properties.platform')).expression; $$,
+    $$ SELECT 'platform'; $$,
+    'Platform queryable resolves to a native promoted column expression.'
+);
+
+SELECT results_eq(
+    $$ SELECT indexdef(q)
+       FROM queryables q
+       WHERE name = 'proj:code' AND collection_ids IS NULL; $$,
+    $$ SELECT 'CREATE INDEX ON %I USING btree (proj_code)'; $$,
+    'Managed indexes for promoted projection fields target native columns.'
+);
+
+SELECT lives_ok(
+    $$ INSERT INTO queryables (
+           name,
+           definition,
+           property_path,
+           property_wrapper,
+           property_index_type
+       ) VALUES (
+           'test_native_index',
+           '{"type":"number"}'::jsonb,
+           'eo_cloud_cover',
+           'to_float',
+           'BTREE'
+       ); $$,
+    'Can add a native-path queryable that uses managed indexes.'
+);
+
+SELECT results_eq(
+    $$ SELECT indexdef(q)
+       FROM queryables q
+       WHERE name = 'test_native_index' AND collection_ids IS NULL; $$,
+    $$ SELECT 'CREATE INDEX ON %I USING btree (eo_cloud_cover)'; $$,
+    'Managed indexes follow the native promoted column when a promoted queryable is indexed.'
+);
+
 SET pgstac."default_filter_lang" TO 'cql2-json';
 
 SELECT results_eq(

@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+- New [Promoted Fields](https://stac-utils.github.io/pgstac/promoted-fields/) reference document listing every STAC property that pgstac promotes to a native `items` column, with spec source, extension version, SQL type, and a machine-readable YAML registry for AI-assisted updates.
+- Align promoted fields with current STAC extension specs: add `proj:geometry`, `view:moon_azimuth`, `view:moon_elevation`, `sat:platform_international_designator`, `sat:anx_datetime`; replace `proj:epsg` (int) with `proj:code` (text); move `eo:bands` to core `bands` (STAC 1.1); remove `file:values_regex`.
 - Add deterministic SHA-256 `content_hash` to STAC items to track data changes across migrations.
 - Add `pgstac_updated_at` column to items table as part of separating STAC property updates from database metadata updates.
+- Deterministic Planetary Computer benchmark fixture manifest + fetch tooling for `naip`, `sentinel-2-l2a`, and `landsat-c2-l2` (1000 items per collection), plus CI/manual benchmark workflows that emit JSON/CSV/Markdown artifacts and branch comparison reports.
 
 ### Changed
 

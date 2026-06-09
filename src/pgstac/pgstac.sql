@@ -613,6 +613,229 @@ CREATE OR REPLACE FUNCTION explode_dotpaths_recurse(IN j jsonb) RETURNS SETOF te
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
+-- jsonb_canonical: RFC 8785 (JSON Canonicalization Scheme)-aligned serialization.
+-- Produces a deterministic, key-order-independent text encoding that an external
+-- client can reproduce byte-for-byte. NOTE: do NOT use `jsonb::text` for hashing —
+-- PostgreSQL re-normalizes object key order to length-then-bytewise and inserts
+-- ": " / ", " separators, so `jsonb::text` is neither alphabetical nor compact.
+--
+-- Canonical rules (must match the external recipe below):
+--   * object keys sorted by Unicode code point (== UTF-8 byte order, COLLATE "C"),
+--   * compact separators: ',' between members, ':' between key and value,
+--   * strings: standard JSON escaping, NON-ASCII left as UTF-8 (no \uXXXX),
+--   * numbers: IEEE-754 double, shortest round-trip form (Ryu) — matches
+--     PostgreSQL float8 output and ECMAScript Number::toString for in-range
+--     values. (STAC numbers are physical quantities; integers beyond 2^53 are
+--     out of contract, as in RFC 8785.)
+--   * true / false / null as literals.
+--
+-- External equivalents:
+--   Python: an RFC 8785 canonicalizer, or the rule-for-rule reference:
+--     def canon(v):
+--       if isinstance(v, bool): return 'true' if v else 'false'
+--       if v is None: return 'null'
+--       if isinstance(v, dict):
+--         return '{'+','.join(json.dumps(k,ensure_ascii=False)+':'+canon(v[k])
+--                             for k in sorted(v))+'}'
+--       if isinstance(v, list): return '['+','.join(canon(x) for x in v)+']'
+--       if isinstance(v,(int,float)):
+--         f=float(v); return str(int(f)) if f==int(f) and abs(f)<1e16 else repr(f)
+--       return json.dumps(v, ensure_ascii=False)
+--   Rust: the `rfc8785` crate (serde_jcs) over serde_json::Value.
+CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
+    SELECT CASE jsonb_typeof(j)
+        WHEN 'object' THEN COALESCE((
+            SELECT '{' || string_agg(
+                to_json(kv.key)::text || ':' || jsonb_canonical(kv.value),
+                ',' ORDER BY kv.key COLLATE "C"
+            ) || '}'
+            FROM jsonb_each(j) kv
+        ), '{}')
+        WHEN 'array' THEN COALESCE((
+            SELECT '[' || string_agg(jsonb_canonical(e.value), ',' ORDER BY e.ord) || ']'
+            FROM jsonb_array_elements(j) WITH ORDINALITY e(value, ord)
+        ), '[]')
+        WHEN 'number' THEN (j #>> '{}')::float8::text
+        ELSE j::text  -- string (JSON-escaped, UTF-8 preserved), 'true' / 'false' / 'null'
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
+-- Returns bytea so callers store the compact binary digest directly (32 B vs
+-- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
+-- needed for display or external comparison.
+-- Externally reproducible: sha256(utf8_bytes(jsonb_canonical(j))).
+-- The private jsonb column on items/collections is intentionally excluded — it
+-- stores operator metadata outside the STAC item identity contract.
+CREATE OR REPLACE FUNCTION jsonb_hash(j jsonb) RETURNS bytea AS $$
+    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
+-- max_depth guards against runaway recursion on pathologically nested documents.
+-- Used by the field registry to track which paths exist in a collection's items.
+CREATE OR REPLACE FUNCTION jsonb_field_rows(
+    data jsonb,
+    parent_path text DEFAULT '',
+    max_depth int DEFAULT 20
+) RETURNS TABLE (path text, is_leaf boolean, value_kind text) AS $$
+DECLARE
+    k text;
+    v jsonb;
+    current_path text;
+    jtype text;
+BEGIN
+    IF data IS NULL OR max_depth <= 0 THEN
+        RETURN;
+    END IF;
+    jtype := jsonb_typeof(data);
+    IF jtype = 'object' THEN
+        FOR k, v IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE WHEN parent_path = '' THEN k ELSE parent_path || '.' || k END;
+            IF jsonb_typeof(v) IN ('object', 'array') THEN
+                RETURN QUERY SELECT current_path, FALSE, jsonb_typeof(v);
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, current_path, max_depth - 1);
+            ELSE
+                RETURN QUERY SELECT current_path, TRUE, jsonb_typeof(v);
+            END IF;
+        END LOOP;
+    ELSIF jtype = 'array' THEN
+        -- Walk array elements (e.g. arrays of nested objects); arrays of scalars
+        -- are already handled as leaves in the object branch above.
+        FOR v IN SELECT jsonb_array_elements(data) LOOP
+            IF jsonb_typeof(v) = 'object' THEN
+                RETURN QUERY SELECT * FROM jsonb_field_rows(v, parent_path, max_depth - 1);
+            END IF;
+        END LOOP;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+-- jsonb_leaf_rows: Recursively flatten JSONB into dot-path/value rows.
+-- Arrays, explicit JSON nulls, and empty objects are treated as atomic values.
+-- Non-empty objects recurse into child paths and do not emit their own row.
+CREATE OR REPLACE FUNCTION jsonb_leaf_rows(
+    data jsonb,
+    parent_path text
+) RETURNS TABLE (path text, value jsonb) AS $$
+DECLARE
+    key_text text;
+    child jsonb;
+    current_path text;
+BEGIN
+    IF data IS NULL THEN
+        RETURN;
+    END IF;
+
+    IF jsonb_typeof(data) = 'object' THEN
+        IF data = '{}'::jsonb THEN
+            IF parent_path <> '' THEN
+                RETURN QUERY SELECT parent_path, data;
+            END IF;
+            RETURN;
+        END IF;
+
+        FOR key_text, child IN SELECT * FROM jsonb_each(data) LOOP
+            current_path := CASE
+                WHEN parent_path = '' THEN key_text
+                ELSE parent_path || '.' || key_text
+            END;
+            RETURN QUERY SELECT * FROM jsonb_leaf_rows(child, current_path);
+        END LOOP;
+        RETURN;
+    END IF;
+
+    IF parent_path <> '' THEN
+        RETURN QUERY SELECT parent_path, data;
+    END IF;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+
+-- jsonb_common_values: Keep only leaf values that are identical in both documents.
+-- Objects recurse key-by-key; arrays are treated as atomic values and must match exactly.
+CREATE OR REPLACE FUNCTION jsonb_common_values(left_doc jsonb, right_doc jsonb) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN left_doc IS NULL OR right_doc IS NULL THEN NULL
+        WHEN jsonb_typeof(left_doc) = 'object' AND jsonb_typeof(right_doc) = 'object' THEN
+            CASE
+                WHEN left_doc = '{}'::jsonb AND right_doc = '{}'::jsonb THEN '{}'::jsonb
+                ELSE (
+                    SELECT CASE
+                        WHEN count(*) = 0 THEN NULL
+                        ELSE jsonb_object_agg(key, common_value)
+                    END
+                    FROM (
+                        SELECT
+                            left_fields.key,
+                            jsonb_common_values(left_fields.value, right_fields.value) AS common_value
+                        FROM jsonb_each(left_doc) left_fields
+                        JOIN jsonb_each(right_doc) right_fields USING (key)
+                    ) common_fields
+                    WHERE common_value IS NOT NULL
+                )
+            END
+        WHEN left_doc = right_doc THEN left_doc
+        ELSE NULL
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+-- jsonb_common_paths_*: aggregate used by Python-side tooling to derive a
+-- collection-wide fragment_config from sampled item documents.
+--
+-- These helpers are NOT called by the runtime SQL ingest/search path. They are
+-- kept in the SQL source so Python tooling can execute the same canonical logic
+-- inside PostgreSQL when computing candidate fragment paths.
+CREATE OR REPLACE FUNCTION jsonb_common_paths_state(state jsonb[], next_doc jsonb) RETURNS jsonb[] AS $$
+    SELECT CASE
+        WHEN next_doc IS NULL THEN COALESCE(state, '{}'::jsonb[])
+        WHEN state IS NULL THEN ARRAY[next_doc]
+        ELSE array_append(state, next_doc)
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION jsonb_common_paths_final(docs jsonb[]) RETURNS text[] AS $$
+    WITH normalized_docs AS (
+        SELECT content
+        FROM unnest(COALESCE(docs, '{}'::jsonb[])) AS doc(content)
+        WHERE content IS NOT NULL
+    ), doc_count AS (
+        SELECT count(*)::bigint AS n
+        FROM normalized_docs
+    ), flat AS (
+        SELECT rows.path, rows.value
+        FROM normalized_docs d
+        CROSS JOIN LATERAL jsonb_leaf_rows(d.content, '') AS rows(path, value)
+    )
+    SELECT CASE
+        WHEN (SELECT n FROM doc_count) = 0 THEN '{}'::text[]
+        ELSE COALESCE(
+            (
+                SELECT array_agg(path ORDER BY path)
+                FROM (
+                    SELECT f.path
+                    FROM flat f
+                    CROSS JOIN doc_count d
+                    GROUP BY f.path, d.n
+                    HAVING count(*) = d.n AND count(DISTINCT f.value) = 1
+                ) same_paths
+            ),
+            '{}'::text[]
+        )
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
+CREATE AGGREGATE jsonb_common_paths_agg(jsonb) (
+    SFUNC = jsonb_common_paths_state,
+    STYPE = jsonb[],
+    FINALFUNC = jsonb_common_paths_final,
+    PARALLEL = SAFE
+);
+
+
 CREATE OR REPLACE FUNCTION jsonb_set_nested(j jsonb, path text[], val jsonb) RETURNS jsonb AS $$
 DECLARE
 BEGIN
@@ -628,6 +851,52 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
+
+
+-- jsonb_merge_recursive: Deep-merge two JSONB values with item precedence.
+-- Object keys are merged recursively; for non-object collisions the item value wins.
+-- Used by hydration so deep fragment paths (depth-3+) and per-item siblings can
+-- coexist under shared parent objects without losing data.
+--
+-- Performance: the split-storage strip removes every fragment-owned key from the
+-- per-item column, so at each merge level the fragment sub-object and the per-item
+-- sub-object almost always have DISJOINT key sets. When that holds, a shallow
+-- concat (`f.value || i.value`, item precedence) is exact and skips a recursive
+-- function call. The recursive branch is only taken when keys actually overlap
+-- (rare: only for hand-configured fragment paths that split a shared deep object).
+-- This disjoint fast-path makes hydrate ~2.5x cheaper on asset-heavy items
+-- (e.g. Landsat) versus an unconditional recursive descent, while producing
+-- byte-identical output.
+CREATE OR REPLACE FUNCTION jsonb_merge_recursive(frag jsonb, item jsonb) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN frag IS NULL THEN COALESCE(item, '{}'::jsonb)
+        WHEN item IS NULL OR item = '{}'::jsonb THEN frag
+        WHEN jsonb_typeof(frag) = 'object' AND jsonb_typeof(item) = 'object' THEN
+            COALESCE(
+                (
+                    SELECT jsonb_object_agg(
+                        key,
+                        CASE
+                            WHEN i.value IS NULL THEN f.value
+                            WHEN f.value IS NULL THEN i.value
+                            WHEN jsonb_typeof(f.value) = 'object' AND jsonb_typeof(i.value) = 'object' THEN
+                                CASE
+                                    WHEN NOT EXISTS (
+                                        SELECT 1 FROM jsonb_object_keys(f.value) k WHERE i.value ? k
+                                    ) THEN f.value || i.value
+                                    ELSE jsonb_merge_recursive(f.value, i.value)
+                                END
+                            ELSE i.value
+                        END
+                    )
+                    FROM jsonb_each(frag) f
+                    FULL JOIN jsonb_each(item) i USING (key)
+                ),
+                '{}'::jsonb
+            )
+        ELSE item
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 CREATE OR REPLACE FUNCTION jsonb_include(j jsonb, f jsonb) RETURNS jsonb AS $$
@@ -681,88 +950,6 @@ CREATE OR REPLACE FUNCTION jsonb_fields(j jsonb, f jsonb DEFAULT '{"fields":[]}'
 $$ LANGUAGE SQL IMMUTABLE;
 
 
-CREATE OR REPLACE FUNCTION merge_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
-    SELECT
-    CASE
-        WHEN _a = '"𒍟※"'::jsonb THEN NULL
-        WHEN _a IS NULL OR jsonb_typeof(_a) = 'null' THEN _b
-        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
-            (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            merge_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(coalesce(_a,'{}'::jsonb)) as a
-                FULL JOIN
-                    jsonb_each(coalesce(_b,'{}'::jsonb)) as b
-                USING (key)
-            )
-        WHEN
-            jsonb_typeof(_a) = 'array'
-            AND jsonb_typeof(_b) = 'array'
-            AND jsonb_array_length(_a) = jsonb_array_length(_b)
-        THEN
-            (
-                SELECT jsonb_agg(m) FROM
-                    ( SELECT
-                        merge_jsonb(
-                            jsonb_array_elements(_a),
-                            jsonb_array_elements(_b)
-                        ) as m
-                    ) as l
-            )
-        ELSE _a
-    END
-    ;
-$$ LANGUAGE SQL IMMUTABLE;
-
-CREATE OR REPLACE FUNCTION strip_jsonb(_a jsonb, _b jsonb) RETURNS jsonb AS $$
-    SELECT
-    CASE
-
-        WHEN (_a IS NULL OR jsonb_typeof(_a) = 'null') AND _b IS NOT NULL AND jsonb_typeof(_b) != 'null' THEN '"𒍟※"'::jsonb
-        WHEN _b IS NULL OR jsonb_typeof(_a) = 'null' THEN _a
-        WHEN _a = _b AND jsonb_typeof(_a) = 'object' THEN '{}'::jsonb
-        WHEN _a = _b THEN NULL
-        WHEN jsonb_typeof(_a) = 'object' AND jsonb_typeof(_b) = 'object' THEN
-            (
-                SELECT
-                    jsonb_strip_nulls(
-                        jsonb_object_agg(
-                            key,
-                            strip_jsonb(a.value, b.value)
-                        )
-                    )
-                FROM
-                    jsonb_each(_a) as a
-                FULL JOIN
-                    jsonb_each(_b) as b
-                USING (key)
-            )
-        WHEN
-            jsonb_typeof(_a) = 'array'
-            AND jsonb_typeof(_b) = 'array'
-            AND jsonb_array_length(_a) = jsonb_array_length(_b)
-        THEN
-            (
-                SELECT jsonb_agg(m) FROM
-                    ( SELECT
-                        strip_jsonb(
-                            jsonb_array_elements(_a),
-                            jsonb_array_elements(_b)
-                        ) as m
-                    ) as l
-            )
-        ELSE _a
-    END
-    ;
-$$ LANGUAGE SQL IMMUTABLE;
-
-
 CREATE OR REPLACE FUNCTION nullif_jsonbnullempty(j jsonb) RETURNS jsonb AS $$
     SELECT nullif(nullif(nullif(j,'null'::jsonb),'{}'::jsonb),'[]'::jsonb);
 $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
@@ -770,6 +957,24 @@ $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION jsonb_array_unique(j jsonb) RETURNS jsonb AS $$
     SELECT nullif_jsonbnullempty(jsonb_agg(DISTINCT a)) v FROM jsonb_array_elements(j) a;
 $$ LANGUAGE SQL IMMUTABLE;
+
+-- fragment_path_text: Serialize a root-relative path array as a JSON array string
+-- suitable for storage in collections.fragment_config text[].
+-- This avoids ambiguity for keys that may contain dots.
+CREATE OR REPLACE FUNCTION fragment_path_text(_path text[]) RETURNS text AS $$
+    SELECT to_jsonb(_path)::text;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+-- fragment_path_array: Convert a serialized fragment path back to a path array
+-- suitable for use with the #> operator.
+-- Expects JSON-array serialization (e.g. '["assets","B1","type"]').
+CREATE OR REPLACE FUNCTION fragment_path_array(_path_text text) RETURNS text[] AS $$
+BEGIN
+    RETURN ARRAY(
+        SELECT jsonb_array_elements_text(_path_text::jsonb)
+    );
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE STRICT;
 
 CREATE OR REPLACE FUNCTION jsonb_concat_ignorenull(a jsonb, b jsonb) RETURNS jsonb AS $$
     SELECT coalesce(a,'[]'::jsonb) || coalesce(b,'[]'::jsonb);
@@ -876,21 +1081,67 @@ CREATE TABLE IF NOT EXISTS stac_extensions(
 -- END FRAGMENT: 001s_stacutils.sql
 
 -- BEGIN FRAGMENT: 002_collections.sql
-CREATE OR REPLACE FUNCTION collection_base_item(content jsonb) RETURNS jsonb AS $$
-    SELECT jsonb_build_object(
-        'type', 'Feature',
-        'stac_version', content->'stac_version',
-        'assets', content->'item_assets',
-        'collection', content->'id'
-    );
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+-- collection_fragment_config_default: Derive a sensible starting fragment_config for a
+-- collection.  Returns paths for values that are reliably identical across every item
+-- in a STAC collection:
+-- When item_assets is present, depth-3 paths are generated for each stable asset sub-key
+-- (e.g. 'assets.B1.type', 'assets.B1.roles') so that the fragment stores the shared
+-- per-asset metadata while the per-item column retains only the fields that vary between
+-- items (primarily 'href').  Known per-item-varying sub-keys are excluded.
+--
+-- The fragment system now supports paths at arbitrary depth, so these depth-3 paths are
+-- handled correctly by extract_fragment and strip_fragment_col.
+CREATE OR REPLACE FUNCTION collection_fragment_config_default(content jsonb) RETURNS text[] AS $$
+DECLARE
+    paths text[] := ARRAY[]::text[];
+    asset_key text;
+    sub_key   text;
+    -- Fields within each asset that differ between items and must NOT be fragmented.
+    -- href is unique per item; file:* fields reflect per-file measurements;
+    -- alternate/storage:* are access-layer derived paths also unique per item.
+    per_item_asset_fields CONSTANT text[] := ARRAY[
+        'href',
+        'file:size', 'file:checksum', 'file:local_path',
+        'alternate',
+        'storage:path', 'storage:platform', 'storage:region',
+        'storage:requester_pays', 'storage:tier'
+    ];
+BEGIN
+    -- For item_assets: each asset key's sub-keys (except known per-item fields like href)
+    -- are the same for every item in the collection because item_assets describes the
+    -- collection-level asset schema (type, title, roles, eo:bands, raster:bands, etc.).
+    -- Using depth-3 paths means only the stable metadata is fragmented; href and other
+    -- per-item fields stay in the per-item assets column so the dedup still works.
+    IF content->'item_assets' IS NOT NULL
+       AND jsonb_typeof(content->'item_assets') = 'object'
+       AND content->'item_assets' != '{}'::jsonb
+    THEN
+        FOR asset_key IN SELECT jsonb_object_keys(content->'item_assets') LOOP
+            FOR sub_key IN SELECT jsonb_object_keys(content->'item_assets'->asset_key) LOOP
+                IF NOT (sub_key = ANY(per_item_asset_fields)) THEN
+                    paths := paths || fragment_path_text(ARRAY['assets', asset_key, sub_key]);
+                END IF;
+            END LOOP;
+        END LOOP;
+    END IF;
 
+    IF cardinality(paths) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN paths;
+END;
+$$ LANGUAGE PLPGSQL STABLE;
 
 CREATE TABLE IF NOT EXISTS collections (
     key bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id text GENERATED ALWAYS AS (content->>'id') STORED UNIQUE NOT NULL,
     content JSONB NOT NULL,
-    base_item jsonb GENERATED ALWAYS AS (pgstac.collection_base_item(content)) STORED,
+    -- fragment_config: list of serialized root-relative fragment paths (fragment_path_text format).
+    -- NULL means no fragmentation for this collection.
+    -- Canonical serialization is a JSON array string per path, e.g.
+    -- '["assets","thumbnail"]' or '["properties","eo:cloud_cover"]'.
+    fragment_config text[],
     geometry geometry GENERATED ALWAYS AS (pgstac.collection_geom(content)) STORED,
     datetime timestamptz GENERATED ALWAYS AS (pgstac.collection_datetime(content)) STORED,
     end_datetime timestamptz GENERATED ALWAYS AS (pgstac.collection_enddatetime(content)) STORED,
@@ -898,31 +1149,72 @@ CREATE TABLE IF NOT EXISTS collections (
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 
-CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
-    SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content)
-    VALUES (data)
+-- create_collection: Insert a new collection.
+-- _partition_trunc: optional 'year' or 'month' sub-partitioning; defaults to none.
+-- _fragment_config: explicit fragment path list; defaults to collection_fragment_config_default(data).
+CREATE OR REPLACE FUNCTION create_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
     ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
-CREATE OR REPLACE FUNCTION update_collection(data jsonb) RETURNS VOID AS $$
+-- update_collection: Replace collection content.
+-- _partition_trunc: when not NULL, updates the partition truncation setting.
+--   Pass NULL to preserve the existing value.
+-- _fragment_config: when not NULL, replaces the fragment configuration.
+--   Pass NULL to preserve the existing operator-configured value.
+CREATE OR REPLACE FUNCTION update_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
 DECLARE
     out collections%ROWTYPE;
 BEGIN
-    UPDATE collections SET content=data WHERE id = data->>'id' RETURNING * INTO STRICT out;
+    UPDATE collections
+    SET content         = data,
+        partition_trunc = COALESCE(_partition_trunc, partition_trunc),
+        fragment_config = COALESCE(_fragment_config, fragment_config)
+    WHERE id = data->>'id'
+    RETURNING * INTO STRICT out;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
-CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
-    INSERT INTO collections (content)
-    VALUES (data)
+-- upsert_collection: Insert or update a collection.
+-- _partition_trunc: optional 'year' or 'month' sub-partitioning; defaults to none on insert,
+--   preserved from existing row on conflict (pass an explicit value to override).
+-- _fragment_config: explicit fragment path list; defaults to collection_fragment_config_default(data)
+--   on insert.  On conflict, any operator-configured (non-NULL) value is preserved unless an
+--   explicit _fragment_config is passed.
+CREATE OR REPLACE FUNCTION upsert_collection(
+    data jsonb,
+    _partition_trunc text DEFAULT NULL,
+    _fragment_config text[] DEFAULT NULL
+) RETURNS VOID AS $$
+    INSERT INTO collections (content, fragment_config, partition_trunc)
+    VALUES (
+        data,
+        COALESCE(_fragment_config, collection_fragment_config_default(data)),
+        _partition_trunc
+    )
     ON CONFLICT (id) DO
     UPDATE
-        SET content=EXCLUDED.content
+        SET content         = EXCLUDED.content,
+            -- Preserve any operator-configured fragment_config; only replace when an
+            -- explicit _fragment_config was supplied or when currently NULL.
+            fragment_config = CASE
+                WHEN _fragment_config IS NOT NULL THEN _fragment_config
+                ELSE COALESCE(collections.fragment_config, EXCLUDED.fragment_config)
+            END,
+            partition_trunc = COALESCE(EXCLUDED.partition_trunc, collections.partition_trunc)
     ;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
@@ -947,6 +1239,8 @@ CREATE OR REPLACE FUNCTION all_collections() RETURNS jsonb AS $$
     SELECT coalesce(jsonb_agg(content), '[]'::jsonb) FROM collections;
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
+
+
 CREATE OR REPLACE FUNCTION collection_delete_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
@@ -965,6 +1259,7 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
+DROP TRIGGER IF EXISTS collection_delete_trigger ON collections;
 CREATE TRIGGER collection_delete_trigger BEFORE DELETE ON collections
 FOR EACH ROW EXECUTE FUNCTION collection_delete_trigger_func();
 -- END FRAGMENT: 002_collections.sql
@@ -1084,6 +1379,14 @@ CREATE OR REPLACE FUNCTION array_to_path(arr text[]) RETURNS text AS $$
     ) FROM unnest(arr) v;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+-- queryable_uses_native_path: Returns true when a queryable path string is a
+-- bare identifier (e.g. 'proj_epsg', 'platform') that maps to a native promoted
+-- column on the items table. Such paths do not need a content->'properties'->...
+-- expression or a type-cast wrapper; the column type already matches.
+CREATE OR REPLACE FUNCTION queryable_uses_native_path(path text) RETURNS boolean AS $$
+    SELECT path ~ '^[a-zA-Z_][a-zA-Z0-9_]*$';
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 
 
@@ -1135,14 +1438,41 @@ BEGIN
     ELSE
         path_elements := string_to_array(dotpath, '.');
         IF path_elements[1] IN ('links', 'assets', 'stac_version', 'stac_extensions') THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- links, assets, stac_version, stac_extensions are now split columns.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := path_elements[1];
+            ELSE
+                path := format('%I->%s', path_elements[1], array_to_path(path_elements[2:]));
+            END IF;
         ELSIF path_elements[1] = 'properties' THEN
-            path := format('content->%s', array_to_path(path_elements));
+            -- properties is a split JSONB column; generate properties->... path.
+            IF array_length(path_elements, 1) = 1 THEN
+                path := 'properties';
+            ELSE
+                path := format('properties->%s', array_to_path(path_elements[2:]));
+            END IF;
         ELSE
-            path := format($F$content->'properties'->%s$F$, array_to_path(path_elements));
+            -- Non-prefixed queryable names are assumed to live in properties.
+            path := format($F$properties->%s$F$, array_to_path(path_elements));
         END IF;
     END IF;
-    expression := format('%I(%s)', wrapper, path);
+    IF queryable_uses_native_path(path) THEN
+        IF q.definition->>'type' IN ('number', 'integer') OR q.property_wrapper IN ('to_int', 'to_float') THEN
+            wrapper := 'to_float';
+            nulled_wrapper := wrapper;
+        ELSIF q.definition->>'format' = 'date-time' THEN
+            wrapper := 'to_tstz';
+            nulled_wrapper := wrapper;
+        ELSIF q.property_wrapper IS NULL THEN
+            wrapper := 'to_text';
+            nulled_wrapper := NULL;
+        END IF;
+    END IF;
+    IF wrapper IS NULL OR queryable_uses_native_path(path) THEN
+        expression := path;
+    ELSE
+        expression := format('%I(%s)', wrapper, path);
+    END IF;
     RETURN;
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT;
@@ -1166,6 +1496,17 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
 
+-- queryable_index_field: Returns the index field name for a queryable row.
+-- For promoted native columns (property_path is a bare identifier) the field name
+-- is the column name itself. For JSON-path queryables it is the STAC property name.
+-- Used by the index consistency view to correlate existing indexes with queryables.
+CREATE OR REPLACE FUNCTION queryable_index_field(q queryables) RETURNS text AS $$
+    SELECT CASE
+        WHEN q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN q.property_path
+        ELSE q.name
+    END;
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
     DECLARE
@@ -1177,6 +1518,13 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
             out := 'CREATE INDEX ON %I USING btree (datetime DESC, end_datetime)';
         ELSIF q.name = 'geometry' THEN
             out := 'CREATE INDEX ON %I USING gist (geometry)';
+        ELSIF q.property_path IS NOT NULL AND queryable_uses_native_path(q.property_path) THEN
+            -- Native promoted column: index the column directly, no type-cast wrapper needed.
+            out := format(
+                'CREATE INDEX ON %%I USING %s (%s)',
+                lower(COALESCE(q.property_index_type, 'BTREE')),
+                q.property_path
+            );
         ELSE
             out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
@@ -1196,8 +1544,8 @@ SELECT
     i.indexname,
     regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -1214,8 +1562,8 @@ SELECT
     i.indexname,
     indexdef,
     COALESCE(
-        (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-        (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'))[1],
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -1260,8 +1608,8 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                (regexp_match(indexdef, '\(([a-zA-Z]+)\)'))[1],
-                (regexp_match(indexdef,  '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'))[1],
+                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM
@@ -1269,7 +1617,7 @@ WITH p AS (
             JOIN p ON (tablename=partition)
     ), q AS (
         SELECT
-            name AS field,
+            queryable_index_field(queryables) AS field,
             collection,
             partition,
             format(indexdef(queryables), partition) as qidx
@@ -1487,7 +1835,7 @@ BEGIN
                     OR %L = ANY(collection_ids)
             ), t AS (
                 SELECT
-                    content->'properties' AS properties
+                    properties
                 FROM
                     %I
                 TABLESAMPLE SYSTEM(%L)
@@ -1539,6 +1887,90 @@ CREATE OR REPLACE FUNCTION missing_queryables(_tablesample float DEFAULT 5) RETU
     ORDER BY 2,1
     ;
 $$ LANGUAGE SQL;
+
+-- promoted_item_property_defs: Shared STAC-property mapping for promoted native
+-- item columns. This function lives with queryables metadata so queryable seeding
+-- and items-table property extraction reference the same source of truth.
+CREATE OR REPLACE FUNCTION promoted_item_property_defs()
+RETURNS TABLE (
+    name           text,
+    definition     jsonb,
+    property_path  text
+) AS $$
+    SELECT * FROM (VALUES
+      ('created',             '{"description": "Metadata creation timestamp","type": "string","format": "date-time","title": "Created"}'::jsonb,                         'created'),
+      ('updated',             '{"description": "Metadata update timestamp","type": "string","format": "date-time","title": "Updated"}'::jsonb,                           'updated'),
+      ('platform',            '{"description": "Platform name","type": "string","title": "Platform"}'::jsonb,                                                            'platform'),
+      ('instruments',         '{"description": "Instrument names","type": "array","title": "Instruments"}'::jsonb,                                                       'instruments'),
+      ('constellation',       '{"description": "Constellation name","type": "string","title": "Constellation"}'::jsonb,                                                 'constellation'),
+      ('mission',             '{"description": "Mission name","type": "string","title": "Mission"}'::jsonb,                                                              'mission'),
+      ('eo:cloud_cover',      '{"description": "EO cloud cover percentage","type": "number","title": "Cloud Cover"}'::jsonb,                                             'eo_cloud_cover'),
+      ('bands',               '{"description": "Bands metadata (STAC 1.1 common bands, successor of eo:bands)","type": "array","title": "Bands"}'::jsonb,                 'bands'),
+      ('eo:snow_cover',       '{"description": "EO snow cover percentage","type": "number","title": "Snow Cover"}'::jsonb,                                               'eo_snow_cover'),
+      ('gsd',                 '{"description": "Ground sample distance","type": "number","title": "Ground Sample Distance"}'::jsonb,                                     'gsd'),
+      ('proj:code',           '{"description": "Authority and code of the CRS, e.g. EPSG:32659","type": "string","title": "Projection Code"}'::jsonb,                    'proj_code'),
+      ('proj:geometry',       '{"description": "Footprint of the Item in its native CRS","type": "object","title": "Projection Geometry"}'::jsonb,                       'proj_geometry'),
+      ('proj:wkt2',           '{"description": "WKT2 CRS definition","type": "string","title": "Projection WKT2"}'::jsonb,                                               'proj_wkt2'),
+      ('proj:projjson',       '{"description": "PROJJSON CRS definition","type": ["object", "string"],"title": "Projection PROJJSON"}'::jsonb,                          'proj_projjson'),
+      ('proj:bbox',           '{"description": "Projection bbox","type": "array","title": "Projection BBOX"}'::jsonb,                                                   'proj_bbox'),
+      ('proj:centroid',       '{"description": "Projection centroid","type": "object","title": "Projection Centroid"}'::jsonb,                                          'proj_centroid'),
+      ('proj:shape',          '{"description": "Projection shape","type": "array","title": "Projection Shape"}'::jsonb,                                                 'proj_shape'),
+      ('proj:transform',      '{"description": "Projection affine transform","type": "array","title": "Projection Transform"}'::jsonb,                                  'proj_transform'),
+      ('sci:doi',             '{"description": "Scientific DOI","type": "string","title": "Scientific DOI"}'::jsonb,                                                    'sci_doi'),
+      ('sci:citation',        '{"description": "Scientific citation","type": "string","title": "Scientific Citation"}'::jsonb,                                          'sci_citation'),
+      ('sci:publications',    '{"description": "Scientific publications","type": "array","title": "Scientific Publications"}'::jsonb,                                   'sci_publications'),
+      ('view:off_nadir',      '{"description": "Viewing angle off nadir","type": "number","title": "View Off Nadir"}'::jsonb,                                            'view_off_nadir'),
+      ('view:incidence_angle','{"description": "View incidence angle","type": "number","title": "View Incidence Angle"}'::jsonb,                                       'view_incidence_angle'),
+      ('view:azimuth',        '{"description": "View azimuth angle","type": "number","title": "View Azimuth"}'::jsonb,                                                  'view_azimuth'),
+      ('view:sun_azimuth',    '{"description": "Sun azimuth angle","type": "number","title": "View Sun Azimuth"}'::jsonb,                                                'view_sun_azimuth'),
+      ('view:sun_elevation',  '{"description": "Sun elevation angle","type": "number","title": "View Sun Elevation"}'::jsonb,                                            'view_sun_elevation'),
+      ('view:moon_azimuth',   '{"description": "Moon azimuth angle","type": "number","title": "View Moon Azimuth"}'::jsonb,                                              'view_moon_azimuth'),
+      ('view:moon_elevation', '{"description": "Moon elevation angle","type": "number","title": "View Moon Elevation"}'::jsonb,                                          'view_moon_elevation'),
+      ('file:size',           '{"description": "File size in bytes","type": "integer","title": "File Size"}'::jsonb,                                                    'file_size'),
+      ('file:header_size',    '{"description": "File header size in bytes","type": "integer","title": "File Header Size"}'::jsonb,                                      'file_header_size'),
+      ('file:checksum',       '{"description": "File checksum","type": "string","title": "File Checksum"}'::jsonb,                                                      'file_checksum'),
+      ('file:byte_order',     '{"description": "File byte order","type": "string","title": "File Byte Order"}'::jsonb,                                                  'file_byte_order'),
+      ('sat:orbit_state',     '{"description": "Satellite orbit state","type": "string","title": "Orbit State"}'::jsonb,                                                'sat_orbit_state'),
+      ('sat:relative_orbit',  '{"description": "Satellite relative orbit","type": "integer","title": "Relative Orbit"}'::jsonb,                                         'sat_relative_orbit'),
+      ('sat:absolute_orbit',  '{"description": "Satellite absolute orbit","type": "integer","title": "Absolute Orbit"}'::jsonb,                                         'sat_absolute_orbit'),
+      ('sat:platform_international_designator', '{"description": "Platform International Designator","type": "string","title": "Platform International Designator"}'::jsonb, 'sat_platform_international_designator'),
+      ('sat:anx_datetime',    '{"description": "Ascending node crossing time","type": "string","format": "date-time","title": "ANX Datetime"}'::jsonb,                  'sat_anx_datetime')
+    ) AS t(name, definition, property_path);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- promoted_items_column_list: Ordered list of promoted items-table columns.
+-- Keep this in sync with promoted_item_property_defs().
+CREATE OR REPLACE FUNCTION promoted_items_column_list() RETURNS text[] AS $$
+    SELECT ARRAY[
+        'created', 'updated', 'platform', 'instruments', 'constellation', 'mission',
+        'eo_cloud_cover', 'bands', 'eo_snow_cover', 'gsd',
+        'proj_code', 'proj_geometry', 'proj_wkt2', 'proj_projjson', 'proj_bbox', 'proj_centroid', 'proj_shape', 'proj_transform',
+        'sci_doi', 'sci_citation', 'sci_publications',
+        'view_off_nadir', 'view_incidence_angle', 'view_azimuth', 'view_sun_azimuth', 'view_sun_elevation', 'view_moon_azimuth', 'view_moon_elevation',
+        'file_size', 'file_header_size', 'file_checksum', 'file_byte_order',
+        'sat_orbit_state', 'sat_relative_orbit', 'sat_absolute_orbit', 'sat_platform_international_designator', 'sat_anx_datetime'
+    ]::text[];
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- promoted_queryables_defaults: Single source of truth for the promoted native-column
+-- queryable seed data. Property-level promoted metadata lives in
+-- promoted_item_property_defs() so item hydration, property stripping, and
+-- queryable registration share the same STAC-property mapping.
+CREATE OR REPLACE FUNCTION promoted_queryables_defaults()
+RETURNS TABLE (
+    name            text,
+    definition      jsonb,
+    property_path   text,
+    property_wrapper text
+) AS $$
+    SELECT * FROM (VALUES
+      ('stac_version',       '{"description": "STAC specification version","type": "string","title": "STAC Version"}'::jsonb,                                            'stac_version',       NULL),
+            ('stac_extensions',    '{"description": "List of STAC extension schema URIs","type": "array","title": "STAC Extensions"}'::jsonb,                                  'stac_extensions',    NULL)
+        ) AS top_level(name, definition, property_path, property_wrapper)
+        UNION ALL
+        SELECT p.name, p.definition, p.property_path, NULL::text
+        FROM promoted_item_property_defs() p;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 -- END FRAGMENT: 002a_queryables.sql
 
 -- BEGIN FRAGMENT: 002b_cql.sql
@@ -1808,6 +2240,7 @@ DECLARE
     rightarg text;
     prop text;
     extra_props bool := pgstac.additional_properties();
+    queryable_row RECORD;
 BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
@@ -1968,7 +2401,17 @@ BEGIN
     IF wrapper IS NOT NULL THEN
         RAISE NOTICE 'Wrapping % with %', j, wrapper;
         IF j ? 'property' THEN
-            RETURN format('%I(%s)', wrapper, (queryable(j->>'property')).path);
+            SELECT * INTO queryable_row FROM queryable(j->>'property');
+            -- For native promoted columns (expression = path, no JSONB extraction),
+            -- the column's type already matches; applying a cast wrapper like to_int()
+            -- is redundant and prevents index-only scans.  Return the bare expression.
+            IF
+                wrapper = ANY (ARRAY['to_int', 'to_float', 'to_tstz', 'to_text', 'to_text_array'])
+                AND queryable_row.expression = queryable_row.path
+            THEN
+                RETURN queryable_row.expression;
+            END IF;
+            RETURN format('%I(%s)', wrapper, queryable_row.path);
         ELSE
             RETURN format('%I(%L)', wrapper, j);
         END IF;
@@ -2064,15 +2507,103 @@ $$ LANGUAGE PLPGSQL STABLE STRICT;
 -- END FRAGMENT: 002b_cql.sql
 
 -- BEGIN FRAGMENT: 003a_items.sql
+-- -----------------------------------------------------------------------
+-- COLUMN LIST SYNC CONTRACT
+-- When adding or removing promoted columns from the items table, ALL 6 of
+-- these locations must be updated together:
+--
+--   1. items TABLE DDL (below)
+--   2. content_dehydrate() — assigns each promoted column from props
+--   3. promoted_item_property_defs() — metadata table mapping name→column
+--   4. promoted_properties_from_item() — hydrates promoted columns back to jsonb
+--   5. items_content_distinct_sql() — UPDATE-path / upsert DELETE content compare
+--      (auto-derives promoted columns from promoted_items_column_list())
+--   6. items_staging_dehydrate() — the single `enriched` SELECT that builds the
+--      items rows for all three staging branches (insert / ignore / upsert)
+--
+-- Use promoted_items_column_list() to verify consistency at runtime.
+-- The PGTap test 003_items.sql cross-references this against information_schema.
+-- -----------------------------------------------------------------------
+
+-- Item fragments: deduplicated part of item content (shared across items in a collection)
+CREATE TABLE IF NOT EXISTS item_fragments (
+    id bigserial PRIMARY KEY,
+    collection text NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    -- Raw 32-byte sha256 of the fragment payload (see pgstac_hash_fragment).
+    -- Stored as bytea, not 64-char hex text: half the size and a faster btree
+    -- comparison on the (collection, hash) unique index. This hash is an
+    -- internal dedup key only and is never exposed in the STAC API.
+    hash bytea NOT NULL,
+    content jsonb,
+    links_template jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (collection, hash)
+);
+CREATE INDEX IF NOT EXISTS item_fragments_collection_idx ON item_fragments (collection);
+
 CREATE TABLE items (
     id text NOT NULL,
     geometry geometry NOT NULL,
     collection text NOT NULL,
     datetime timestamptz NOT NULL,
     end_datetime timestamptz NOT NULL,
+    datetime_is_range boolean NOT NULL DEFAULT false,
+    stac_version text,
+    stac_extensions jsonb DEFAULT '[]'::jsonb,
     pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
-    content_hash text NOT NULL DEFAULT '',
-    content JSONB NOT NULL,
+    -- 32-byte sha256 of the canonical (RFC 8785-aligned) STAC item JSON set at
+    -- ingest time. Allows external clients to detect unchanged items without a
+    -- full fetch. Does NOT include the private column (operator metadata).
+    item_hash bytea NOT NULL DEFAULT '\x'::bytea,
+    -- Split columns. Keep fragment_id unmanaged by an FK
+    -- because incremental NOT VALID FKs on partitioned items are not supported.
+    fragment_id bigint,
+    bbox jsonb,
+    links jsonb,
+    assets jsonb,
+    properties jsonb,
+    extra jsonb,
+    -- Promoted queryable columns (redundant copies for index-only scans)
+    created timestamptz,
+    updated timestamptz,
+    platform text,
+    instruments text[],
+    constellation text,
+    mission text,
+    eo_cloud_cover float8,
+    bands jsonb,
+    eo_snow_cover float8,
+    gsd float8,
+    proj_code text,
+    proj_geometry jsonb,
+    proj_wkt2 text,
+    proj_projjson jsonb,
+    proj_bbox jsonb,
+    proj_centroid jsonb,
+    proj_shape jsonb,
+    proj_transform jsonb,
+    sci_doi text,
+    sci_citation text,
+    sci_publications jsonb,
+    view_off_nadir float8,
+    view_incidence_angle float8,
+    view_azimuth float8,
+    view_sun_azimuth float8,
+    view_sun_elevation float8,
+    view_moon_azimuth float8,
+    view_moon_elevation float8,
+    file_size bigint,
+    file_header_size bigint,
+    file_checksum text,
+    file_byte_order text,
+    sat_orbit_state text,
+    sat_relative_orbit integer,
+    sat_absolute_orbit integer,
+    sat_platform_international_designator text,
+    sat_anx_datetime timestamptz,
+    link_hrefs text[],
+    -- Operator-private metadata: not returned by the STAC API, not included in
+    -- item_hash, not part of the dehydrate/hydrate path. Set via direct UPDATE.
     private jsonb
 )
 PARTITION BY LIST (collection)
@@ -2085,18 +2616,35 @@ CREATE TABLE IF NOT EXISTS items_deleted_log (
     partition text,
     datetime timestamptz,
     end_datetime timestamptz,
-    content_hash text NOT NULL DEFAULT '',
+    item_hash bytea NOT NULL DEFAULT '\x'::bytea,
     deleted_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS items_deleted_log_deleted_at_idx ON items_deleted_log (deleted_at);
 
+-- Field registry: tracks which JSON paths exist in each collection (for queryables)
+CREATE TABLE IF NOT EXISTS item_field_registry (
+    collection text NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    path text NOT NULL,
+    is_leaf boolean DEFAULT true,
+    value_kinds text[] DEFAULT '{}',
+    first_seen timestamptz NOT NULL DEFAULT now(),
+    last_seen timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (collection, path)
+);
+CREATE INDEX IF NOT EXISTS item_field_registry_path_idx ON item_field_registry (path);
+
 CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
+CREATE INDEX IF NOT EXISTS items_fragment_id_idx ON items (fragment_id) WHERE fragment_id IS NOT NULL;
 
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
+-- partition_after_triggerfunc: After-statement trigger on items.
+-- Updates partition statistics for every partition touched by the current batch,
+-- using run_or_queue() so the work is deferred rather than blocking the ingest
+-- transaction.
 CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
     p text;
@@ -2109,36 +2657,93 @@ BEGIN
     LOOP
         PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
     END LOOP;
-    IF TG_OP IN ('DELETE','UPDATE') THEN
-        DELETE FROM format_item_cache c USING newdata n WHERE c.collection = n.collection AND c.id = n.id;
-    END IF;
     RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS items_after_insert_trigger ON items;
 CREATE TRIGGER items_after_insert_trigger
 AFTER INSERT ON items
 REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
+DROP TRIGGER IF EXISTS items_after_update_trigger ON items;
 CREATE TRIGGER items_after_update_trigger
-AFTER DELETE ON items
-REFERENCING OLD TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
-
-CREATE TRIGGER items_after_delete_trigger
 AFTER UPDATE ON items
 REFERENCING NEW TABLE AS newdata
 FOR EACH STATEMENT
 EXECUTE FUNCTION partition_after_triggerfunc();
 
+DROP TRIGGER IF EXISTS items_after_delete_trigger ON items;
+CREATE TRIGGER items_after_delete_trigger
+AFTER DELETE ON items
+REFERENCING OLD TABLE AS newdata
+FOR EACH STATEMENT
+EXECUTE FUNCTION partition_after_triggerfunc();
+
+-- items_content_distinct_sql / items_content_changed: detect whether a direct
+-- UPDATE actually changed the stored item content. Used by the touch trigger
+-- (to refresh pgstac_updated_at) and by the upsert DELETE predicate, keeping
+-- those two content comparisons in sync.
+CREATE OR REPLACE FUNCTION items_content_distinct_sql(left_ref text, right_ref text)
+RETURNS text AS $$
+DECLARE
+    clauses text[];
+BEGIN
+    clauses := ARRAY[
+        format('%s.datetime_is_range IS DISTINCT FROM %s.datetime_is_range', left_ref, right_ref),
+        format('%s.datetime IS DISTINCT FROM %s.datetime', left_ref, right_ref),
+        format('%s.end_datetime IS DISTINCT FROM %s.end_datetime', left_ref, right_ref),
+        format('%s.item_hash IS DISTINCT FROM %s.item_hash', left_ref, right_ref),
+        format('%s.geometry IS DISTINCT FROM %s.geometry', left_ref, right_ref),
+        format('%s.bbox IS DISTINCT FROM %s.bbox', left_ref, right_ref),
+        format('%s.links IS DISTINCT FROM %s.links', left_ref, right_ref),
+        format('%s.link_hrefs IS DISTINCT FROM %s.link_hrefs', left_ref, right_ref),
+        format('%s.assets IS DISTINCT FROM %s.assets', left_ref, right_ref),
+        format('%s.properties IS DISTINCT FROM %s.properties', left_ref, right_ref),
+        format('%s.extra IS DISTINCT FROM %s.extra', left_ref, right_ref),
+        format('%s.stac_version IS DISTINCT FROM %s.stac_version', left_ref, right_ref),
+        format('%s.stac_extensions IS DISTINCT FROM %s.stac_extensions', left_ref, right_ref)
+    ];
+
+    clauses := clauses || ARRAY(
+        SELECT format('%s.%I IS DISTINCT FROM %s.%I', left_ref, column_name, right_ref, column_name)
+        FROM unnest(promoted_items_column_list()) AS column_name
+    );
+
+    RETURN array_to_string(clauses, E'\n                    OR ');
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION items_content_changed(left_item items, right_item items)
+RETURNS boolean AS $$
+DECLARE
+    changed boolean;
+BEGIN
+    EXECUTE format('SELECT %s', items_content_distinct_sql('($1)', '($2)'))
+    INTO changed
+    USING left_item, right_item;
+
+    RETURN COALESCE(changed, FALSE);
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+-- items_touch_triggerfunc: refresh pgstac_updated_at when a direct UPDATE changes
+-- the stored item content. It deliberately does NOT recompute item_hash:
+-- item_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
+-- through create_item / upsert_item / update_item (set once in content_dehydrate),
+-- so it stays externally reproducible by a client hashing its own copy.
+-- A raw `UPDATE items SET ...` that bypasses the staging path leaves item_hash
+-- referring to the last ingested document; re-ingest via upsert_item to refresh.
 CREATE OR REPLACE FUNCTION items_touch_triggerfunc() RETURNS TRIGGER AS $$
 BEGIN
+    IF NOT items_content_changed(OLD, NEW) THEN
+        RETURN NEW;
+    END IF;
+
     NEW.pgstac_updated_at := now();
-    NEW.content_hash := encode(sha256(content_hydrate(NEW)::text::bytea), 'hex');
     RETURN NEW;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -2158,7 +2763,7 @@ BEGIN
         partition,
         datetime,
         end_datetime,
-        content_hash
+        item_hash
     )
     SELECT
         old_rows.id,
@@ -2166,12 +2771,91 @@ BEGIN
         (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
         old_rows.datetime,
         old_rows.end_datetime,
-        old_rows.content_hash
+        old_rows.item_hash
     FROM old_rows;
 
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION strip_promoted_properties(props jsonb) RETURNS jsonb AS $$
+    SELECT COALESCE(props, '{}'::jsonb) - COALESCE(
+        (SELECT array_agg(name ORDER BY name) FROM promoted_item_property_defs()),
+        '{}'::text[]
+    ) - ARRAY['datetime', 'start_datetime', 'end_datetime'];
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION tstz_to_stac_text(value timestamptz) RETURNS text AS $$
+    SELECT CASE
+        WHEN value IS NULL THEN NULL
+        ELSE trim(trailing '.' FROM trim(trailing '0' FROM to_char(
+            value AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US'
+        ))) || 'Z'
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION temporal_properties_from_item(_item items) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN _item.datetime_is_range THEN jsonb_build_object('datetime', NULL)
+            || jsonb_strip_nulls(jsonb_build_object(
+                'start_datetime', tstz_to_stac_text(_item.datetime),
+                'end_datetime', tstz_to_stac_text(_item.end_datetime)
+            ))
+        ELSE jsonb_build_object('datetime', tstz_to_stac_text(_item.datetime))
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- promoted_properties_from_item: Rehydrate the promoted scalar columns back into
+-- a STAC properties object. This is the inverse of content_dehydrate's explicit
+-- per-column extraction and is written in the same explicit style on purpose:
+-- a direct jsonb_strip_nulls(jsonb_build_object(...)) is ~35% faster than routing
+-- the column->STAC-name mapping through promoted_item_property_defs() with a
+-- per-item join + jsonb_object_agg, and produces identical output (verified on
+-- the PC fixtures + an all-fields synthetic item). Keep the property list in sync
+-- with content_dehydrate and the items DDL (see the COLUMN LIST SYNC CONTRACT at
+-- the top of this file).
+CREATE OR REPLACE FUNCTION promoted_properties_from_item(_item items) RETURNS jsonb AS $$
+    SELECT temporal_properties_from_item(_item) || jsonb_strip_nulls(jsonb_build_object(
+        'created', CASE WHEN _item.created IS NULL THEN NULL ELSE tstz_to_stac_text(_item.created) END,
+        'updated', CASE WHEN _item.updated IS NULL THEN NULL ELSE tstz_to_stac_text(_item.updated) END,
+        'platform', _item.platform,
+        'instruments', _item.instruments,
+        'constellation', _item.constellation,
+        'mission', _item.mission,
+        'eo:cloud_cover', _item.eo_cloud_cover,
+        'bands', _item.bands,
+        'eo:snow_cover', _item.eo_snow_cover,
+        'gsd', _item.gsd,
+        'proj:code', _item.proj_code,
+        'proj:geometry', _item.proj_geometry,
+        'proj:wkt2', _item.proj_wkt2,
+        'proj:projjson', _item.proj_projjson,
+        'proj:bbox', _item.proj_bbox,
+        'proj:centroid', _item.proj_centroid,
+        'proj:shape', _item.proj_shape,
+        'proj:transform', _item.proj_transform,
+        'sci:doi', _item.sci_doi,
+        'sci:citation', _item.sci_citation,
+        'sci:publications', _item.sci_publications,
+        'view:off_nadir', _item.view_off_nadir,
+        'view:incidence_angle', _item.view_incidence_angle,
+        'view:azimuth', _item.view_azimuth,
+        'view:sun_azimuth', _item.view_sun_azimuth,
+        'view:sun_elevation', _item.view_sun_elevation,
+        'view:moon_azimuth', _item.view_moon_azimuth,
+        'view:moon_elevation', _item.view_moon_elevation,
+        'file:size', _item.file_size,
+        'file:header_size', _item.file_header_size,
+        'file:checksum', _item.file_checksum,
+        'file:byte_order', _item.file_byte_order,
+        'sat:orbit_state', _item.sat_orbit_state,
+        'sat:relative_orbit', _item.sat_relative_orbit,
+        'sat:absolute_orbit', _item.sat_absolute_orbit,
+        'sat:platform_international_designator', _item.sat_platform_international_designator,
+        'sat:anx_datetime', CASE WHEN _item.sat_anx_datetime IS NULL THEN NULL ELSE tstz_to_stac_text(_item.sat_anx_datetime) END
+    ));
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 DROP TRIGGER IF EXISTS items_delete_log_after_delete_trigger ON items;
 CREATE TRIGGER items_delete_log_after_delete_trigger
@@ -2180,25 +2864,141 @@ CREATE TRIGGER items_delete_log_after_delete_trigger
     FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
 
 
+
+
+CREATE OR REPLACE FUNCTION stac_links_strip_hrefs(links jsonb) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN links IS NULL OR jsonb_typeof(links) <> 'array' OR jsonb_array_length(links) = 0 THEN NULL
+        ELSE
+            (
+                SELECT jsonb_agg(
+                    CASE
+                        WHEN jsonb_typeof(link) = 'object' THEN link - 'href'
+                        ELSE link
+                    END
+                    ORDER BY ord
+                )
+                FROM jsonb_array_elements(links) WITH ORDINALITY AS elements(link, ord)
+            )
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION stac_links_href_array(links jsonb) RETURNS text[] AS $$
+    SELECT CASE
+        WHEN links IS NULL OR jsonb_typeof(links) <> 'array' OR jsonb_array_length(links) = 0 THEN NULL
+        ELSE ARRAY(
+            SELECT link->>'href'
+            FROM jsonb_array_elements(links) WITH ORDINALITY AS elements(link, ord)
+            ORDER BY ord
+        )
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION stac_links_hydrate(
+    links_template jsonb,
+    link_hrefs text[]
+) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN links_template IS NULL OR jsonb_typeof(links_template) <> 'array' THEN '[]'::jsonb
+        WHEN link_hrefs IS NULL OR array_length(link_hrefs, 1) IS NULL THEN
+            COALESCE(
+                (SELECT jsonb_agg(link ORDER BY ord)
+                 FROM jsonb_array_elements(links_template) WITH ORDINALITY AS elements(link, ord)),
+                '[]'::jsonb
+            )
+        ELSE COALESCE(
+            (
+                SELECT jsonb_agg(
+                    CASE
+                        WHEN jsonb_typeof(link) = 'object' AND hrefs.href IS NOT NULL THEN
+                            jsonb_set(link - 'href', '{href}', to_jsonb(hrefs.href), true)
+                        WHEN jsonb_typeof(link) = 'object' THEN link - 'href'
+                        ELSE link
+                    END
+                    ORDER BY ord
+                )
+                FROM jsonb_array_elements(links_template) WITH ORDINALITY AS elements(link, ord)
+                LEFT JOIN LATERAL (
+                    SELECT link_hrefs[ord] AS href
+                ) AS hrefs ON TRUE
+            ),
+            '[]'::jsonb
+        )
+    END;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
-DECLARE
-    out items;
-BEGIN
-    out.id := content->>'id';
-    out.geometry := stac_geom(content);
-    out.collection := content->>'collection';
-    out.datetime := stac_datetime(content);
-    out.end_datetime := stac_end_datetime(content);
-    out.pgstac_updated_at := now();
-    out.content_hash := encode(sha256(content::text::bytea), 'hex');
-    out.content := strip_jsonb(
-        content - '{id,geometry,collection,type}'::text[],
-        collection_base_item(content->>'collection')
-    ) - '{id,geometry,collection,type}'::text[];
-    out.private := null;
-    RETURN out;
-END;
-$$ LANGUAGE PLPGSQL STABLE;
+    SELECT
+        content->>'id' AS id,
+        stac_geom(content) AS geometry,
+        content->>'collection' AS collection,
+        stac_datetime(content) AS datetime,
+        stac_end_datetime(content) AS end_datetime,
+        CASE
+            WHEN (content->'properties')->'datetime' IS NOT NULL AND (content->'properties')->'datetime' <> 'null'::jsonb THEN FALSE
+            ELSE (
+                ((content->'properties')->'start_datetime' IS NOT NULL AND (content->'properties')->'start_datetime' <> 'null'::jsonb)
+                OR ((content->'properties')->'end_datetime' IS NOT NULL AND (content->'properties')->'end_datetime' <> 'null'::jsonb)
+            )
+        END AS datetime_is_range,
+        content->>'stac_version' AS stac_version,
+        COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
+        now() AS pgstac_updated_at,
+        pgstac.jsonb_hash(content) AS item_hash,
+        NULL::bigint AS fragment_id,
+        content->'bbox' AS bbox,
+        CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,
+        CASE WHEN content->'assets' IS NOT NULL AND content->'assets' <> '{}'::jsonb THEN content->'assets' END AS assets,
+        strip_promoted_properties(content->'properties') AS properties,
+        content - '{id,geometry,collection,type,bbox,links,assets,properties,stac_version,stac_extensions}'::text[] AS extra,
+
+        ((content->'properties')->>'created')::timestamptz AS created,
+        ((content->'properties')->>'updated')::timestamptz AS updated,
+        ((content->'properties')->>'platform') AS platform,
+        to_text_array((content->'properties')->'instruments') AS instruments,
+        ((content->'properties')->>'constellation') AS constellation,
+        ((content->'properties')->>'mission') AS mission,
+        ((content->'properties')->>'eo:cloud_cover')::float8 AS eo_cloud_cover,
+        ((content->'properties')->'bands') AS bands,
+        ((content->'properties')->>'eo:snow_cover')::float8 AS eo_snow_cover,
+        ((content->'properties')->>'gsd')::float8 AS gsd,
+
+        ((content->'properties')->>'proj:code') AS proj_code,
+        ((content->'properties')->'proj:geometry') AS proj_geometry,
+        ((content->'properties')->>'proj:wkt2') AS proj_wkt2,
+        ((content->'properties')->'proj:projjson') AS proj_projjson,
+        ((content->'properties')->'proj:bbox') AS proj_bbox,
+        ((content->'properties')->'proj:centroid') AS proj_centroid,
+        ((content->'properties')->'proj:shape') AS proj_shape,
+        ((content->'properties')->'proj:transform') AS proj_transform,
+
+        ((content->'properties')->>'sci:doi') AS sci_doi,
+        ((content->'properties')->>'sci:citation') AS sci_citation,
+        ((content->'properties')->'sci:publications') AS sci_publications,
+
+        ((content->'properties')->>'view:off_nadir')::float8 AS view_off_nadir,
+        ((content->'properties')->>'view:incidence_angle')::float8 AS view_incidence_angle,
+        ((content->'properties')->>'view:azimuth')::float8 AS view_azimuth,
+        ((content->'properties')->>'view:sun_azimuth')::float8 AS view_sun_azimuth,
+        ((content->'properties')->>'view:sun_elevation')::float8 AS view_sun_elevation,
+        ((content->'properties')->>'view:moon_azimuth')::float8 AS view_moon_azimuth,
+        ((content->'properties')->>'view:moon_elevation')::float8 AS view_moon_elevation,
+
+        ((content->'properties')->>'file:size')::bigint AS file_size,
+        ((content->'properties')->>'file:header_size')::bigint AS file_header_size,
+        ((content->'properties')->>'file:checksum') AS file_checksum,
+        ((content->'properties')->>'file:byte_order') AS file_byte_order,
+
+        ((content->'properties')->>'sat:orbit_state') AS sat_orbit_state,
+        ((content->'properties')->>'sat:relative_orbit')::integer AS sat_relative_orbit,
+        ((content->'properties')->>'sat:absolute_orbit')::integer AS sat_absolute_orbit,
+        ((content->'properties')->>'sat:platform_international_designator') AS sat_platform_international_designator,
+        ((content->'properties')->>'sat:anx_datetime')::timestamptz AS sat_anx_datetime,
+        stac_links_href_array(content->'links') AS link_hrefs,
+        -- private is operator-managed metadata outside the STAC item; always NULL from ingest
+        NULL::jsonb AS private;
+$$ LANGUAGE SQL STABLE;
 
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
@@ -2237,75 +3037,83 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
-DROP FUNCTION IF EXISTS content_hydrate(jsonb, jsonb, jsonb);
+-- content_hydrate: Reassemble a full STAC item JSON from the split columns
+-- and the shared fragment content. This is the single hydrate function;
+-- the old content_nonhydrated wrapper and 3-arg _collection parameter have
+-- been removed.
 CREATE OR REPLACE FUNCTION content_hydrate(
-    _item jsonb,
-    _base_item jsonb,
-    fields jsonb DEFAULT '{}'::jsonb
-) RETURNS jsonb AS $$
-    SELECT merge_jsonb(
-            jsonb_fields(_item, fields),
-            jsonb_fields(_base_item, fields)
-    );
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
-
-
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-DECLARE
-    geom jsonb;
-    bbox jsonb;
-    output jsonb;
-    content jsonb;
-    base_item jsonb := _collection.base_item;
-BEGIN
-    IF include_field('geometry', fields) THEN
-        geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
-    END IF;
-    output := content_hydrate(
-        jsonb_build_object(
-            'id', _item.id,
-            'geometry', geom,
-            'collection', _item.collection,
-            'type', 'Feature'
-        ) || _item.content,
-        _collection.base_item,
-        fields
-    );
-
-    RETURN output;
-END;
-$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION content_nonhydrated(
     _item items,
     fields jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
     output jsonb;
+    frag_content jsonb;
+    frag_links_template jsonb;
+    merged_assets jsonb;
+    merged_properties jsonb;
+    hydrated_stac_version text;
+    hydrated_stac_extensions jsonb;
+    hydrated_links jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
+
+    -- Fetch shared fragment content (NULL when item has no fragment).
+    IF _item.fragment_id IS NOT NULL THEN
+        SELECT content, links_template
+        INTO frag_content, frag_links_template
+        FROM item_fragments
+        WHERE id = _item.fragment_id;
+    END IF;
+
+    -- Merge: fragment provides shared asset/property values; per-item provides individual values.
+    merged_assets     := jsonb_merge_recursive(frag_content->'assets', COALESCE(_item.assets, '{}'::jsonb));
+    merged_properties := jsonb_merge_recursive(frag_content->'properties', COALESCE(_item.properties, '{}'::jsonb));
+    merged_properties := promoted_properties_from_item(_item) || COALESCE(merged_properties, '{}'::jsonb);
+    hydrated_stac_version := COALESCE(_item.stac_version, frag_content->>'stac_version');
+    hydrated_stac_extensions := CASE
+        WHEN _item.stac_extensions IS NOT NULL AND _item.stac_extensions <> '[]'::jsonb THEN _item.stac_extensions
+        ELSE COALESCE(frag_content->'stac_extensions', _item.stac_extensions)
+    END;
+    IF _item.fragment_id IS NOT NULL THEN
+        hydrated_links := stac_links_hydrate(frag_links_template, _item.link_hrefs);
+    ELSE
+        hydrated_links := COALESCE(_item.links, '[]'::jsonb);
+    END IF;
+
     output := jsonb_build_object(
-                'id', _item.id,
-                'geometry', geom,
-                'collection', _item.collection,
-                'type', 'Feature'
-            ) || _item.content;
-    RETURN output;
+        'id',         _item.id,
+        'geometry',   geom,
+        'collection', _item.collection,
+        'type',       'Feature'
+    );
+    IF _item.bbox IS NOT NULL THEN
+        output := output || jsonb_build_object('bbox', _item.bbox);
+    END IF;
+    IF hydrated_stac_version IS NOT NULL THEN
+        output := output || jsonb_build_object('stac_version', hydrated_stac_version);
+    END IF;
+    IF hydrated_stac_extensions IS NOT NULL AND hydrated_stac_extensions <> '[]'::jsonb THEN
+        output := output || jsonb_build_object('stac_extensions', hydrated_stac_extensions);
+    END IF;
+    IF hydrated_links IS NOT NULL THEN
+        output := output || jsonb_build_object('links', hydrated_links);
+    END IF;
+    IF merged_assets != '{}'::jsonb THEN
+        output := output || jsonb_build_object('assets', merged_assets);
+    END IF;
+    IF merged_properties IS NOT NULL THEN
+        output := output || jsonb_build_object('properties', merged_properties);
+    END IF;
+    IF _item.extra IS NOT NULL THEN
+        output := output || _item.extra;
+    END IF;
+
+    RETURN jsonb_fields(output, fields);
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT content_hydrate(
-        _item,
-        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
-        fields
-    );
-$$ LANGUAGE SQL STABLE;
 
 
 CREATE UNLOGGED TABLE items_staging (
@@ -2318,13 +3126,156 @@ CREATE UNLOGGED TABLE items_staging_upsert (
     content JSONB NOT NULL
 );
 
+-- items_staging_dehydrate: Shared ingest pipeline for all three staging tables.
+-- Given the batch of raw STAC item JSONs it dehydrates each into items columns,
+-- computes and deduplicates the per-collection fragment payload (inserting new
+-- item_fragments rows via ON CONFLICT), assigns fragment_id, and strips
+-- fragment-covered keys. Returns the fully-enriched rows as the items rowtype so
+-- each staging trigger branch is a single INSERT differing only in conflict
+-- policy. The enriched column list lives here once (previously duplicated 3x).
+CREATE OR REPLACE FUNCTION items_staging_dehydrate(_contents jsonb[]) RETURNS SETOF items AS $$
+        WITH raw AS MATERIALIZED (
+            SELECT
+                n.content AS orig_content,
+                d.*
+            FROM unnest(_contents) AS n(content)
+            CROSS JOIN LATERAL content_dehydrate(n.content) d
+        ),
+        fragmented_base AS MATERIALIZED (
+            SELECT
+                r.*,
+                c.fragment_config,
+                stac_links_strip_hrefs(r.orig_content->'links') AS links_template,
+                extract_fragment(r.orig_content, c.fragment_config) AS frag_content
+            FROM raw r
+            JOIN collections c ON c.id = r.collection
+        ),
+        fragmented AS MATERIALIZED (
+            SELECT
+                fb.*,
+                CASE
+                    WHEN fb.frag_content IS NULL
+                        AND fb.links_template IS NULL THEN NULL
+                    ELSE pgstac_hash_fragment(
+                        jsonb_strip_nulls(
+                            jsonb_build_object(
+                                'content', NULLIF(fb.frag_content, '{}'::jsonb),
+                                'links_template', fb.links_template
+                            )
+                        )
+                    )
+                END AS frag_hash
+            FROM fragmented_base fb
+        ),
+        fragments AS MATERIALIZED (
+            SELECT DISTINCT ON (collection, frag_hash)
+                collection,
+                frag_hash,
+                frag_content,
+                fragment_config,
+                links_template
+            FROM fragmented
+            WHERE frag_hash IS NOT NULL
+            ORDER BY collection, frag_hash
+        ),
+        insert_fragments AS (
+            INSERT INTO item_fragments (collection, hash, content, links_template)
+            SELECT collection, frag_hash, COALESCE(frag_content, '{}'::jsonb), links_template
+            FROM fragments
+            ON CONFLICT (collection, hash) DO NOTHING
+            RETURNING id, collection, hash
+        ),
+        all_fragments AS (
+            SELECT id, collection, hash FROM insert_fragments
+            UNION ALL
+            SELECT f.id, f.collection, f.hash
+            FROM item_fragments f
+            JOIN fragments p ON f.collection = p.collection AND f.hash = p.frag_hash
+        ),
+        enriched AS MATERIALIZED (
+            SELECT
+                r.id,
+                r.geometry,
+                r.collection,
+                r.datetime,
+                r.end_datetime,
+                r.datetime_is_range,
+                CASE
+                    WHEN fragment_path_text(ARRAY['stac_version']) = ANY(f.fragment_config) THEN NULL
+                    ELSE r.stac_version
+                END AS stac_version,
+                CASE
+                    WHEN fragment_path_text(ARRAY['stac_extensions']) = ANY(f.fragment_config) THEN '[]'::jsonb
+                    ELSE r.stac_extensions
+                END AS stac_extensions,
+                r.pgstac_updated_at,
+                r.item_hash,
+                af.id AS fragment_id,
+                r.bbox,
+                CASE
+                    WHEN r.link_hrefs IS NOT NULL AND array_length(r.link_hrefs, 1) > 0 THEN NULL
+                    ELSE r.links
+                END AS links,
+                strip_fragment_col(COALESCE(r.assets, '{}'::jsonb), 'assets', f.fragment_config) AS assets,
+                strip_fragment_col(COALESCE(r.properties, '{}'::jsonb), 'properties', f.fragment_config) AS properties,
+                r.extra,
+                r.created,
+                r.updated,
+                r.platform,
+                r.instruments,
+                r.constellation,
+                r.mission,
+                r.eo_cloud_cover,
+                r.bands,
+                r.eo_snow_cover,
+                r.gsd,
+                r.proj_code,
+                r.proj_geometry,
+                r.proj_wkt2,
+                r.proj_projjson,
+                r.proj_bbox,
+                r.proj_centroid,
+                r.proj_shape,
+                r.proj_transform,
+                r.sci_doi,
+                r.sci_citation,
+                r.sci_publications,
+                r.view_off_nadir,
+                r.view_incidence_angle,
+                r.view_azimuth,
+                r.view_sun_azimuth,
+                r.view_sun_elevation,
+                r.view_moon_azimuth,
+                r.view_moon_elevation,
+                r.file_size,
+                r.file_header_size,
+                r.file_checksum,
+                r.file_byte_order,
+                r.sat_orbit_state,
+                r.sat_relative_orbit,
+                r.sat_absolute_orbit,
+                r.sat_platform_international_designator,
+                r.sat_anx_datetime,
+                r.link_hrefs,
+                NULL::jsonb AS private
+            FROM fragmented r
+            LEFT JOIN fragments f ON f.collection = r.collection AND f.frag_hash = r.frag_hash
+            LEFT JOIN all_fragments af ON af.collection = f.collection AND af.hash = f.frag_hash
+        )
+    SELECT * FROM enriched;
+$$ LANGUAGE SQL;
+
+-- items_staging_triggerfunc: AFTER INSERT trigger on items_staging /
+-- items_staging_ignore / items_staging_upsert. Ensures partitions exist, then
+-- runs the shared items_staging_dehydrate() pipeline with the per-table conflict
+-- policy (and, for upsert, a pre-DELETE of rows whose stored content changed),
+-- and finally clears the staging table.
 CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
-    p record;
-    _partitions text[];
     part text;
     ts timestamptz := clock_timestamp();
     nrows int;
+    batch jsonb[];
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
@@ -2346,59 +3297,62 @@ BEGIN
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
-    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
-    DROP TABLE IF EXISTS tmpdata;
-    CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
-    SELECT
-        (content_dehydrate(content)).*
-    FROM newdata;
-    GET DIAGNOSTICS nrows = ROW_COUNT;
-    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
+    batch := ARRAY(SELECT content FROM newdata);
 
     RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
-        INSERT INTO items
-        SELECT * FROM tmpdata;
+        INSERT INTO items SELECT * FROM items_staging_dehydrate(batch);
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
-        INSERT INTO items
-        SELECT * FROM tmpdata
+        INSERT INTO items SELECT * FROM items_staging_dehydrate(batch)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
-        DELETE FROM items i USING tmpdata s
+        -- Delete existing rows whose stored content actually changed, then insert.
+        EXECUTE format(
+            $sql$
+            DELETE FROM items i USING (
+                SELECT d.*
+                FROM newdata s
+                CROSS JOIN LATERAL content_dehydrate(s.content) d
+            ) s
             WHERE
                 i.id = s.id
                 AND i.collection = s.collection
-                AND i IS DISTINCT FROM s
-        ;
+                AND (
+                    %s
+                )
+            $sql$,
+            items_content_distinct_sql('i', 's')
+        );
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
-        INSERT INTO items AS t
-        SELECT * FROM tmpdata
+        INSERT INTO items SELECT * FROM items_staging_dehydrate(batch)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
     RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
-    DELETE FROM items_staging;
+    EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
-
 END;
 $$ LANGUAGE PLPGSQL;
 
 
+DROP TRIGGER IF EXISTS items_staging_insert_trigger ON items_staging;
 CREATE TRIGGER items_staging_insert_trigger AFTER INSERT ON items_staging REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
 
+DROP TRIGGER IF EXISTS items_staging_insert_ignore_trigger ON items_staging_ignore;
 CREATE TRIGGER items_staging_insert_ignore_trigger AFTER INSERT ON items_staging_ignore REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
 
+DROP TRIGGER IF EXISTS items_staging_insert_upsert_trigger ON items_staging_upsert;
 CREATE TRIGGER items_staging_insert_upsert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
 
@@ -2479,6 +3433,277 @@ UPDATE collections
     )
 ;
 $$ LANGUAGE SQL;
+
+-- ---------------------------------------------------------------------------
+-- Field Registry: walks JSONB item content to track which paths exist in each
+-- collection.  Used to auto-populate queryables and support schema inference.
+-- jsonb_field_rows is defined in 001a_jsonutils.sql (loaded first).
+-- ---------------------------------------------------------------------------
+
+-- update_field_registry_from_sample: UPSERT registry rows from a pre-selected array of
+-- raw item content JSONBs.  Callers supply the sample to decouple sampling strategy
+-- from the registry write; merge value_kinds to accumulate observed types over time.
+CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
+    _collection text,
+    item_contents jsonb[]
+) RETURNS void AS $$
+    INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+    SELECT
+        _collection,
+        r.path,
+        bool_and(r.is_leaf)                                                       AS is_leaf,
+        array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+        now(),
+        now()
+    FROM unnest(item_contents) AS item(content)
+    CROSS JOIN LATERAL jsonb_field_rows(item.content) AS r(path, is_leaf, value_kind)
+    GROUP BY r.path
+    ON CONFLICT (collection, path) DO UPDATE SET
+        is_leaf     = EXCLUDED.is_leaf,
+        value_kinds = (
+            SELECT array_agg(DISTINCT v)
+            FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+        ),
+        last_seen   = now()
+    ;
+$$ LANGUAGE SQL VOLATILE;
+
+-- update_field_registry_from_items: Sample a live collection and UPSERT registry rows.
+-- Uses TABLESAMPLE BERNOULLI(5) for large collections (>10k rows by pg_class estimate)
+-- and LIMIT 1000 for smaller ones to avoid a full seq-scan for tiny collections.
+-- pg_class.reltuples is an estimate (may be stale); its only role is threshold selection.
+-- Returns (registered_paths, rows_processed) for observability.
+CREATE OR REPLACE FUNCTION update_field_registry_from_items(
+    _collection text
+) RETURNS TABLE (registered_paths int, rows_processed int) AS $$
+DECLARE
+    est_rows bigint;
+    nrows    int;
+    npaths   int;
+BEGIN
+    -- Sum reltuples across the registered item partitions for this collection.
+    -- reltuples can be -1 (never analyzed); treat negative values as zero.
+    SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
+    FROM partitions_view p
+    JOIN pg_class c ON c.relname = p.partition
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.collection = _collection
+      AND n.nspname = 'pgstac'
+      AND c.relkind = 'r';
+
+    IF est_rows > 10000 THEN
+        -- Large collection: use statistical sampling to avoid full seq-scan.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i TABLESAMPLE BERNOULLI(5) WHERE i.collection = _collection
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    ELSE
+        -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i WHERE i.collection = _collection LIMIT 1000
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    END IF;
+
+    RETURN QUERY SELECT npaths, nrows;
+END;
+$$ LANGUAGE PLPGSQL VOLATILE SECURITY DEFINER;
+
+-- refresh_field_registry: Expire stale registry entries that haven't been seen recently.
+-- Intended for scheduled maintenance (e.g. pg_cron daily job).
+-- Returns (collection, expired_paths) for each collection affected.
+CREATE OR REPLACE FUNCTION refresh_field_registry(
+    _collection text DEFAULT NULL,
+    retention_interval interval DEFAULT '90 days'
+) RETURNS TABLE (collection_id text, expired_paths int) AS $$
+    WITH deleted AS (
+        DELETE FROM item_field_registry
+        WHERE (_collection IS NULL OR collection = _collection)
+          AND last_seen < now() - retention_interval
+        RETURNING collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
+$$ LANGUAGE SQL VOLATILE;
+
+-- Item Fragment Management functions
+
+-- extract_fragment: Given full STAC item JSONB and a list of serialized fragment paths
+-- (each element is fragment_path_text(text[]) — a JSON-array serialized root-relative path),
+-- extract the sparse overlay JSONB that will be stored in item_fragments for dedup.
+-- Returns NULL when fragment_paths is NULL or empty, or when no values are found.
+-- Supports paths at any depth:
+--   depth-1  (e.g. 'stac_version')                  → extracts the whole top-level key.
+--   depth-2  (e.g. 'assets.thumbnail')               → extracts a named sub-key.
+--   depth-3+ (e.g. 'assets.thumbnail.type')          → extracts a nested sub-sub-key,
+--                                                       building a sparse nested JSONB.
+-- Multiple paths sharing intermediate keys are merged correctly so that, for example,
+-- 'assets.thumbnail.type' and 'assets.thumbnail.roles' together produce
+-- {"assets": {"thumbnail": {"type": ..., "roles": ...}}} rather than overwriting.
+CREATE OR REPLACE FUNCTION extract_fragment(
+    content jsonb,
+    fragment_paths text[]
+) RETURNS jsonb AS $$
+DECLARE
+    result    jsonb := '{}'::jsonb;
+    p         text;
+    pth       text[];
+    val       jsonb;
+BEGIN
+    IF content IS NULL OR fragment_paths IS NULL OR cardinality(fragment_paths) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    FOREACH p IN ARRAY fragment_paths LOOP
+        pth := fragment_path_array(p);
+        IF pth IS NULL OR cardinality(pth) = 0 THEN CONTINUE; END IF;
+
+        val := content #> pth;
+        IF val IS NOT NULL THEN
+            -- jsonb_set_nested creates intermediate empty objects as needed, so
+            -- depth-3+ paths are handled correctly and multiple paths sharing the
+            -- same intermediate keys are merged rather than overwritten.
+            result := jsonb_set_nested(result, pth, val);
+        END IF;
+    END LOOP;
+
+    IF result = '{}'::jsonb THEN RETURN NULL; END IF;
+    RETURN result;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+-- pgstac_hash_fragment: Hash a fragment payload for dedup. Returns the raw
+-- 32-byte sha256 (bytea), stored directly in item_fragments.hash. The fragment
+-- jsonb is normalized to a single canonical text by PostgreSQL (equal fragments
+-- always serialize identically), so jsonb::text is sufficient for this
+-- internal dedup key; the externally reproducible item digest is pgstac_item_hash.
+CREATE OR REPLACE FUNCTION pgstac_hash_fragment(fragment jsonb) RETURNS bytea AS $$
+SELECT sha256(convert_to(fragment::text, 'UTF8'));
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+-- gc_fragments: Garbage collect orphaned fragments using a single set-based DELETE.
+-- Replaces the previous per-collection FOR LOOP with a single statement that lets
+-- the planner choose the optimal join/anti-join strategy across all collections.
+-- The NOT EXISTS sub-select is evaluated per fragment; with an index on items.fragment_id
+-- this is an efficient anti-join rather than a full seq-scan.
+--
+-- Operational note: because items.fragment_id is intentionally unmanaged by an FK
+-- (partitioned-items incremental NOT VALID FKs are not supported), gc_fragments has a
+-- small race window with concurrent inserts. A fragment that is unreferenced at the time
+-- the DELETE snapshot is taken but becomes referenced by a later insert could be removed.
+-- The retention_interval guard makes this unlikely for normal ingest, but operators should
+-- still run gc_fragments during low-ingest periods or with a sufficiently conservative
+-- retention interval. This is a documented operational tradeoff, not a silent invariant.
+CREATE OR REPLACE FUNCTION gc_fragments(
+    _collection text DEFAULT NULL,
+    retention_interval interval DEFAULT '90 days'
+) RETURNS TABLE (
+    collection_id text,
+    fragments_removed int
+) AS $$
+    WITH deleted AS (
+        DELETE FROM item_fragments f
+        WHERE
+            (_collection IS NULL OR f.collection = _collection)
+            AND f.created_at < now() - retention_interval
+            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id)
+        RETURNING f.collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
+$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE;
+
+-- strip_fragment_col: Remove fragment-owned sub-keys from a split column value.
+-- col_name is the top-level STAC key that this column represents (e.g. 'assets' or 'properties').
+-- fragment_paths is the collection's fragment_config text[].
+-- Supports paths at any depth:
+--   depth-1  matching col_name  → zeroes out the entire column (returns '{}').
+--   depth-2+ matching col_name  → removes the nested sub-path using the #- operator,
+--                                  which handles arbitrary nesting without requiring a loop.
+-- Examples with col_name='assets':
+--   'assets'                  → returns '{}'  (whole column is in the fragment)
+--   'assets.thumbnail'        → removes 'thumbnail' key  (depth-2, old behaviour)
+--   'assets.thumbnail.type'   → removes 'type' from within 'thumbnail'  (depth-3, new)
+-- Returns col_value unchanged when there are no matching fragment paths.
+CREATE OR REPLACE FUNCTION strip_fragment_col(
+    col_value jsonb,
+    col_name  text,
+    fragment_paths text[]
+) RETURNS jsonb AS $$
+DECLARE
+    result    jsonb := col_value;
+    p         text;
+    pth       text[];
+    n         int;
+BEGIN
+    IF col_value IS NULL OR fragment_paths IS NULL THEN RETURN col_value; END IF;
+
+    FOREACH p IN ARRAY fragment_paths LOOP
+        pth := fragment_path_array(p);
+        n   := cardinality(pth);
+        IF pth IS NULL OR n = 0 OR pth[1] <> col_name THEN CONTINUE; END IF;
+
+        IF n = 1 THEN
+            RETURN '{}'::jsonb;  -- entire column goes to fragment
+        ELSE
+            -- Remove the nested sub-path from the column value at any depth.
+            -- #- handles depth-2 (removes a top-level key) through depth-N (removes a
+            -- nested key) using the path tail pth[2:n].
+            result := result #- pth[2:n];
+        END IF;
+    END LOOP;
+
+    RETURN result;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 -- END FRAGMENT: 003a_items.sql
 
 -- BEGIN FRAGMENT: 003b_partitions.sql
@@ -3331,9 +4556,11 @@ BEGIN
         where_segments := where_segments || format(
             $quote$
             (
-                to_tsvector('english', content->'properties'->>'description') ||
-                to_tsvector('english', coalesce(content->'properties'->>'title', '')) ||
-                to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))
+                -- Use the split properties column directly (v0.10 schema).
+                -- Previously read from content->'properties'->>'description' etc.
+                to_tsvector('english', properties->>'description') ||
+                to_tsvector('english', coalesce(properties->>'title', '')) ||
+                to_tsvector('english', coalesce(properties->>'keywords', ''))
             ) @@ %L
             $quote$,
             ft_query
@@ -4105,46 +5332,9 @@ END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
 
-CREATE UNLOGGED TABLE format_item_cache(
-    id text,
-    collection text,
-    fields text,
-    hydrated bool,
-    output jsonb,
-    lastused timestamptz DEFAULT now(),
-    usecount int DEFAULT 1,
-    timetoformat float,
-    PRIMARY KEY (collection, id, fields, hydrated)
-);
-CREATE INDEX ON format_item_cache (lastused);
-
-CREATE OR REPLACE FUNCTION format_item(_item items, _fields jsonb DEFAULT '{}', _hydrated bool DEFAULT TRUE) RETURNS jsonb AS $$
-DECLARE
-    cache bool := get_setting_bool('format_cache');
-    _output jsonb := null;
-    t timestamptz := clock_timestamp();
+CREATE OR REPLACE FUNCTION format_item(_item items, _fields jsonb DEFAULT '{}') RETURNS jsonb AS $$
 BEGIN
-    IF cache THEN
-        SELECT output INTO _output FROM format_item_cache
-        WHERE id=_item.id AND collection=_item.collection AND fields=_fields::text AND hydrated=_hydrated;
-    END IF;
-    IF _output IS NULL THEN
-        IF _hydrated THEN
-            _output := content_hydrate(_item, _fields);
-        ELSE
-            _output := content_nonhydrated(_item, _fields);
-        END IF;
-    END IF;
-    IF cache THEN
-        INSERT INTO format_item_cache (id, collection, fields, hydrated, output, timetoformat)
-            VALUES (_item.id, _item.collection, _fields::text, _hydrated, _output, age_ms(t))
-            ON CONFLICT(collection, id, fields, hydrated) DO
-                UPDATE
-                    SET lastused=now(), usecount = format_item_cache.usecount + 1
-        ;
-    END IF;
-    RETURN _output;
-
+    RETURN content_hydrate(_item, _fields);
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -4164,7 +5354,6 @@ DECLARE
     full_where text;
     init_ts timestamptz := clock_timestamp();
     timer timestamptz := clock_timestamp();
-    hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
     collection jsonb;
@@ -4211,15 +5400,10 @@ BEGIN
     RAISE NOTICE 'Time to get counts and build query %', age_ms(timer);
     timer := clock_timestamp();
 
-    IF hydrate THEN
-        RAISE NOTICE 'Getting hydrated data.';
-    ELSE
-        RAISE NOTICE 'Getting non-hydrated data.';
-    END IF;
-    RAISE NOTICE 'CACHE SET TO %', get_setting_bool('format_cache');
+    RAISE NOTICE 'Getting hydrated data.';
     RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
-    SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
+    SELECT jsonb_agg(format_item(i, _fields)) INTO out_records
     FROM search_rows(
         full_where,
         orderby,
@@ -4367,6 +5551,10 @@ $$ LANGUAGE PLPGSQL;
 -- END FRAGMENT: 004_search.sql
 
 -- BEGIN FRAGMENT: 004a_collectionsearch.sql
+-- collections_asitems: Exposes collections as pseudo-items for CQL2 filtering.
+-- The 'properties' column is the collection content with the standard top-level
+-- STAC fields stripped, so CQL2 expressions like {"property":"title"} resolve
+-- correctly when filtering collections via /collections?filter=... endpoints.
 CREATE OR REPLACE VIEW collections_asitems AS
 SELECT
     id,
@@ -4374,6 +5562,8 @@ SELECT
     'collections' AS collection,
     datetime,
     end_datetime,
+    -- Expose collection metadata as properties so CQL2 {"property":"title"} etc. work.
+    content - '{links,assets,stac_version,stac_extensions}' AS properties,
     jsonb_build_object(
         'properties', content - '{links,assets,stac_version,stac_extensions}',
         'links', content->'links',
@@ -4882,6 +6072,35 @@ DO $$
   END
 $$;
 
+-- Register promoted native-column queryables (v0.10 split schema).
+-- Each entry maps a STAC property name to the promoted items column via property_path.
+-- CQL2 queries and auto-created indexes will use the native column, not JSONB extraction.
+-- The seed data lives in promoted_queryables_defaults() (002a_queryables.sql) so it
+-- only needs to be maintained in one place.
+--
+-- Pass 1: insert rows that do not yet exist.
+INSERT INTO queryables (name, definition, property_path, property_wrapper)
+SELECT p.name, p.definition, p.property_path, p.property_wrapper
+FROM promoted_queryables_defaults() p
+WHERE NOT EXISTS (
+    SELECT 1 FROM queryables q WHERE q.name = p.name
+);
+
+-- Pass 2: backfill property_path on older rows and normalize promoted wrappers
+-- to the defaults (NULL for native promoted columns).
+UPDATE queryables q
+SET property_path = CASE
+      WHEN q.property_index_type IS NULL THEN COALESCE(q.property_path, p.property_path)
+      ELSE q.property_path
+    END,
+    property_wrapper = CASE
+      WHEN q.property_index_type IS NULL THEN p.property_wrapper
+      ELSE q.property_wrapper
+    END,
+    definition = COALESCE(q.definition, p.definition)
+FROM promoted_queryables_defaults() p
+WHERE q.name = p.name;
+
 DELETE FROM queryables a USING queryables b
   WHERE a.name = b.name AND a.collection_ids IS NOT DISTINCT FROM b.collection_ids AND a.id > b.id;
 
@@ -4965,6 +6184,28 @@ ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
 ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
+ALTER FUNCTION pgstac.jsonb_hash(jsonb) SECURITY DEFINER;
+ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
+ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
+ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
+ALTER FUNCTION items_touch_triggerfunc SECURITY DEFINER;
+ALTER FUNCTION items_delete_log_trigger SECURITY DEFINER;
+ALTER FUNCTION strip_promoted_properties(jsonb) SECURITY DEFINER;
+ALTER FUNCTION tstz_to_stac_text(timestamptz) SECURITY DEFINER;
+ALTER FUNCTION temporal_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION promoted_properties_from_item(items) SECURITY DEFINER;
+ALTER FUNCTION extract_fragment(jsonb, text[]) SECURITY DEFINER;
+ALTER FUNCTION pgstac_hash_fragment(jsonb) SECURITY DEFINER;
+ALTER FUNCTION gc_fragments(text, interval) SECURITY DEFINER;
+ALTER FUNCTION strip_fragment_col(jsonb, text, text[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_sample(text, jsonb[]) SECURITY DEFINER;
+ALTER FUNCTION update_field_registry_from_items(text) SECURITY DEFINER;
+ALTER FUNCTION refresh_field_registry(text, interval) SECURITY DEFINER;
+ALTER FUNCTION collection_fragment_config_default(jsonb) SECURITY DEFINER;
+ALTER FUNCTION jsonb_leaf_rows(jsonb, text) SECURITY DEFINER;
+ALTER FUNCTION jsonb_common_values(jsonb, jsonb) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_text(text[]) SECURITY DEFINER;
+ALTER FUNCTION fragment_path_array(text) SECURITY DEFINER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -4975,6 +6216,9 @@ GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
+GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
+GRANT EXECUTE ON FUNCTION pgstac.jsonb_hash(jsonb) TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 
@@ -5000,3 +6244,4 @@ SELECT update_partition_stats_q(partition) FROM partitions_view;
 -- BEGIN FRAGMENT: 999_version.sql
 SELECT set_version('unreleased');
 -- END FRAGMENT: 999_version.sql
+

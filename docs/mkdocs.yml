@@ -19,6 +19,7 @@ extra:
 nav:
   - Home: "index.md"
   - PgSTAC: "pgstac.md"
+  - Promoted Fields: "promoted-fields.md"
   - pyPgSTAC: "pypgstac.md"
   - Performance:
     - item_size_analysis.ipynb
