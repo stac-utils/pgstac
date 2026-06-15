@@ -43,7 +43,7 @@ dev = [
 ]
 test = [
     "morecantile>=6.2,<7.1",
-    "pytest>=8.3,<9.1",
+    "pytest>=8.3,<9.2",
     "pytest-benchmark>=5.1,<5.3",
     "pytest-cov>=6.0,<7.2",
     "pystac[validation]==1.*",
