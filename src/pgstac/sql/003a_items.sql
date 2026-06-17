@@ -529,12 +529,24 @@ END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
 -- content_hydrate: Reassemble a full STAC item JSON from the split columns
--- and the shared fragment content. This is the single hydrate function;
--- the old content_nonhydrated wrapper and 3-arg _collection parameter have
--- been removed.
+-- and the shared fragment content.
+--
+-- Two overloads:
+--   content_hydrate(_item, fields)                    -- looks up fragment via subquery
+--   content_hydrate(_item, _fragment, fields)         -- uses pre-joined fragment (streaming path)
+--
+-- The 3-arg form is the real implementation; the 2-arg form is a thin wrapper.
+-- Use the 3-arg form when the fragment is already available from a LEFT JOIN
+-- (e.g. in search_sql) to avoid a per-row correlated subquery.
+
+-- content_hydrate: reassemble a full STAC item from its split-storage row and shared
+-- fragment. The fragment is optional: pass it (e.g. from a LEFT JOIN in the streaming
+-- path) to avoid a per-row lookup, or omit it and content_hydrate fetches it when the
+-- item has a fragment_id. One function via a defaulted trailing arg (no 2-arg overload).
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item items,
-    fields jsonb DEFAULT '{}'::jsonb
+    fields jsonb DEFAULT '{}'::jsonb,
+    _fragment item_fragments DEFAULT NULL
 ) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
@@ -547,16 +559,19 @@ DECLARE
     hydrated_stac_extensions jsonb;
     hydrated_links jsonb;
 BEGIN
+    -- fetch the fragment if it was not supplied and the item has one.
+    IF _fragment IS NULL AND _item.fragment_id IS NOT NULL THEN
+        SELECT * INTO _fragment FROM item_fragments WHERE id = _item.fragment_id;
+    END IF;
+
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
 
-    -- Fetch shared fragment content (NULL when item has no fragment).
-    IF _item.fragment_id IS NOT NULL THEN
-        SELECT content, links_template
-        INTO frag_content, frag_links_template
-        FROM item_fragments
-        WHERE id = _item.fragment_id;
+    -- _fragment comes from a LEFT JOIN; its id is NULL when the item has no fragment.
+    IF _fragment.id IS NOT NULL THEN
+        frag_content        := _fragment.content;
+        frag_links_template := _fragment.links_template;
     END IF;
 
     -- Merge: fragment provides shared asset/property values; per-item provides individual values.
@@ -568,7 +583,7 @@ BEGIN
         WHEN _item.stac_extensions IS NOT NULL AND _item.stac_extensions <> '[]'::jsonb THEN _item.stac_extensions
         ELSE COALESCE(frag_content->'stac_extensions', _item.stac_extensions)
     END;
-    IF _item.fragment_id IS NOT NULL THEN
+    IF _fragment.id IS NOT NULL THEN
         hydrated_links := stac_links_hydrate(frag_links_template, _item.link_hrefs);
     ELSE
         hydrated_links := COALESCE(_item.links, '[]'::jsonb);
@@ -614,6 +629,13 @@ CREATE UNLOGGED TABLE items_staging_ignore (
     content JSONB NOT NULL
 );
 CREATE UNLOGGED TABLE items_staging_upsert (
+    content JSONB NOT NULL
+);
+-- Upsert staging that does NOT walk the field registry. This is the RDS-safe way to
+-- signal "skip the registry walk" (a session GUC like pgstac.skip_field_registry can't
+-- be relied on under RDS): a loader that already computed the paths calls
+-- register_field_paths() and then loads here, avoiding the walk-twice cost.
+CREATE UNLOGGED TABLE items_staging_noregistry (
     content JSONB NOT NULL
 );
 
@@ -800,7 +822,7 @@ BEGIN
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
-    ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
+    ELSIF TG_TABLE_NAME IN ('items_staging_upsert', 'items_staging_noregistry') THEN
         -- Delete existing rows whose stored content actually changed, then insert.
         EXECUTE format(
             $sql$
@@ -826,6 +848,35 @@ BEGIN
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
+    -- Exhaustive field registry (append-only), statement-level + set-based over the
+    -- whole batch's RAW contents (original STAC paths, not the dehydrated columns),
+    -- grouped by collection. Skipped when loading via items_staging_noregistry (the
+    -- RDS-safe signal) or when `pgstac.skip_field_registry = true` (where GUCs are
+    -- available), so a loader that already computed the paths (e.g. the Rust client)
+    -- does not do the work twice — it calls register_field_paths() directly instead.
+    IF TG_TABLE_NAME <> 'items_staging_noregistry'
+       AND NOT coalesce(current_setting('pgstac.skip_field_registry', true)::boolean, false) THEN
+        INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+        SELECT
+            n.content->>'collection',
+            r.path,
+            bool_and(r.is_leaf),
+            array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL),
+            now(), now()
+        FROM unnest(batch) AS n(content)
+        -- only register collections that exist (items for unknown collections are
+        -- dropped by the dehydrate, and the registry FK would otherwise abort here).
+        JOIN collections col ON col.id = n.content->>'collection'
+        CROSS JOIN LATERAL jsonb_field_rows(n.content) AS r(path, is_leaf, value_kind)
+        GROUP BY n.content->>'collection', r.path
+        ON CONFLICT (collection, path) DO UPDATE SET
+            is_leaf     = EXCLUDED.is_leaf,
+            value_kinds = (SELECT array_agg(DISTINCT v)
+                           FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)),
+            last_seen   = now();
+        RAISE NOTICE 'Updated field registry. %', clock_timestamp() - ts;
+    END IF;
+
     RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
     EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
@@ -845,6 +896,10 @@ CREATE TRIGGER items_staging_insert_ignore_trigger AFTER INSERT ON items_staging
 
 DROP TRIGGER IF EXISTS items_staging_insert_upsert_trigger ON items_staging_upsert;
 CREATE TRIGGER items_staging_insert_upsert_trigger AFTER INSERT ON items_staging_upsert REFERENCING NEW TABLE AS newdata
+    FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
+
+DROP TRIGGER IF EXISTS items_staging_insert_noregistry_trigger ON items_staging_noregistry;
+CREATE TRIGGER items_staging_insert_noregistry_trigger AFTER INSERT ON items_staging_noregistry REFERENCING NEW TABLE AS newdata
     FOR EACH STATEMENT EXECUTE PROCEDURE items_staging_triggerfunc();
 
 
@@ -1062,6 +1117,34 @@ CREATE OR REPLACE FUNCTION refresh_field_registry(
     SELECT collection, count(*)::int
     FROM deleted
     GROUP BY collection;
+$$ LANGUAGE SQL VOLATILE;
+
+-- register_field_paths: append-only registry upsert from a PRE-COMPUTED path set.
+-- This is the seam for the Rust client (and any loader that already walked the
+-- JSON): it sends the distinct field paths it found, and we skip the SQL-side
+-- jsonb_field_rows walk entirely (set `pgstac.skip_field_registry = true` on the
+-- ingest session so the staging trigger does not also walk — avoids double work).
+-- _paths is a jsonb array of {path text, is_leaf bool, value_kinds text[]} objects.
+CREATE OR REPLACE FUNCTION register_field_paths(_collection text, _paths jsonb)
+RETURNS int AS $$
+    WITH upserted AS (
+        INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+        SELECT
+            _collection,
+            p->>'path',
+            coalesce((p->>'is_leaf')::boolean, true),
+            coalesce(ARRAY(SELECT jsonb_array_elements_text(p->'value_kinds')), '{}'::text[]),
+            now(), now()
+        FROM jsonb_array_elements(_paths) AS p
+        WHERE p->>'path' IS NOT NULL
+        ON CONFLICT (collection, path) DO UPDATE SET
+            is_leaf     = EXCLUDED.is_leaf,
+            value_kinds = (SELECT array_agg(DISTINCT v)
+                           FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)),
+            last_seen   = now()
+        RETURNING 1
+    )
+    SELECT count(*)::int FROM upserted;
 $$ LANGUAGE SQL VOLATILE;
 
 -- Item Fragment Management functions
