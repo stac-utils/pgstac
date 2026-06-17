@@ -148,6 +148,44 @@ DO $$
     RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+-- search_page grew a 5th `_mode` arg (item|row). Drop the old 4-arg signature so
+-- the two never coexist (a 4-arg call would be ambiguous between the leftover
+-- 4-arg and the new 5-arg-with-default). Precise to the 4-arg form; no-op on
+-- fresh installs (004 creates the 5-arg afterward).
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS search_page(jsonb, integer, text, boolean);
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+-- fields_to_rowjsonb grew a 2nd `_collections` arg (registry/fragment-config
+-- precision). Drop the old 1-arg signature for the same anti-ambiguity reason.
+DO $$
+  BEGIN
+    DROP FUNCTION IF EXISTS fields_to_rowjsonb(jsonb);
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+-- format_item was a no-op wrapper around content_hydrate(items, jsonb); removed in
+-- favor of calling content_hydrate directly. Drop it from existing installs.
+DROP FUNCTION IF EXISTS format_item(items, jsonb);
+
+-- content_hydrate is now a single function content_hydrate(items, jsonb, item_fragments)
+-- with the fragment defaulted/looked-up. Drop the prior 2-arg and (item,fragment,fields)
+-- 3-arg signatures so the defaulted call is unambiguous on existing installs.
+DROP FUNCTION IF EXISTS content_hydrate(items, jsonb);
+DROP FUNCTION IF EXISTS content_hydrate(items, item_fragments, jsonb);
+
+-- partition_index was consolidated into partition_stats; drop the old table + its
+-- maintenance functions on existing installs (the migration backfills partition_stats).
+DROP FUNCTION IF EXISTS upsert_partition_index(text, text, tstzrange, tstzrange, tstzrange, geometry, bigint);
+DROP FUNCTION IF EXISTS sync_partition_index();
+DROP TABLE IF EXISTS partition_index;
+
+-- keyset_sortkeys gained a `notnull` output column (return type change).
+DROP FUNCTION IF EXISTS keyset_sortkeys(jsonb);
 
 -- Install these idempotently as migrations do not put them before trying to modify the collections table
 
@@ -191,3 +229,27 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+-- Drop legacy per-partition datetime CHECK constraints from real items partitions.
+-- In v0.10 the partition-definition bounds (FOR VALUES FROM/TO) already enforce the
+-- datetime range, so these per-partition CHECK constraints are redundant.  Safe to run
+-- on fresh installs (no partitions exist, loop body never executes) and idempotent.
+DO $drop_legacy_dt_constraints$
+DECLARE
+    _partition text;
+    _conname text;
+BEGIN
+    FOR _partition, _conname IN
+        SELECT c.relname, con.conname
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'pgstac'
+          AND c.relname LIKE '_items_%'
+          AND con.contype = 'c'
+          AND con.conname LIKE '%_dt'
+    LOOP
+        EXECUTE format('ALTER TABLE pgstac.%I DROP CONSTRAINT IF EXISTS %I', _partition, _conname);
+    END LOOP;
+END;
+$drop_legacy_dt_constraints$;

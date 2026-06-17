@@ -65,6 +65,10 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_stats_ttl', '1 day'),
   ('search_gc_retention_interval', '7 days'),
   ('default_filter_lang', 'cql2-json'),
+  -- target page size for streaming/search_page when the caller gives no limit; the
+  -- chunker uses it for fast start + a bounded memory footprint. A caller-provided
+  -- limit is still honored as the max rows returned.
+  ('default_page_size', '250'),
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
@@ -135,7 +139,6 @@ ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
 ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
-ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
 ALTER FUNCTION pgstac.jsonb_hash(jsonb) SECURITY DEFINER;
 ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
@@ -154,6 +157,8 @@ ALTER FUNCTION strip_fragment_col(jsonb, text, text[]) SECURITY DEFINER;
 ALTER FUNCTION update_field_registry_from_sample(text, jsonb[]) SECURITY DEFINER;
 ALTER FUNCTION update_field_registry_from_items(text) SECURITY DEFINER;
 ALTER FUNCTION refresh_field_registry(text, interval) SECURITY DEFINER;
+ALTER FUNCTION register_field_paths(text, jsonb) SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION register_field_paths(text, jsonb) TO pgstac_ingest;
 ALTER FUNCTION collection_fragment_config_default(jsonb) SECURITY DEFINER;
 ALTER FUNCTION jsonb_leaf_rows(jsonb, text) SECURITY DEFINER;
 ALTER FUNCTION jsonb_common_values(jsonb, jsonb) SECURITY DEFINER;
@@ -169,9 +174,32 @@ GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
-GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
-GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
+GRANT EXECUTE ON FUNCTION content_hydrate(items, jsonb, item_fragments) TO pgstac_read;
 GRANT EXECUTE ON FUNCTION pgstac.jsonb_hash(jsonb) TO pgstac_read;
+-- Streaming search functions
+GRANT EXECUTE ON FUNCTION search_sql(jsonb, text) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_cursor(jsonb, text, refcursor) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION fields_to_columns(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION fields_to_rowjsonb(jsonb, text[]) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION collection_fragments_properties(text) TO pgstac_read;
+ALTER FUNCTION collection_fragments_properties(text) SECURITY DEFINER;
+-- v0.10 streaming engine: keyset pagination + search_page
+GRANT EXECUTE ON FUNCTION keyset_encode(text[]) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION keyset_decode(text) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION keyset_sortkeys(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION keyset_where(jsonb, text[], boolean) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_page(jsonb, integer, text, boolean, text) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_rows(jsonb, integer, text, boolean) TO pgstac_read;
+-- v0.10 partition_stats discovery: envelope extraction + indexed band chunker
+GRANT EXECUTE ON FUNCTION search_to_cql2(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_envelope(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION cql2_envelope(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION cql2_collection_set(text, jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION q_op_query(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION chunker(pred_envelope) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION sync_partition_stats() TO pgstac_admin;
+GRANT EXECUTE ON FUNCTION partition_sync_meta(text) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION partition_hashes(text) TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 
