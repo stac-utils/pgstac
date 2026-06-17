@@ -1,13 +1,23 @@
+-- partition_stats: the single source of per-partition metadata, used both for
+-- maintenance and as the search-discovery index (chunker() reads it directly). Holds
+-- the partition boundary (partition_dtrange) plus the actual data extents (dtrange,
+-- edtrange, spatial) and a row estimate (n). NULL data extents mean a freshly created,
+-- not-yet-analyzed partition (treated as unbounded by discovery).
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
+    collection text,
+    partition_dtrange tstzrange,
     dtrange tstzrange,
     edtrange tstzrange,
     spatial geometry,
     last_updated timestamptz,
+    n bigint,
     keys text[]
 ) WITH (FILLFACTOR=90);
 
 CREATE INDEX partitions_range_idx ON partition_stats USING GIST(dtrange);
+CREATE INDEX partition_stats_collection_idx ON partition_stats (collection);
+CREATE INDEX partition_stats_spatial_idx ON partition_stats USING GIST(spatial) WHERE spatial IS NOT NULL;
 
 
 CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
@@ -125,10 +135,10 @@ SELECT
     level,
     c.reltuples,
     c.relhastriggers,
-    partition_dtrange,
+    partboundary AS partition_dtrange,
     COALESCE(
         get_tstz_constraint(c.oid, 'datetime'),
-        partition_dtrange,
+        partboundary,
         inf_range
     ) as constraint_dtrange,
     COALESCE(
@@ -148,25 +158,37 @@ FROM
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
-    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
+    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partboundary ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
     LEFT JOIN pgstac.partition_stats USING (partition)
 WHERE isleaf
 ;
 
-CREATE MATERIALIZED VIEW partitions AS
-SELECT * FROM partitions_view;
-CREATE UNIQUE INDEX ON partitions (partition);
-
-CREATE MATERIALIZED VIEW partition_steps AS
-SELECT
-    partition as name,
-    date_trunc('month',lower(partition_dtrange)) as sdate,
-    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
-    FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
-    ORDER BY dtrange ASC
-;
+-- Backfill / self-heal the boundary metadata (collection, partition_dtrange, n) in
+-- partition_stats from the authoritative live partition tree, and drop rows whose
+-- partition no longer exists. The data extents (dtrange/edtrange/spatial) are filled
+-- separately by update_partition_stats() after ANALYZE. Cheap (one pass).
+CREATE OR REPLACE FUNCTION sync_partition_stats() RETURNS bigint AS $$
+    WITH upserted AS (
+        INSERT INTO partition_stats AS ps (partition, collection, partition_dtrange, n)
+        SELECT
+            p.partition, p.collection, p.partition_dtrange,
+            (SELECT reltuples::bigint FROM pg_class WHERE oid = quote_ident(p.partition)::regclass)
+        FROM partition_sys_meta p
+        ON CONFLICT (partition) DO UPDATE SET
+            collection = EXCLUDED.collection,
+            partition_dtrange = EXCLUDED.partition_dtrange,
+            n = COALESCE(EXCLUDED.n, ps.n)
+        RETURNING ps.partition
+    ),
+    deleted AS (
+        DELETE FROM partition_stats d
+        WHERE NOT EXISTS (SELECT 1 FROM partition_sys_meta m WHERE m.partition = d.partition)
+        RETURNING 1
+    )
+    SELECT (SELECT count(*) FROM upserted);
+$$ LANGUAGE SQL SECURITY DEFINER SET search_path TO pgstac, public;
 
 
 CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
@@ -182,10 +204,10 @@ CREATE OR REPLACE FUNCTION update_partition_stats(_partition text, istrigger boo
 DECLARE
     dtrange tstzrange;
     edtrange tstzrange;
-    cdtrange tstzrange;
-    cedtrange tstzrange;
     extent geometry;
     collection text;
+    _part_dtrange tstzrange;
+    _reltuples bigint;
 BEGIN
     RAISE NOTICE 'Updating stats for %.', _partition;
     EXECUTE format(
@@ -200,36 +222,27 @@ BEGIN
     EXECUTE format('ANALYZE %I;', _partition);
     extent := st_estimatedextent('pgstac', _partition, 'geometry');
     RAISE DEBUG 'Estimated Extent: %', extent;
-    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
-        SELECT _partition, dtrange, edtrange, extent, now()
+
+    SELECT pv.collection, pv.partition_dtrange INTO collection, _part_dtrange
+    FROM partitions_view pv WHERE partition = _partition;
+    _reltuples := (SELECT reltuples::bigint FROM pg_class WHERE oid = quote_ident(_partition)::regclass);
+
+    -- partition_stats is the single source: write the boundary + data extents + row
+    -- estimate together (row lock only, no MV refresh).
+    INSERT INTO partition_stats
+        (partition, collection, partition_dtrange, dtrange, edtrange, spatial, n, last_updated)
+        SELECT _partition, collection, _part_dtrange, dtrange, edtrange, extent, _reltuples, now()
         ON CONFLICT (partition) DO
             UPDATE SET
+                collection=EXCLUDED.collection,
+                partition_dtrange=EXCLUDED.partition_dtrange,
                 dtrange=EXCLUDED.dtrange,
                 edtrange=EXCLUDED.edtrange,
                 spatial=EXCLUDED.spatial,
+                n=EXCLUDED.n,
                 last_updated=EXCLUDED.last_updated
     ;
 
-    SELECT
-        constraint_dtrange, constraint_edtrange, pv.collection
-        INTO cdtrange, cedtrange, collection
-    FROM partitions_view pv WHERE partition = _partition;
-
-    RAISE NOTICE 'Checking if we need to modify constraints...';
-    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
-    IF
-        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
-        AND NOT istrigger
-    THEN
-        RAISE NOTICE 'Modifying Constraints';
-        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
-        RAISE NOTICE 'New      % %', dtrange, edtrange;
-        PERFORM drop_table_constraints(_partition);
-        PERFORM create_table_constraints(_partition, dtrange, edtrange);
-    END IF;
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
-    RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
         RAISE NOTICE 'updating collection extent for %', collection;
         PERFORM run_or_queue(format($q$
@@ -515,10 +528,15 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
+    -- Register the partition_stats row immediately (boundary known; data extents filled
+    -- when stats run). Ensures chunker() sees the partition even before stats queue.
+    INSERT INTO partition_stats (partition, collection, partition_dtrange)
+        VALUES (_partition_name, _collection, _partition_dtrange)
+        ON CONFLICT (partition) DO UPDATE SET
+            collection = EXCLUDED.collection,
+            partition_dtrange = EXCLUDED.partition_dtrange;
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -545,6 +563,9 @@ BEGIN
     END IF;
 
     IF EXISTS (SELECT 1 FROM partitions_view WHERE collection=_collection LIMIT 1) THEN
+        -- The collection's partition tree is about to be dropped & rebuilt; clear its
+        -- stale partition_stats rows (check_partition re-adds them as leaves recreate).
+        DELETE FROM partition_stats WHERE collection=_collection;
         EXECUTE format(
             $q$
                 CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
@@ -597,3 +618,51 @@ INSERT
 OR
 UPDATE ON collections
 FOR EACH ROW EXECUTE FUNCTION collections_trigger_func();
+
+
+-- partition_sync_meta: the CHEAP, metadata-first sync signal. For each partition of a
+-- collection it returns the boundary range, a row-count estimate, and last_updated --
+-- the time the partition's stats were last recomputed (which happens whenever items are
+-- loaded into it). Read straight from partition_stats, no item scan. Sync compares
+-- last_updated (and the count) to decide what changed; the exact content hash below is
+-- used only as a fallback to prove equality when the metadata is ambiguous, so hashing
+-- millions of rows never sits on the common sync path.
+CREATE OR REPLACE FUNCTION partition_sync_meta(_collection text)
+RETURNS TABLE(partition text, dtrange tstzrange, item_count bigint, last_updated timestamptz) AS $$
+    SELECT partition, partition_dtrange, n, last_updated
+    FROM partition_stats
+    WHERE collection = _collection
+    ORDER BY partition_dtrange;
+$$ LANGUAGE sql STABLE PARALLEL SAFE;
+
+-- partition_hashes: exact per-partition content fingerprint -- the FALLBACK that proves
+-- whether a partition really changed when partition_sync_meta() is ambiguous (e.g.
+-- last_updated differs but the content may be identical). content_hash = sha256 of the
+-- comma-joined hex item_hashes ordered by id; empty partition -> sha256 of the empty
+-- string. O(n) per partition, so callers should gate it behind the cheap metadata
+-- check rather than run it on every sync. Sync/maintenance op, not a hot path.
+--
+-- Membership is by datetime range (i.datetime <@ p.partition_dtrange), which mirrors
+-- how items are physically routed and lets the planner prune to the matching
+-- partition. Caveat: an item with a NULL datetime (only possible in a collection that
+-- is LIST-partitioned by collection without datetime sub-partitioning) does not match
+-- any range and is therefore not counted/hashed; such items are outside the STAC
+-- temporal model. A future variant could group by physical partition (i.tableoid) if
+-- NULL-datetime items must be fingerprinted.
+CREATE OR REPLACE FUNCTION partition_hashes(_collection text)
+RETURNS TABLE(partition text, dtrange tstzrange, item_count bigint, content_hash text) AS $$
+    SELECT
+        p.partition,
+        p.partition_dtrange,
+        count(i.id),
+        encode(sha256(convert_to(
+            coalesce(string_agg(encode(i.item_hash, 'hex'), ',' ORDER BY i.id), ''),
+            'UTF8')), 'hex')
+    FROM partition_sys_meta p
+    LEFT JOIN items i
+        ON i.collection = p.collection
+       AND i.datetime <@ p.partition_dtrange
+    WHERE p.collection = _collection
+    GROUP BY p.partition, p.partition_dtrange
+    ORDER BY p.partition_dtrange;
+$$ LANGUAGE sql STABLE PARALLEL SAFE;
