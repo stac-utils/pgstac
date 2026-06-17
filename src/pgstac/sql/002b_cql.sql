@@ -86,7 +86,6 @@ DECLARE
     outq text;
 BEGIN
     rrange := parse_dtrange(args->1);
-    RAISE NOTICE 'Constructing temporal query OP: %, ARGS: %, RRANGE: %', op, args, rrange;
     op := lower(op);
     rl := format('%L::timestamptz', lower(rrange));
     rh := format('%L::timestamptz', upper(rrange));
@@ -125,7 +124,6 @@ DECLARE
     j jsonb := args->1;
 BEGIN
     op := lower(op);
-    RAISE NOTICE 'Constructing spatial query OP: %, ARGS: %', op, args;
     IF op NOT IN ('s_equals','s_disjoint','s_touches','s_within','s_overlaps','s_crosses','s_intersects','intersects','s_contains') THEN
         RAISE EXCEPTION 'Spatial Operator % Not Supported', op;
     END IF;
@@ -143,6 +141,22 @@ BEGIN
     RETURN format('%s(geometry, %L::geometry)', op, geom);
 END;
 $$ LANGUAGE PLPGSQL;
+
+-- q_op_query: SQL predicate for the pgstac `q` full-text operator. args is the search
+-- term(s) (a string or array of strings, as the STAC `q` parameter); it is matched
+-- against a tsvector built from the item's description/title/keywords. Modeled on
+-- spatial_op_query / temporal_op_query so full-text is a first-class CQL2 op and the
+-- whole search predicate has a single CQL2 representation.
+CREATE OR REPLACE FUNCTION q_op_query(args jsonb) RETURNS text AS $$
+    SELECT format(
+        $q$(
+            to_tsvector('english', coalesce(properties->>'description', '')) ||
+            to_tsvector('english', coalesce(properties->>'title', '')) ||
+            to_tsvector('english', coalesce(properties->>'keywords', ''))
+        ) @@ %L$q$,
+        q_to_tsquery(args)
+    );
+$$ LANGUAGE SQL STABLE;
 
 CREATE OR REPLACE FUNCTION query_to_cql2(q jsonb) RETURNS jsonb AS $$
 -- Translates anything passed in through the deprecated "query" into equivalent CQL2
@@ -269,7 +283,6 @@ BEGIN
     IF j IS NULL OR (op IS NOT NULL AND args IS NULL) THEN
         RETURN NULL;
     END IF;
-    RAISE NOTICE 'CQL2_QUERY: %', j;
 
     -- check if all properties are represented in the queryables
     IF NOT extra_props THEN
@@ -308,12 +321,16 @@ BEGIN
     END IF;
     IF j ? 'interval' THEN
         RAISE EXCEPTION 'Please use temporal operators when using intervals.';
-        RETURN NONE;
     END IF;
 
     -- Spatial Query
     IF op ilike 's_%' or op = 'intersects' THEN
         RETURN spatial_op_query(op, args);
+    END IF;
+
+    -- Full-text Query (pgstac `q` operator)
+    IF op = 'q' THEN
+        RETURN q_op_query(args);
     END IF;
 
     IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
@@ -466,7 +483,7 @@ BEGIN
         edate := upper(dtrange);
     END IF;
     IF NOT (filter  @? '$.**.op ? (@ == "or" || @ == "not")') THEN
-        FOR jpitem IN SELECT j FROM jsonb_path_query(filter,'strict $.** ? (@.args[*].property == "datetime")'::jsonpath) j LOOP
+        FOR jpitem IN SELECT jpval FROM jsonb_path_query(filter,'strict $.** ? (@.args[*].property == "datetime")'::jsonpath) AS jp(jpval) LOOP
             op := lower(jpitem->>'op');
             dtrange := parse_dtrange(jpitem->'args'->1);
             IF op IN ('<=', 'lt', 'lte', '<', 'le', 't_before') THEN
@@ -489,42 +506,220 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL STABLE STRICT SET TIME ZONE 'UTC';
 
-CREATE OR REPLACE FUNCTION paging_collections(
-    IN j jsonb
-) RETURNS text[] AS $$
-DECLARE
-    filter jsonb := j->'filter';
-    jpitem jsonb;
-    op text;
-    args jsonb;
-    arg jsonb;
-    collections text[];
+-- ============================================================================
+-- Predicate envelope: a safe over-approximation of the (datetime, end_datetime,
+-- geometry) any matching row must fall within, derived from the FULL search
+-- predicate. Used by chunker() (004_search.sql) to prune partition candidates by an
+-- indexed range query. tstzmultirange keeps OR of disjoint ranges tight;
+-- AND = intersect, OR = hull/union, NOT/unknown = full (never a false negative).
+-- ============================================================================
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='pred_envelope'
+                   AND typnamespace=(SELECT oid FROM pg_namespace WHERE nspname='pgstac')) THEN
+        -- colls: allowed collection set (NULL = all, '{}' = none); dt/edt: allowed
+        -- item datetime/end_datetime; geom: spatial bbox bound (NULL = unconstrained).
+        CREATE TYPE pred_envelope AS (colls text[], dt tstzmultirange, edt tstzmultirange, geom geometry);
+    END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION env_full() RETURNS pred_envelope LANGUAGE sql IMMUTABLE AS $$
+    SELECT (NULL::text[],
+            tstzmultirange(tstzrange('-infinity','infinity','[]')),
+            tstzmultirange(tstzrange('-infinity','infinity','[]')), NULL)::pred_envelope;
+$$;
+
+-- AND: intersect every axis (tighter is safe -- a row must satisfy both). For colls,
+-- NULL means unconstrained, so AND with NULL keeps the other side; two sets intersect
+-- (an empty result '{}' means no collection can match -> no partitions).
+CREATE OR REPLACE FUNCTION env_and(a pred_envelope, b pred_envelope) RETURNS pred_envelope LANGUAGE sql IMMUTABLE AS $$
+    SELECT (
+            CASE WHEN a.colls IS NULL THEN b.colls WHEN b.colls IS NULL THEN a.colls
+                 ELSE array_intersection(a.colls, b.colls) END,
+            a.dt * b.dt, a.edt * b.edt,
+            CASE WHEN a.geom IS NULL THEN b.geom WHEN b.geom IS NULL THEN a.geom
+                 ELSE ST_Envelope(ST_Intersection(a.geom, b.geom)) END)::pred_envelope;
+$$;
+
+-- OR: union every axis (wider). For colls, if either side is unconstrained (NULL) the
+-- union is unconstrained; otherwise it is the de-duplicated union of the two sets.
+CREATE OR REPLACE FUNCTION env_or(a pred_envelope, b pred_envelope) RETURNS pred_envelope LANGUAGE sql IMMUTABLE AS $$
+    SELECT (
+            CASE WHEN a.colls IS NULL OR b.colls IS NULL THEN NULL
+                 ELSE ARRAY(SELECT DISTINCT unnest(a.colls || b.colls)) END,
+            a.dt + b.dt, a.edt + b.edt,
+            CASE WHEN a.geom IS NULL OR b.geom IS NULL THEN NULL
+                 ELSE ST_Envelope(ST_Collect(a.geom, b.geom)) END)::pred_envelope;
+$$;
+
+-- coerce a cql2 scalar (string | {"timestamp":..} | {"date":..}) to timestamptz
+CREATE OR REPLACE FUNCTION cql2_ts(v jsonb) RETURNS timestamptz LANGUAGE sql IMMUTABLE AS $$
+    SELECT coalesce(v->>'timestamp', v->>'date', v#>>'{}')::timestamptz;
+$$;
+
+-- Resolve a cql2 predicate on the `collection` property to an allowed collection SET.
+-- =/in are exact; </<=/>/>=/between/like/ilike are resolved against the live collections
+-- table (an empty match returns '{}' = no collection qualifies). NULL = could not bound
+-- (treated as unconstrained). STABLE (reads collections).
+CREATE OR REPLACE FUNCTION cql2_collection_set(op text, args jsonb) RETURNS text[] LANGUAGE plpgsql STABLE AS $$
+DECLARE lst jsonb;
 BEGIN
-    IF j ? 'collections' THEN
-        collections := to_text_array(j->'collections');
+    IF op IN ('=','eq') AND jsonb_typeof(args->1) = 'string' THEN
+        RETURN ARRAY[args->>1];
+    ELSIF op = 'in' THEN
+        lst := CASE WHEN jsonb_typeof(args->1)='object' AND args->1 ? 'list' THEN args->1->'list' ELSE args->1 END;
+        IF jsonb_typeof(lst) <> 'array' THEN RETURN NULL; END IF;
+        RETURN to_text_array(lst);
+    ELSIF jsonb_typeof(args->1) = 'string' THEN
+        IF    op IN ('<','lt')   THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id <  (args->>1)), '{}');
+        ELSIF op IN ('<=','lte') THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id <= (args->>1)), '{}');
+        ELSIF op IN ('>','gt')   THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id >  (args->>1)), '{}');
+        ELSIF op IN ('>=','gte') THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id >= (args->>1)), '{}');
+        ELSIF op IN ('like')     THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id LIKE  (args->>1)), '{}');
+        ELSIF op IN ('ilike')    THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id ILIKE (args->>1)), '{}');
+        END IF;
+    ELSIF op = 'between' AND jsonb_typeof(args->1)='string' AND jsonb_typeof(args->2)='string' THEN
+        RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id BETWEEN (args->>1) AND (args->>2)), '{}');
     END IF;
-    IF NOT (filter  @? '$.**.op ? (@ == "or" || @ == "not")') THEN
-        FOR jpitem IN SELECT j FROM jsonb_path_query(filter,'strict $.** ? (@.args[*].property == "collection")'::jsonpath) j LOOP
-            RAISE NOTICE 'JPITEM: %', jpitem;
-            op := jpitem->>'op';
-            args := jpitem->'args';
-            IF op IN ('=', 'eq', 'in') THEN
-                FOR arg IN SELECT a FROM jsonb_array_elements(args) a LOOP
-                    IF jsonb_typeof(arg) IN ('string', 'array') THEN
-                        RAISE NOTICE 'arg: %, collections: %', arg, collections;
-                        IF collections IS NULL OR collections = '{}'::text[] THEN
-                            collections := to_text_array(arg);
-                        ELSE
-                            collections := array_intersection(collections, to_text_array(arg));
-                        END IF;
-                    END IF;
-                END LOOP;
-            END IF;
-        END LOOP;
-    END IF;
-    IF collections = '{}'::text[] THEN
-        RETURN NULL;
-    END IF;
-    RETURN collections;
+    RETURN NULL;        -- unsupported shape -> unconstrained
 END;
-$$ LANGUAGE PLPGSQL STABLE STRICT;
+$$;
+
+-- Recursive envelope of a normalized cql2 filter tree.
+-- STABLE (not IMMUTABLE): parse_dtrange + cql2_collection_set are STABLE.
+CREATE OR REPLACE FUNCTION cql2_envelope(j jsonb) RETURNS pred_envelope LANGUAGE plpgsql STABLE AS $$
+DECLARE op text; args jsonb; child jsonb; acc pred_envelope; r tstzrange; prop text; v timestamptz; g geometry;
+BEGIN
+    IF j IS NULL OR jsonb_typeof(j) <> 'object' OR NOT j ? 'op' THEN RETURN env_full(); END IF;
+    op := lower(j->>'op'); args := j->'args';
+    IF op = 'and' THEN
+        acc := env_full();
+        FOR child IN SELECT * FROM jsonb_array_elements(args) LOOP acc := env_and(acc, cql2_envelope(child)); END LOOP;
+        RETURN acc;
+    ELSIF op = 'or' THEN
+        acc := NULL;
+        FOR child IN SELECT * FROM jsonb_array_elements(args) LOOP
+            acc := CASE WHEN acc IS NULL THEN cql2_envelope(child) ELSE env_or(acc, cql2_envelope(child)) END;
+        END LOOP;
+        RETURN coalesce(acc, env_full());
+    ELSIF op = 'not' THEN
+        RETURN env_full();                                       -- negation can't be safely tightened
+    ELSIF op ILIKE 't_%' OR op = 'anyinteracts' THEN
+        r := parse_dtrange(args->1); acc := env_full();
+        IF op IN ('t_intersects','anyinteracts','t_during','t_equals','t_starts','t_finishes','t_overlaps') THEN
+            acc.dt  := tstzmultirange(tstzrange('-infinity', upper(r), '(]'));   -- datetime <= rh
+            acc.edt := tstzmultirange(tstzrange(lower(r), 'infinity', '[)'));    -- end_datetime >= rl
+        ELSIF op IN ('t_before','t_meets') THEN
+            acc.edt := tstzmultirange(tstzrange('-infinity', lower(r), '()'));
+        ELSIF op IN ('t_after','t_metby') THEN
+            acc.dt  := tstzmultirange(tstzrange(upper(r), 'infinity', '()'));
+        END IF;
+        RETURN acc;
+    ELSIF op ILIKE 's_%' OR op = 'intersects' THEN
+        BEGIN g := ST_GeomFromGeoJSON(args->1); EXCEPTION WHEN others THEN g := NULL; END;
+        acc := env_full(); acc.geom := ST_Envelope(g); RETURN acc;
+    ELSIF op IN ('=','<','<=','>','>=','between','eq','lt','lte','gt','gte','in','like','ilike')
+          AND jsonb_typeof(args)='array' AND args->0 ? 'property' THEN
+        prop := args->0->>'property';
+        acc := env_full();
+        IF prop IN ('datetime','end_datetime') THEN
+            IF op IN ('in','like','ilike') THEN RETURN env_full(); END IF;   -- not a simple temporal bound
+            IF op = 'between' THEN          r := tstzrange(cql2_ts(args->1), cql2_ts(args->2), '[]');
+            ELSIF op IN ('<','<=','lt','lte') THEN r := tstzrange('-infinity', cql2_ts(args->1), '(]');
+            ELSIF op IN ('>','>=','gt','gte') THEN r := tstzrange(cql2_ts(args->1), 'infinity', '[)');
+            ELSE v := cql2_ts(args->1);     r := tstzrange(v, v, '[]'); END IF;
+            IF prop = 'datetime' THEN acc.dt := tstzmultirange(r); ELSE acc.edt := tstzmultirange(r); END IF;
+            RETURN acc;
+        ELSIF prop = 'collection' THEN
+            acc.colls := cql2_collection_set(op, args);          -- =/in/</>/between/like → collection set
+            RETURN acc;
+        ELSE
+            RETURN env_full();                                   -- other property filters: no partition bound
+        END IF;
+    ELSE
+        RETURN env_full();
+    END IF;
+END;
+$$;
+
+-- Full search envelope: top-level collections/datetime/bbox/intersects AND cql2(filter).
+-- Collections are taken from the top-level `collections` arg AND from any `collection`
+-- predicate anywhere in the cql2 tree (combined with the same AND/OR logic). `ids` do not
+-- constrain partitions. If filter extraction fails, the top-level bounds still apply (the
+-- filter part falls back to unconstrained) -- the envelope can only over-approximate;
+-- correctness is enforced by each band query's WHERE.
+-- search_to_cql2: normalize an entire STAC search into ONE CQL2 filter, so the WHERE
+-- clause (cql2_query) and the partition-pruning envelope (cql2_envelope) are both
+-- derived from a single representation -- no per-parameter parsing duplicated across
+-- functions. Each top-level parameter maps to a CQL2 operator:
+--   ids         -> in(id, [...])
+--   collections -> in(collection, [...])
+--   datetime    -> anyinteracts(datetime, <interval>)   (item interval overlaps query)
+--   bbox/intersects -> s_intersects(geometry, <geojson>)
+--   q           -> q(<terms>)                            (full-text)
+--   query       -> query_to_cql2(...)                    (legacy)
+--   filter      -> cql2 (cql-json translated to cql2-json)
+-- All present parts are AND-ed. Returns NULL for an empty (match-all) search.
+CREATE OR REPLACE FUNCTION search_to_cql2(j jsonb) RETURNS jsonb AS $$
+DECLARE
+    parts jsonb := '[]'::jsonb;
+    fil jsonb;
+    filterlang text;
+    g geometry;
+BEGIN
+    IF j ? 'ids' THEN
+        parts := parts || jsonb_build_object('op', 'in',
+            'args', jsonb_build_array(jsonb_build_object('property', 'id'), j->'ids'));
+    END IF;
+    IF j ? 'collections' THEN
+        parts := parts || jsonb_build_object('op', 'in',
+            'args', jsonb_build_array(jsonb_build_object('property', 'collection'), j->'collections'));
+    END IF;
+    IF j ? 'datetime' THEN
+        parts := parts || jsonb_build_object('op', 'anyinteracts',
+            'args', jsonb_build_array(jsonb_build_object('property', 'datetime'), j->'datetime'));
+    END IF;
+    g := stac_geom(j);
+    IF g IS NOT NULL THEN
+        parts := parts || jsonb_build_object('op', 's_intersects',
+            'args', jsonb_build_array(jsonb_build_object('property', 'geometry'), ST_AsGeoJSON(g)::jsonb));
+    END IF;
+    IF j ? 'q' THEN
+        parts := parts || jsonb_build_object('op', 'q', 'args', j->'q');
+    END IF;
+
+    IF j ? 'query' AND j ? 'filter' THEN
+        RAISE EXCEPTION 'Can only use either query or filter at one time.';
+    END IF;
+    IF j ? 'query' THEN
+        fil := query_to_cql2(j->'query');
+    ELSIF j ? 'filter' THEN
+        filterlang := COALESCE(j->>'filter-lang', get_setting('default_filter_lang', j->'conf'));
+        IF NOT (j->'filter') @? '$.**.op' OR filterlang = 'cql-json' THEN
+            fil := cql1_to_cql2(j->'filter');
+        ELSE
+            fil := j->'filter';
+        END IF;
+    END IF;
+    IF fil IS NOT NULL THEN
+        parts := parts || fil;
+    END IF;
+
+    IF jsonb_array_length(parts) = 0 THEN
+        RETURN NULL;
+    ELSIF jsonb_array_length(parts) = 1 THEN
+        RETURN parts->0;
+    END IF;
+    RETURN jsonb_build_object('op', 'and', 'args', parts);
+END;
+$$ LANGUAGE PLPGSQL STABLE;
+
+-- The partition-pruning envelope is the envelope of the unified CQL2 filter. On any
+-- extraction failure fall back to env_full() (scan all partitions) -- never a false
+-- negative; exact correctness is always enforced by the WHERE clause.
+CREATE OR REPLACE FUNCTION search_envelope(j jsonb) RETURNS pred_envelope LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN cql2_envelope(search_to_cql2(j));
+EXCEPTION WHEN others THEN
+    RETURN env_full();
+END;
+$$;
