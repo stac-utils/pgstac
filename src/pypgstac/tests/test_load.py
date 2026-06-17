@@ -202,7 +202,7 @@ def test_partition_loads_default(loader: Loader) -> None:
 
     partitions = loader.db.query_one(
         """
-        SELECT count(*) from partitions;
+        SELECT count(*) from partition_sys_meta;
     """,
     )
 
@@ -229,7 +229,7 @@ def test_partition_loads_month(loader: Loader) -> None:
 
     partitions = loader.db.query_one(
         """
-        SELECT count(*) from partitions;
+        SELECT count(*) from partition_sys_meta;
     """,
     )
 
@@ -256,7 +256,7 @@ def test_partition_loads_year(loader: Loader) -> None:
 
     partitions = loader.db.query_one(
         """
-        SELECT count(*) from partitions;
+        SELECT count(*) from partition_sys_meta;
     """,
     )
 

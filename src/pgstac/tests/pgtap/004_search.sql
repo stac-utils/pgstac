@@ -59,8 +59,13 @@ SELECT results_eq($$
 SELECT has_function('pgstac'::name, 'search', ARRAY['jsonb']);
 
 
+-- v0.10: tokens are opaque keyset encodings of the sort-key values (was collection:id).
+-- Build the equivalent prev token for item-0011 (sortby id → keyset is [id, collection]).
 SELECT results_eq($$
-    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}], "token": "prev:pgstac-test-item-0011"}')
+    SELECT search(
+        '{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}'::jsonb
+        || jsonb_build_object('token', 'prev:' || keyset_encode(ARRAY['pgstac-test-item-0011','pgstac-test-collection']))
+    )
     $$,$$
     SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}')
     $$,
@@ -859,4 +864,615 @@ SELECT is(
     (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection", "pgstac-test-collection2"]}')->'features')),
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, all collections specified. #192'
+);
+
+-- ============================================================
+-- fields_to_columns tests
+-- ============================================================
+
+SELECT has_function('pgstac'::name, 'fields_to_columns', ARRAY['jsonb']);
+
+-- Empty fields spec: return everything including fragment columns via correlated subqueries
+SELECT ok(
+    fields_to_columns('{}') LIKE '%i.*%',
+    'fields_to_columns({}): includes i.*'
+);
+SELECT ok(
+    fields_to_columns('{}') LIKE '%frag_content%',
+    'fields_to_columns({}): includes frag_content'
+);
+SELECT ok(
+    fields_to_columns('{}') LIKE '%frag_links_template%',
+    'fields_to_columns({}): includes frag_links_template'
+);
+SELECT ok(
+    fields_to_columns('{}') LIKE '%item_fragments%',
+    'fields_to_columns({}): references item_fragments via correlated subquery'
+);
+
+-- include id and datetime: those columns appear, geometry does not
+SELECT ok(
+    fields_to_columns('{"include":["id","datetime"]}') LIKE '%i.id%',
+    'fields_to_columns include id: i.id present'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["id","datetime"]}') LIKE '%i.datetime%',
+    'fields_to_columns include datetime: i.datetime present'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["id","datetime"]}') NOT LIKE '%i.geometry%',
+    'fields_to_columns include id,datetime: i.geometry absent'
+);
+
+-- include geometry and assets: geometry column present, fragment needed for assets
+SELECT ok(
+    fields_to_columns('{"include":["geometry","assets"]}') LIKE '%i.geometry%',
+    'fields_to_columns include geometry,assets: i.geometry present'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["geometry","assets"]}') LIKE '%frag_content%',
+    'fields_to_columns include geometry,assets: frag_content present (fragment needed for assets)'
+);
+
+-- include bbox only: bbox column present, geometry absent, no frag_content
+SELECT ok(
+    fields_to_columns('{"include":["bbox"]}') LIKE '%i.bbox%',
+    'fields_to_columns include bbox: i.bbox present'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["bbox"]}') NOT LIKE '%i.geometry%',
+    'fields_to_columns include bbox: i.geometry absent'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["bbox"]}') NOT LIKE '%frag_content%',
+    'fields_to_columns include bbox: frag_content absent'
+);
+
+-- ============================================================
+-- search_sql tests
+-- ============================================================
+
+SELECT has_function('pgstac'::name, 'search_sql', ARRAY['jsonb','text']);
+
+-- item mode (default): FROM items i (no outer JOIN), content_hydrate with correlated fragment subquery
+SELECT ok(
+    search_sql('{}') LIKE '%FROM items i%',
+    'search_sql item mode: contains FROM items i'
+);
+
+SELECT ok(
+    search_sql('{}') NOT LIKE '%LEFT JOIN%',
+    'search_sql item mode: no outer LEFT JOIN (fragment via correlated subquery)'
+);
+
+SELECT ok(
+    search_sql('{}') LIKE '%content_hydrate%',
+    'search_sql item mode: contains content_hydrate'
+);
+
+SELECT ok(
+    search_sql('{}') LIKE '%item_fragments%',
+    'search_sql item mode: references item_fragments (via correlated subquery)'
+);
+
+-- row mode: FROM items i, frag_content via correlated subquery, NO content_hydrate
+SELECT ok(
+    search_sql('{}', 'row') LIKE '%FROM items i%',
+    'search_sql row mode: contains FROM items i'
+);
+
+SELECT ok(
+    search_sql('{}', 'row') NOT LIKE '%LEFT JOIN%',
+    'search_sql row mode: no outer LEFT JOIN (fragment via correlated subquery)'
+);
+
+SELECT ok(
+    search_sql('{}', 'row') LIKE '%frag_content%',
+    'search_sql row mode: contains frag_content'
+);
+
+SELECT ok(
+    search_sql('{}', 'row') NOT LIKE '%content_hydrate%',
+    'search_sql row mode: does NOT contain content_hydrate'
+);
+
+-- collection filter propagated into SQL
+SELECT ok(
+    search_sql('{"collections":["pgstac-test-collection"]}') LIKE '%pgstac-test-collection%',
+    'search_sql with collections filter: collection name present in SQL'
+);
+
+-- default mode is item
+SELECT is(
+    search_sql('{}'),
+    search_sql('{}', 'item'),
+    'search_sql default mode equals explicit item mode'
+);
+
+-- ============================================================
+-- search_cursor tests
+-- ============================================================
+
+SELECT has_function('pgstac'::name, 'search_cursor', ARRAY['jsonb','text','refcursor']);
+
+-- item mode: cursor opens and first FETCH is a Feature
+DO $$
+DECLARE
+    cur refcursor;
+    row1 jsonb;
+BEGIN
+    cur := search_cursor('{"collections":["pgstac-test-collection"],"limit":3}'::jsonb, 'item', 'test_stream_item');
+    FETCH NEXT FROM cur INTO row1;
+    IF (row1->>'type') IS DISTINCT FROM 'Feature' THEN
+        RAISE EXCEPTION 'Expected Feature, got %', row1->>'type';
+    END IF;
+    CLOSE cur;
+END;
+$$;
+SELECT ok(true, 'search_cursor item mode: first FETCH row has type = Feature');
+
+-- item mode: first fetched row has an id field
+DO $$
+DECLARE
+    cur refcursor;
+    row1 jsonb;
+BEGIN
+    cur := search_cursor('{"collections":["pgstac-test-collection"],"limit":3}'::jsonb, 'item', 'test_stream_id');
+    FETCH NEXT FROM cur INTO row1;
+    IF row1->>'id' IS NULL THEN
+        RAISE EXCEPTION 'Expected id field, got null';
+    END IF;
+    CLOSE cur;
+END;
+$$;
+SELECT ok(true, 'search_cursor item mode: first FETCH row has non-null id');
+
+-- row mode: cursor opens without error (FETCH NEXT without INTO is ambiguous in
+-- PL/pgSQL blocks; just verify the cursor is non-null and can be opened)
+SELECT ok(
+    search_cursor(
+        '{"collections":["pgstac-test-collection"]}'::jsonb,
+        'row',
+        'test_stream_row2'
+    ) IS NOT NULL,
+    'search_cursor row mode: returns a non-null refcursor'
+);
+
+-- ============================================================
+-- content_hydrate 3-arg / 2-arg parity
+-- ============================================================
+
+SELECT results_eq(
+    $$ SELECT content_hydrate(i, f, '{}'::jsonb) FROM items i LEFT JOIN item_fragments f ON f.id = i.fragment_id WHERE i.collection = 'pgstac-test-collection' ORDER BY i.id LIMIT 1 $$,
+    $$ SELECT content_hydrate(i, '{}'::jsonb) FROM items i WHERE i.collection = 'pgstac-test-collection' ORDER BY i.id LIMIT 1 $$,
+    '3-arg content_hydrate matches 2-arg form for pgstac-test-collection'
+);
+
+-- ============================================================
+-- Row-mode wire contract: full-corpus parity
+--
+-- The Rust client consumes `row` mode (raw split-storage columns + the inline
+-- fragment shipped as the loose columns frag_content / frag_links_template) and
+-- rehydrates client-side. That client output MUST equal `item` mode (server-side
+-- content_hydrate). The fragment travels on the wire as exactly three fields:
+-- id, content, links_template (see fields_to_columns / item_fragments). So the
+-- faithful conformance check is: rebuild an item_fragments from ONLY those three
+-- wire fields, hydrate, and require byte-identical output to item mode for EVERY
+-- item. If content_hydrate ever starts reading another fragment column (e.g.
+-- hash) that row mode does not project, or row mode drops a needed column, this
+-- fails. Covers the whole loaded corpus (every item shape), not a single row.
+-- ============================================================
+
+-- Add link-bearing items (the base corpus has none) so the link reconstruction
+-- path (links_template fragment + per-item link_hrefs -> stac_links_hydrate) is
+-- exercised by the parity check below. The two share a link/asset shape, so the
+-- template dedups into one fragment and hrefs stay per-item.
+INSERT INTO items_staging (content) VALUES
+('{"type":"Feature","id":"rowmode-links-1","collection":"pgstac-test-collection","stac_version":"1.0.0","stac_extensions":[],"geometry":{"type":"Point","coordinates":[0,0]},"bbox":[0,0,0,0],"properties":{"datetime":"2021-01-01T00:00:00Z"},"assets":{"data":{"href":"https://example.com/1.tif","type":"image/tiff","roles":["data"]}},"links":[{"rel":"self","href":"https://example.com/items/rowmode-links-1","type":"application/geo+json"},{"rel":"collection","href":"https://example.com/collections/pgstac-test-collection","type":"application/json"}]}'),
+('{"type":"Feature","id":"rowmode-links-2","collection":"pgstac-test-collection","stac_version":"1.0.0","stac_extensions":[],"geometry":{"type":"Point","coordinates":[1,1]},"bbox":[1,1,1,1],"properties":{"datetime":"2021-01-02T00:00:00Z"},"assets":{"data":{"href":"https://example.com/2.tif","type":"image/tiff","roles":["data"]}},"links":[{"rel":"self","href":"https://example.com/items/rowmode-links-2","type":"application/geo+json"},{"rel":"collection","href":"https://example.com/collections/pgstac-test-collection","type":"application/json"}]}');
+
+SELECT cmp_ok(
+    (SELECT count(*)::int FROM items WHERE collection = 'pgstac-test-collection'),
+    '>=', 100,
+    'row-mode parity: corpus loaded (parity check is non-vacuous)'
+);
+
+SELECT cmp_ok(
+    (SELECT count(*)::int FROM items
+     WHERE id IN ('rowmode-links-1','rowmode-links-2') AND link_hrefs IS NOT NULL),
+    '>=', 2,
+    'row-mode parity: link-bearing fixtures loaded with link_hrefs populated'
+);
+
+SELECT cmp_ok(
+    (SELECT count(*)::int FROM items i
+     WHERE i.id IN ('rowmode-links-1','rowmode-links-2')
+       AND content_hydrate(i, (SELECT f FROM item_fragments f WHERE f.id = i.fragment_id), '{}'::jsonb) ? 'links'),
+    '>=', 2,
+    'row-mode parity: link-bearing items hydrate with a reconstructed links array'
+);
+
+-- CORE: rebuild fragment from wire fields only -> must equal item mode for all items.
+SELECT is(
+    (
+        SELECT count(*)::int
+        FROM items i
+        WHERE content_hydrate(
+                  i,
+                  (SELECT f FROM item_fragments f WHERE f.id = i.fragment_id),
+                  '{}'::jsonb
+              )
+          IS DISTINCT FROM
+              content_hydrate(
+                  i,
+                  jsonb_populate_record(
+                      NULL::item_fragments,
+                      jsonb_build_object(
+                          'id',             i.fragment_id,
+                          'content',        (SELECT content        FROM item_fragments WHERE id = i.fragment_id),
+                          'links_template', (SELECT links_template FROM item_fragments WHERE id = i.fragment_id)
+                      )
+                  ),
+                  '{}'::jsonb
+              )
+    ),
+    0,
+    'row-mode parity: fragment rebuilt from wire fields (id, content, links_template) hydrates identically to item mode for every item'
+);
+
+-- Parity also holds under a fields include projection (fragment reconstruction is
+-- lossless across the field filter, not just for the full document).
+SELECT is(
+    (
+        SELECT count(*)::int
+        FROM items i
+        WHERE content_hydrate(
+                  i,
+                  (SELECT f FROM item_fragments f WHERE f.id = i.fragment_id),
+                  '{"include":["id","datetime","assets","properties"]}'::jsonb
+              )
+          IS DISTINCT FROM
+              content_hydrate(
+                  i,
+                  jsonb_populate_record(
+                      NULL::item_fragments,
+                      jsonb_build_object(
+                          'id',             i.fragment_id,
+                          'content',        (SELECT content        FROM item_fragments WHERE id = i.fragment_id),
+                          'links_template', (SELECT links_template FROM item_fragments WHERE id = i.fragment_id)
+                      )
+                  ),
+                  '{"include":["id","datetime","assets","properties"]}'::jsonb
+              )
+    ),
+    0,
+    'row-mode parity: holds under a fields include projection'
+);
+
+-- ============================================================
+-- Keyset pagination coverage
+--
+-- Tokens are opaque keyset encodings of the sort-key values. The Rust client
+-- drives pagination, so lock: encode/decode round-trips (incl. NULL sort values),
+-- keyset_sortkeys tiebreak/dedup/direction rules, keyset_where direction-awareness,
+-- and a full prev -> next -> prev round-trip that returns the original page.
+-- ============================================================
+
+-- encode/decode round-trips opaque values (spaces, colons, base64-special bytes).
+SELECT is(
+    keyset_decode(keyset_encode(ARRAY['2021-01-01 00:00:00+00','pgstac-test-item-0011','pgstac-test-collection'])),
+    ARRAY['2021-01-01 00:00:00+00','pgstac-test-item-0011','pgstac-test-collection'],
+    'keyset encode/decode: round-trips multi-element values with spaces and colons'
+);
+
+-- NULL sort-key values survive the round-trip (chr(30) sentinel).
+SELECT is(
+    keyset_decode(keyset_encode(ARRAY['a',NULL,'c'])),
+    ARRAY['a',NULL,'c'],
+    'keyset encode/decode: preserves NULL sort-key values'
+);
+
+-- Default (no sortby): datetime DESC, with id + collection appended as unique tiebreaks.
+SELECT is(
+    (SELECT array_agg(field||':'||dir ORDER BY ord) FROM keyset_sortkeys('{}'::jsonb)),
+    ARRAY['datetime:DESC','id:DESC','collection:DESC'],
+    'keyset_sortkeys: default appends id+collection tiebreaks (datetime desc)'
+);
+
+-- A field already present in sortby is not duplicated by the tiebreak append.
+SELECT is(
+    (SELECT array_agg(field ORDER BY ord) FROM keyset_sortkeys('{"sortby":[{"field":"id","direction":"asc"}]}'::jsonb)),
+    ARRAY['id','collection'],
+    'keyset_sortkeys: dedups a field already present in sortby (id not duplicated)'
+);
+
+-- Mixed directions preserved; appended tiebreaks inherit the leading direction.
+SELECT is(
+    (SELECT array_agg(field||':'||dir ORDER BY ord)
+     FROM keyset_sortkeys('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb)),
+    ARRAY['datetime:DESC','eo:cloud_cover:ASC','id:DESC','collection:DESC'],
+    'keyset_sortkeys: preserves mixed directions, tiebreaks inherit leading dir'
+);
+
+-- Direction-aware seek: DESC forward uses <, ASC forward uses >.
+SELECT ok(
+    keyset_where('{}'::jsonb,
+        ARRAY['2021-01-01 00:00:00+00','pgstac-test-item-0011','pgstac-test-collection'], false) LIKE '%<%',
+    'keyset_where: default (datetime desc) forward seek uses <'
+);
+SELECT ok(
+    keyset_where('{"sortby":[{"field":"datetime","direction":"asc"}]}'::jsonb,
+        ARRAY['2021-01-01 00:00:00+00','pgstac-test-item-0011','pgstac-test-collection'], false) LIKE '%>%',
+    'keyset_where: ascending forward seek uses >'
+);
+
+-- Full round-trip: page 1 -> follow next -> follow that page's prev -> original page.
+SELECT is(
+    (
+        WITH p1 AS (
+            SELECT search('{"limit":5,"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb) AS j
+        ),
+        nt AS (
+            SELECT substring(
+                (SELECT l->>'href' FROM p1, jsonb_array_elements((p1.j)->'links') l WHERE l->>'rel'='next')
+                FROM 'token=(.*)$') AS t
+        ),
+        p2 AS (
+            SELECT search(jsonb_build_object(
+                'limit', 5,
+                'sortby', jsonb_build_array(jsonb_build_object('field','datetime','direction','desc')),
+                'token', (SELECT t FROM nt))) AS j
+        ),
+        pv AS (
+            SELECT substring(
+                (SELECT l->>'href' FROM p2, jsonb_array_elements((p2.j)->'links') l WHERE l->>'rel'='prev')
+                FROM 'token=(.*)$') AS t
+        ),
+        p1b AS (
+            SELECT search(jsonb_build_object(
+                'limit', 5,
+                'sortby', jsonb_build_array(jsonb_build_object('field','datetime','direction','desc')),
+                'token', (SELECT t FROM pv))) AS j
+        )
+        SELECT (SELECT j->'features' FROM p1b)
+    ),
+    (SELECT search('{"limit":5,"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb)->'features'),
+    'pagination: prev -> next -> prev round-trip returns the original page'
+);
+
+-- ============================================================
+-- fields pruning: item-mode output + row-mode projection
+--
+-- item mode: hydration honors include/exclude (geometry conversion is guarded by
+-- include_field inside content_hydrate, so excluding it skips ST_AsGeoJson and
+-- omits the key). row mode: fields_to_columns projects only what's needed, so a
+-- control-only field set fetches no fragment and a properties set pulls the
+-- promoted columns.
+-- ============================================================
+
+SELECT ok(
+    NOT ((search('{"limit":1,"fields":{"exclude":["geometry"]}}'::jsonb)->'features'->0) ? 'geometry'),
+    'fields exclude geometry: hydrated feature omits geometry'
+);
+
+SELECT ok(
+    NOT ((search('{"limit":1,"fields":{"include":["id","datetime"]}}'::jsonb)->'features'->0) ? 'assets'),
+    'fields include [id,datetime]: hydrated feature omits assets'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["id","datetime"]}') NOT LIKE '%frag_content%',
+    'row mode include [id,datetime]: control-only projection fetches no fragment'
+);
+
+SELECT ok(
+    fields_to_columns('{"include":["properties"]}') LIKE '%eo_cloud_cover%'
+    AND fields_to_columns('{"include":["properties"]}') LIKE '%frag_content%',
+    'row mode include [properties]: projects promoted property columns and the fragment'
+);
+
+-- ============================================================
+-- search_page row mode: fast-start, low-memory paged primitive for the streaming
+-- client (Rust iterator). Same chunker/keyset/early-exit engine as item mode, but
+-- ships raw split-storage rows + inline _fragment for client-side hydration.
+-- (Fast-start TTFB is a scale property, measured in benchmarks/results/chunker/10m;
+-- here we lock the contract: shape, parity of count, and keyset iteration.)
+-- ============================================================
+
+-- row mode ships raw rows (geometry + inline _fragment), NOT hydrated Features.
+SELECT ok(
+    (search_page('{"collections":["pgstac-test-collection"],"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb, 5, NULL, false, 'row')
+       -> 'features' -> 0) ? '_fragment',
+    'search_page row mode: each row carries the inline _fragment'
+);
+SELECT ok(
+    (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 5, NULL, false, 'row')
+       -> 'features' -> 0 ->> 'type') IS DISTINCT FROM 'Feature',
+    'search_page row mode: rows are raw split-storage, not hydrated Features'
+);
+
+-- item mode (default) is unchanged: hydrated Features.
+SELECT is(
+    (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 5, NULL, false, 'item')
+       -> 'features' -> 0 ->> 'type'),
+    'Feature',
+    'search_page item mode (default): returns hydrated Features'
+);
+
+-- row and item modes page the SAME rows (same count, same paging envelope).
+SELECT is(
+    (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 5, NULL, false, 'row')->>'numberReturned'),
+    (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 5, NULL, false, 'item')->>'numberReturned'),
+    'search_page row/item modes return the same page size'
+);
+
+-- keyset iteration works in row mode: page 2 (via next token) is distinct from page 1.
+SELECT isnt(
+    (search_page(
+        '{"collections":["pgstac-test-collection"],"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb,
+        5,
+        (search_page('{"collections":["pgstac-test-collection"],"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb, 5, NULL, false, 'row')->>'next'),
+        false, 'row')
+      -> 'features' -> 0 ->> 'id'),
+    (search_page('{"collections":["pgstac-test-collection"],"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb, 5, NULL, false, 'row')
+      -> 'features' -> 0 ->> 'id'),
+    'search_page row mode: next-token iteration advances to a distinct page'
+);
+
+-- ============================================================
+-- Field-aware row-mode thinning (fields_to_rowjsonb): don't ship heavy columns or
+-- the fragment when the requested fields don't need them. Big wire/CPU win for
+-- thin items; "overfetch a little" (whole fragment) only when assets/links/props
+-- are actually requested.
+-- ============================================================
+
+-- full row (no fields): heavy columns + inline fragment present.
+SELECT ok(
+    (SELECT (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 1, NULL, false, 'row')->'features'->0) AS r)
+        ? 'geometry'
+    AND (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'assets'
+    AND (search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? '_fragment',
+    'row mode (no fields): full row carries geometry, assets, and _fragment'
+);
+
+-- thin item include [id,datetime]: NO geometry, NO assets, NO fragment.
+SELECT ok(
+    NOT ((search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'geometry')
+    AND NOT ((search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'assets')
+    AND NOT ((search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? '_fragment'),
+    'row mode include [id,datetime]: thin item omits geometry, assets, and the fragment'
+);
+
+-- thin item still carries the control scalars the client needs (id, datetime).
+SELECT ok(
+    (search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'id'
+    AND (search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'datetime',
+    'row mode include [id,datetime]: thin item keeps control scalars (id, datetime)'
+);
+
+-- exclude geometry: geometry dropped, but assets (+fragment) still present.
+SELECT ok(
+    NOT ((search_page('{"collections":["pgstac-test-collection"],"fields":{"exclude":["geometry"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'geometry')
+    AND (search_page('{"collections":["pgstac-test-collection"],"fields":{"exclude":["geometry"]}}'::jsonb, 1, NULL, false, 'row')->'features'->0) ? 'assets',
+    'row mode exclude [geometry]: drops geometry, keeps assets'
+);
+
+-- a thin row is materially smaller than a full row.
+SELECT cmp_ok(
+    octet_length((search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","datetime"]}}'::jsonb, 5, NULL, false, 'row'))::text),
+    '<',
+    octet_length((search_page('{"collections":["pgstac-test-collection"]}'::jsonb, 5, NULL, false, 'row'))::text),
+    'row mode: a thin page is smaller on the wire than a full page'
+);
+
+-- ============================================================
+-- Property precision (fields_to_rowjsonb). Asserted on the generated projection
+-- string (deterministic). NB: the inline-fragment key is `_fragment`; check it
+-- with strpos, NOT `LIKE '%_fragment%'` — `_` is a LIKE wildcard and would match
+-- the `fragment_id` control column. The pgstac-test-collection fixture has a
+-- default fragment_config (assets only — properties are NOT fragmented).
+-- ============================================================
+
+-- promoted property request -> ONLY that promoted column; no properties jsonb, no
+-- inline fragment, and NOT every promoted column (e.g. platform absent).
+SELECT ok(
+    fields_to_rowjsonb('{"include":["id","properties.eo:cloud_cover"]}'::jsonb, ARRAY['pgstac-test-collection']) LIKE '%eo_cloud_cover%'
+    AND fields_to_rowjsonb('{"include":["id","properties.eo:cloud_cover"]}'::jsonb, ARRAY['pgstac-test-collection']) NOT LIKE '%i.properties%'
+    AND strpos(fields_to_rowjsonb('{"include":["id","properties.eo:cloud_cover"]}'::jsonb, ARRAY['pgstac-test-collection']), '_fragment') = 0
+    AND fields_to_rowjsonb('{"include":["id","properties.eo:cloud_cover"]}'::jsonb, ARRAY['pgstac-test-collection']) NOT LIKE '%i.platform%',
+    'precision: promoted property ships only its column (no properties jsonb, no fragment, not all promoted)'
+);
+
+-- non-promoted property request -> per-item properties jsonb, but NO inline fragment
+-- because this collection''s fragment_config fragments assets, not properties.
+SELECT ok(
+    fields_to_rowjsonb('{"include":["id","properties.naip:state"]}'::jsonb, ARRAY['pgstac-test-collection']) LIKE '%i.properties%'
+    AND strpos(fields_to_rowjsonb('{"include":["id","properties.naip:state"]}'::jsonb, ARRAY['pgstac-test-collection']), '_fragment') = 0,
+    'precision: non-promoted property pulls properties jsonb but not the fragment (assets-only fragment_config)'
+);
+
+-- this collection does not fragment properties.
+SELECT ok(
+    NOT collection_fragments_properties('pgstac-test-collection'),
+    'collection_fragments_properties: false for default (assets-only) fragment_config'
+);
+
+-- unknown / multi-collection -> conservative: non-promoted property pulls the fragment.
+SELECT ok(
+    collection_fragments_properties(NULL)
+    AND strpos(fields_to_rowjsonb('{"include":["id","properties.naip:state"]}'::jsonb, NULL), '_fragment') > 0,
+    'precision: unknown/multi-collection stays conservative (fetches fragment for non-promoted property)'
+);
+
+-- ============================================================
+-- Exhaustive field registry: the staging-ingest trigger now walks every item's
+-- raw paths (statement-level, append-only), so the registry actually reflects the
+-- collection's fields. The pgstac-test-collection fixture is loaded via staging.
+-- ============================================================
+
+SELECT ok(
+    EXISTS (SELECT 1 FROM item_field_registry
+            WHERE collection = 'pgstac-test-collection' AND path LIKE 'properties.%'),
+    'field registry is exhaustive after ingest: properties.* paths are present'
+);
+SELECT cmp_ok(
+    (SELECT count(*)::int FROM item_field_registry
+     WHERE collection = 'pgstac-test-collection' AND path LIKE 'properties.%'),
+    '>=', 5,
+    'field registry captured multiple property paths from real items'
+);
+SELECT cmp_ok(
+    (SELECT count(*)::int FROM item_field_registry
+     WHERE collection = 'pgstac-test-collection' AND path LIKE 'assets.%'),
+    '>=', 1,
+    'field registry captured asset paths too'
+);
+
+-- register_field_paths (the Rust seam): append a precomputed path, no walk.
+SELECT is(
+    register_field_paths('pgstac-test-collection',
+        '[{"path":"properties.__pgtap_x","is_leaf":true,"value_kinds":["string"]}]'::jsonb),
+    1,
+    'register_field_paths: upserts one precomputed path'
+);
+SELECT ok(
+    EXISTS (SELECT 1 FROM item_field_registry
+            WHERE collection = 'pgstac-test-collection' AND path = 'properties.__pgtap_x'),
+    'register_field_paths: the supplied path is now registered'
+);
+
+-- row-mode geometry is clean STAC GeoJSON (no PostGIS `crs` member) and matches
+-- item mode — the Rust client gets a valid item without PostGIS-specific fixups.
+SELECT ok(
+    NOT ((search_page('{"collections":["pgstac-test-collection"],"fields":{"include":["id","geometry"]}}'::jsonb, 1, NULL, false, 'row')
+         -> 'features' -> 0 -> 'geometry') ? 'crs'),
+    'row mode geometry: clean STAC GeoJSON, no PostGIS crs member'
+);
+SELECT is(
+    (search_page('{"collections":["pgstac-test-collection"],"sortby":[{"field":"id","direction":"asc"}],"fields":{"include":["id","geometry"]}}'::jsonb, 1, NULL, false, 'row')
+       -> 'features' -> 0 -> 'geometry'),
+    (search_page('{"collections":["pgstac-test-collection"],"sortby":[{"field":"id","direction":"asc"}],"fields":{"include":["id","geometry"]}}'::jsonb, 1, NULL, false, 'item')
+       -> 'features' -> 0 -> 'geometry'),
+    'row mode geometry equals item mode geometry'
+);
+
+-- partition_hashes: the per-partition content fingerprint for GeoParquet sync.
+SELECT is(
+    (SELECT sum(item_count)::bigint FROM partition_hashes('pgstac-test-collection')),
+    (SELECT count(*)::bigint FROM items WHERE collection = 'pgstac-test-collection'),
+    'partition_hashes: item counts sum to the collection total'
+);
+SELECT ok(
+    (SELECT bool_and(content_hash ~ '^[0-9a-f]{64}$') FROM partition_hashes('pgstac-test-collection')),
+    'partition_hashes: content_hash is a 64-char sha256 hex'
+);
+SELECT is(
+    (SELECT content_hash FROM partition_hashes('pgstac-test-collection') ORDER BY partition LIMIT 1),
+    (SELECT content_hash FROM partition_hashes('pgstac-test-collection') ORDER BY partition LIMIT 1),
+    'partition_hashes: content_hash is deterministic'
 );

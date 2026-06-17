@@ -17,7 +17,7 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
-SELECT plan(349);
+SELECT plan(418);
 --SELECT * FROM no_plan();
 
 -- Run the tests.

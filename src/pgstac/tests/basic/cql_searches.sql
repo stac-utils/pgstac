@@ -5,13 +5,13 @@ SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:c
 -- Test Paging
 SELECT search('{"fields":{"include":["id"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
 
-SELECT search('{"token":"next:pgstac-test-item-0010", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token','next:'||(SELECT keyset_encode(ARRAY[datetime::text, id, collection]) FROM items WHERE id='pgstac-test-item-0010')));
 
-SELECT search('{"token":"next:pgstac-test-item-0020", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token','next:'||(SELECT keyset_encode(ARRAY[datetime::text, id, collection]) FROM items WHERE id='pgstac-test-item-0020')));
 
-SELECT search('{"token":"prev:pgstac-test-item-0021", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token','prev:'||(SELECT keyset_encode(ARRAY[datetime::text, id, collection]) FROM items WHERE id='pgstac-test-item-0021')));
 
-SELECT search('{"token":"next:pgstac-test-item-0011", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token','next:'||(SELECT keyset_encode(ARRAY[datetime::text, id, collection]) FROM items WHERE id='pgstac-test-item-0011')));
 --
 
 SELECT search('{"datetime":"2011-08-16T00:00:00Z/2011-08-17T00:00:00Z", "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');

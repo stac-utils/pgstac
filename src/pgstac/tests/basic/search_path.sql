@@ -20,21 +20,17 @@ SELECT * FROM partition_sys_meta WHERE collection='pgstactest-searchpath' ORDER 
 CREATE TEMP TABLE sp_partition_stats AS
 SELECT * FROM partition_stats WHERE partition IN (SELECT partition FROM sp_partition_sys_meta) ORDER BY partition;
 
-CREATE TEMP TABLE sp_partitions AS
-SELECT * FROM partitions WHERE collection='pgstactest-searchpath' ORDER BY partition;
+CREATE TEMP TABLE sp_partition_index AS
+SELECT * FROM partition_index WHERE collection='pgstactest-searchpath' ORDER BY partition;
 
 CREATE TEMP TABLE sp_partitions_view AS
 SELECT * FROM partitions_view WHERE collection='pgstactest-searchpath' ORDER BY partition;
 
-CREATE TEMP TABLE sp_partition_steps AS
-SELECT * FROM partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta) ORDER BY name;
-
 -- Verify we have data
 SELECT count(*) > 0 AS has_partition_sys_meta FROM sp_partition_sys_meta;
 SELECT count(*) > 0 AS has_partition_stats FROM sp_partition_stats;
-SELECT count(*) > 0 AS has_partitions FROM sp_partitions;
+SELECT count(*) > 0 AS has_partition_index FROM sp_partition_index;
 SELECT count(*) > 0 AS has_partitions_view FROM sp_partitions_view;
-SELECT count(*) > 0 AS has_partition_steps FROM sp_partition_steps;
 
 -- Now remove pgstac from search_path
 SET search_path TO public;
@@ -73,21 +69,21 @@ SELECT count(*) = 0 AS partition_stats_data_match FROM (
      SELECT partition, dtrange, edtrange FROM pgstac.partition_stats WHERE partition IN (SELECT partition FROM sp_partition_sys_meta))
 ) diff;
 
--- partitions (materialized view): compare counts and key columns
+-- partition_index (discovery table): compare counts and key columns
 SELECT (
-    SELECT count(*) FROM pgstac.partitions WHERE collection='pgstactest-searchpath'
+    SELECT count(*) FROM pgstac.partition_index WHERE collection='pgstactest-searchpath'
 ) = (
-    SELECT count(*) FROM sp_partitions
-) AS partitions_count_match;
+    SELECT count(*) FROM sp_partition_index
+) AS partition_index_count_match;
 
-SELECT count(*) = 0 AS partitions_data_match FROM (
-    (SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM pgstac.partitions WHERE collection='pgstactest-searchpath'
+SELECT count(*) = 0 AS partition_index_data_match FROM (
+    (SELECT partition, collection, part_lo, part_hi, dt_lo, dt_hi, edt_lo, edt_hi FROM pgstac.partition_index WHERE collection='pgstactest-searchpath'
      EXCEPT
-     SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM sp_partitions)
+     SELECT partition, collection, part_lo, part_hi, dt_lo, dt_hi, edt_lo, edt_hi FROM sp_partition_index)
     UNION ALL
-    (SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM sp_partitions
+    (SELECT partition, collection, part_lo, part_hi, dt_lo, dt_hi, edt_lo, edt_hi FROM sp_partition_index
      EXCEPT
-     SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM pgstac.partitions WHERE collection='pgstactest-searchpath')
+     SELECT partition, collection, part_lo, part_hi, dt_lo, dt_hi, edt_lo, edt_hi FROM pgstac.partition_index WHERE collection='pgstactest-searchpath')
 ) diff;
 
 -- partitions_view: compare counts and key columns
@@ -105,23 +101,6 @@ SELECT count(*) = 0 AS partitions_view_data_match FROM (
     (SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM sp_partitions_view
      EXCEPT
      SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM pgstac.partitions_view WHERE collection='pgstactest-searchpath')
-) diff;
-
--- partition_steps: compare counts and key columns
-SELECT (
-    SELECT count(*) FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta)
-) = (
-    SELECT count(*) FROM sp_partition_steps
-) AS partition_steps_count_match;
-
-SELECT count(*) = 0 AS partition_steps_data_match FROM (
-    (SELECT name, sdate, edate FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta)
-     EXCEPT
-     SELECT name, sdate, edate FROM sp_partition_steps)
-    UNION ALL
-    (SELECT name, sdate, edate FROM sp_partition_steps
-     EXCEPT
-     SELECT name, sdate, edate FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta))
 ) diff;
 
 -- Restore search_path
