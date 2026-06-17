@@ -17,7 +17,7 @@ DECLARE
     _where text;
     query text;
     iter_record items%ROWTYPE;
-    out_records jsonb := '{}'::jsonb[];
+    out_records jsonb := '[]'::jsonb;
     exit_flag boolean := FALSE;
     counter int := 1;
     scancounter int := 1;
@@ -27,16 +27,17 @@ DECLARE
     clippedgeom geometry;
     unionedgeom_area float := 0;
     prev_area float := 0;
-    excludes text[];
-    includes text[];
-
+    -- v0.10 discovery: prune partition_stats by the search envelope (incl. the tile geom).
+    _env pred_envelope;
+    band_dir text;
+    sdate timestamptz;
+    edate timestamptz;
 BEGIN
     DROP TABLE IF EXISTS pgstac_results;
     CREATE TEMP TABLE pgstac_results (content jsonb) ON COMMIT DROP;
 
     -- If the passed in geometry is not an area set exitwhenfull and skipcovered to false
     IF ST_GeometryType(geom) !~* 'polygon' THEN
-        RAISE NOTICE 'GEOMETRY IS NOT AN AREA';
         skipcovered = FALSE;
         exitwhenfull = FALSE;
     END IF;
@@ -55,10 +56,24 @@ BEGIN
     tilearea := st_area(geom);
     _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
 
+    -- Build the discovery envelope from the registered search AND the tile geometry,
+    -- then walk the chunker() over partition_stats for the discovery bands.
+    _env := search_envelope(search.search);
+    _env.geom := CASE
+        WHEN _env.geom IS NULL THEN ST_Envelope(geom)
+        ELSE ST_Envelope(ST_Intersection(_env.geom, ST_Envelope(geom)))
+    END;
+    band_dir := CASE WHEN search.orderby ILIKE '%datetime asc%' THEN 'ASC' ELSE 'DESC' END;
 
-    FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
-        query := format('%s LIMIT %L', query, remaining_limit);
-        RAISE NOTICE '%', query;
+    <<bands>>
+    FOR sdate, edate IN
+        EXECUTE format('SELECT s, e FROM chunker($1::pred_envelope) ORDER BY s %s', band_dir)
+        USING _env
+    LOOP
+        query := format(
+            'SELECT * FROM items WHERE datetime >= %L AND datetime < %L AND %s ORDER BY %s LIMIT %L',
+            sdate, edate, _where, search.orderby, remaining_limit
+        );
         OPEN curs FOR EXECUTE query;
         LOOP
             FETCH curs INTO iter_record;
@@ -80,11 +95,15 @@ BEGIN
                 END IF;
 
                 prev_area := unionedgeom_area;
-
-                RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             END IF;
-            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
-            INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
+            -- v0.10 split-storage: hydrate against the joined fragment.
+            INSERT INTO pgstac_results (content) VALUES (
+                content_hydrate(
+                    iter_record,
+                    fields,
+                    (SELECT f FROM item_fragments f WHERE f.id = iter_record.fragment_id)
+                )
+            );
 
             IF counter >= _limit
                 OR scancounter > _scanlimit
@@ -99,7 +118,7 @@ BEGIN
 
         END LOOP;
         CLOSE curs;
-        EXIT WHEN exit_flag;
+        EXIT bands WHEN exit_flag;
         remaining_limit := _scanlimit - scancounter;
     END LOOP;
 
