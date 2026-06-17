@@ -10,6 +10,56 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+- **Exhaustive field registry on ingest.** The staging-ingest trigger now walks
+  every item's raw field paths (statement-level, set-based, append-only) so
+  `item_field_registry` reflects the collection's actual fields instead of a
+  sample. Measured overhead ~7% on rich-item ingest (Landsat). Skippable via
+  `SET pgstac.skip_field_registry = true` for loaders that supply paths directly
+  through the new `register_field_paths(collection, paths jsonb)` seam (e.g. the
+  Rust client) — avoids doing the walk twice. The existing age-based
+  `refresh_field_registry()` remains the optional sweeper for stale paths.
+- **Row-mode streaming page + field-aware thinning.** `search_page(_, _, _, _,
+  'row')` returns raw split-storage rows + inline `_fragment` for client-side
+  hydration, reusing the chunker newest-first early-exit engine (fast TTFB). The
+  `row` projection honors STAC `fields` include/exclude (`fields_to_rowjsonb`),
+  with fragment-config-driven precision for `properties.<x>` requests (a promoted
+  property ships just its column; the fragment is fetched only when the collection
+  actually fragments properties). Thinning reduces wire size and latency, never
+  increases it.
+- **Streaming search engine + keyset pagination** (v0.10 split-storage schema).
+  `search()` is re-derived onto a single streaming engine; **breaking: pagination
+  tokens change** from `collection:id` to opaque keyset encodings. The
+  FeatureCollection/links/`numberMatched`/`numberReturned` output contract is
+  otherwise unchanged.
+  - `search_page(search jsonb, limit int, token text, prev boolean)` — the engine:
+    merged-band partition discovery + **late-materialized hydration** (hydrate only the
+    page's rows) + **early-exit walk**. Returns the page, `next`/`prev` keyset tokens,
+    and `numberMatched` (on/off/auto behaviour preserved via `where_stats`).
+  - **Keyset pagination** for arbitrary multi-level `sortby` (mixed directions, NULLs,
+    multi-collection): tokens carry the sort-key values (`id` + `collection` always
+    appended as a unique tiebreak), so paging no longer does a per-token item lookup.
+    `keyset_encode`/`keyset_decode`/`keyset_sortkeys`/`keyset_where`.
+  - `search_sql(search jsonb, mode text)` / `search_cursor(...)` — SQL-text generator +
+    server-side cursor for streaming; `mode='item'` hydrated jsonb, `mode='row'` raw
+    split-storage columns.
+  - `fields_to_columns(fields jsonb)` — STAC `fields` include/exclude → `row`-mode projection.
+  - `content_hydrate(items, item_fragments, jsonb)` — 3-arg overload taking a pre-joined fragment.
+- **`partition_index` discovery** — partition pruning is driven by a single
+  denormalized `partition_index` table (per leaf: boundary range + actual
+  `datetime`/`end_datetime` extents + spatial bbox), maintained by **incremental upsert**
+  in `check_partition`/`update_partition_stats` (row-locked, no MV refresh, no
+  serialization on concurrent ingest). `chunker(collections text[], env pred_envelope)`
+  resolves a query to merged datetime bands via an indexed range query — no per-query
+  `EXPLAIN`, no ghost table. The pruning input is a safe over-approximation `pred_envelope`
+  (temporal `tstzmultirange` + spatial bbox) extracted from the **full** predicate
+  (`search_envelope`/`cql2_envelope`: top-level `collections`/`datetime`/`bbox`/`intersects`
+  AND a nested cql2 `and`/`or`/`not` tree, incl. `end_datetime`-correct and spatial
+  pruning). `geometrysearch`/`xyzsearch` use the same discovery + 3-arg fragment hydration.
+  `sync_partition_index()` backfills/repairs. (Fixes a tiebreak bug: non-datetime-leading
+  sorts now break datetime ties in the requested direction.)
+  - **Breaking (major release):** the `partitions` and `partition_steps` materialized
+    views are removed (use the live `partitions_view`/`partition_sys_meta`). Only
+    `search`, `geometrysearch`, and `xyzsearch` are the supported public API surface.
 - New [Promoted Fields](https://stac-utils.github.io/pgstac/promoted-fields/) reference document listing every STAC property that pgstac promotes to a native `items` column, with spec source, extension version, SQL type, and a machine-readable YAML registry for AI-assisted updates.
 - Align promoted fields with current STAC extension specs: add `proj:geometry`, `view:moon_azimuth`, `view:moon_elevation`, `sat:platform_international_designator`, `sat:anx_datetime`; replace `proj:epsg` (int) with `proj:code` (text); move `eo:bands` to core `bands` (STAC 1.1); remove `file:values_regex`.
 - Add deterministic SHA-256 `content_hash` to STAC items to track data changes across migrations.

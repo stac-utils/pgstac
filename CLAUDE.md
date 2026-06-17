@@ -93,6 +93,14 @@ scripts/test --pgdump           # pg_dump/pg_restore round-trip test
 
 All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuild images first.
 
+> **Gotcha — the pypgstac worker bakes the repo into its image.** The `pypgstac`
+> service has no source bind-mount; it `COPY`s the repo (including
+> `src/pgstac/pgstac.sql`) in at build time. So after editing `src/pgstac/sql/*.sql`
+> or regenerating `pgstac.sql`, you **must rebuild the image** or the tests run against
+> a **stale** `pgstac.sql`. Use `scripts/test --build-policy always` (or `--build`);
+> `--build-policy never`/`missing` reuse the old image and can silently test old SQL
+> (e.g. you'll see errors from source you already fixed, like leftover merge markers).
+
 ### Docker Architecture
 
 - **pgstac** container: PostgreSQL 17 + PostGIS 3 + extensions, port 5439→5432
@@ -133,6 +141,16 @@ This runs inside Docker and:
 3. After hand-editing an incremental migration, rebuild the baked artifact:
 	`uv run --directory src/pgstac-migrate pgstac-migrate build-artifact`
 4. Validate with `scripts/test --migrations` (or `scripts/test` for the full gate).
+
+> **Gotcha — `stageversion` can overwrite your host SQL edits.** It copies the
+> container's baked `/opt/src` back to the host (`--cpfiles`). With
+> `--build-policy never`/`missing` and a **stale image**, that baked tree predates
+> your edits, so the copy-back **wipes your `src/pgstac/sql/*.sql` changes** (and
+> regenerates `pgstac.sql` from the stale source) — silently. **After editing SQL
+> source, run `scripts/stageversion --build-policy always`** so the image is rebuilt
+> from your current tree before regen + copy-back. Then run the test gate **also**
+> with `--build-policy always` (the image baked during `stageversion` predates the
+> in-container `pgstac.sql` regen, so a `never` test would load a stale `pgstac.sql`).
 
 ### Running Migrations
 
