@@ -491,6 +491,9 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
         NULL::jsonb AS private;
 $$ LANGUAGE SQL STABLE;
 
+-- include_field: STAC fields include/exclude decision over a fields jsonb (used by content_hydrate);
+-- the jsonb-form of field_included(). Same rule: exclude wins, an explicit include list restricts to
+-- its members, otherwise everything is included. NULL field returns NULL.
 CREATE OR REPLACE FUNCTION include_field(f text, fields jsonb DEFAULT '{}'::jsonb) RETURNS boolean AS $$
 DECLARE
     includes jsonb := fields->'include';
@@ -534,7 +537,8 @@ $$ LANGUAGE PLPGSQL IMMUTABLE;
 -- been removed.
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item items,
-    fields jsonb DEFAULT '{}'::jsonb
+    fields jsonb DEFAULT '{}'::jsonb,
+    _skip_fragment boolean DEFAULT false
 ) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
@@ -551,8 +555,10 @@ BEGIN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
 
-    -- Fetch shared fragment content (NULL when item has no fragment).
-    IF _item.fragment_id IS NOT NULL THEN
+    -- Fetch shared fragment content (NULL when item has no fragment). _skip_fragment lets a caller
+    -- that has already determined the requested fields are satisfiable from item columns alone
+    -- (via needs_fragment) avoid this per-row lookup entirely.
+    IF _item.fragment_id IS NOT NULL AND NOT _skip_fragment THEN
         SELECT content, links_template
         INTO frag_content, frag_links_template
         FROM item_fragments
@@ -568,7 +574,7 @@ BEGIN
         WHEN _item.stac_extensions IS NOT NULL AND _item.stac_extensions <> '[]'::jsonb THEN _item.stac_extensions
         ELSE COALESCE(frag_content->'stac_extensions', _item.stac_extensions)
     END;
-    IF _item.fragment_id IS NOT NULL THEN
+    IF _item.fragment_id IS NOT NULL AND NOT _skip_fragment THEN
         hydrated_links := stac_links_hydrate(frag_links_template, _item.link_hrefs);
     ELSE
         hydrated_links := COALESCE(_item.links, '[]'::jsonb);
@@ -623,7 +629,7 @@ CREATE UNLOGGED TABLE items_staging_upsert (
 -- item_fragments rows via ON CONFLICT), assigns fragment_id, and strips
 -- fragment-covered keys. Returns the fully-enriched rows as the items rowtype so
 -- each staging trigger branch is a single INSERT differing only in conflict
--- policy. The enriched column list lives here once (previously duplicated 3x).
+-- policy. The enriched column list lives here once.
 CREATE OR REPLACE FUNCTION items_staging_dehydrate(_contents jsonb[]) RETURNS SETOF items AS $$
         WITH raw AS MATERIALIZED (
             SELECT
@@ -1119,9 +1125,8 @@ CREATE OR REPLACE FUNCTION pgstac_hash_fragment(fragment jsonb) RETURNS bytea AS
 SELECT sha256(convert_to(fragment::text, 'UTF8'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
--- gc_fragments: Garbage collect orphaned fragments using a single set-based DELETE.
--- Replaces the previous per-collection FOR LOOP with a single statement that lets
--- the planner choose the optimal join/anti-join strategy across all collections.
+-- gc_fragments: Garbage collect orphaned fragments using a single set-based DELETE so the
+-- planner can choose the optimal join/anti-join strategy across all collections.
 -- The NOT EXISTS sub-select is evaluated per fragment; with an index on items.fragment_id
 -- this is an efficient anti-join rather than a full seq-scan.
 --

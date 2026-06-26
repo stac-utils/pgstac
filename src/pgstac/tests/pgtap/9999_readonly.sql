@@ -34,14 +34,6 @@ SELECT results_eq(
     'Readonly search with context on returns numberMatched without requiring cache writes.'
 );
 SELECT throws_ok(
-    $$ SELECT name_search('{"collections":["pgstac-test-collection"]}'::jsonb, 'readonly-should-fail'); $$,
-    '25006'
-);
-SELECT throws_ok(
-    $$ SELECT gc_anonymous_searches(NULL, '{"search_gc_retention_interval":"1 second"}'::jsonb); $$,
-    '25006'
-);
-SELECT throws_ok(
     $$ SELECT gc_deleted_items_log('1 second'::interval); $$,
     '25006'
 );

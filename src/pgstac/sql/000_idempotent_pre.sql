@@ -96,10 +96,8 @@ $$ LANGUAGE PLPGSQL;
 SELECT pgstac_admin_owns();
 
 CREATE SCHEMA IF NOT EXISTS pgstac AUTHORIZATION pgstac_admin;
-
-GRANT ALL ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_admin;
-GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_admin;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_admin;
+-- pgstac_admin owns the schema and all objects in it (pgstac_admin_owns() above +
+-- AUTHORIZATION), so it already has every privilege — no explicit GRANT ALL needed.
 
 ALTER ROLE pgstac_admin SET SEARCH_PATH TO pgstac, public;
 ALTER ROLE pgstac_read SET SEARCH_PATH TO pgstac, public;
@@ -191,3 +189,36 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+-- Drop function signatures whose argument lists changed (CREATE OR REPLACE cannot alter them)
+DROP FUNCTION IF EXISTS chunker(pred_envelope);
+DROP FUNCTION IF EXISTS search_bands(pred_envelope, boolean, integer, integer);
+DROP FUNCTION IF EXISTS search_rows(jsonb, integer, text, boolean);
+DROP FUNCTION IF EXISTS search_sql(jsonb, text);
+DROP FUNCTION IF EXISTS search_cursor(jsonb, text, refcursor);
+DROP FUNCTION IF EXISTS search_cursor(jsonb);
+DROP FUNCTION IF EXISTS fields_to_columns(jsonb);
+DROP FUNCTION IF EXISTS fields_to_rowjsonb(jsonb, text[]);
+DROP FUNCTION IF EXISTS fields_to_rowjsonb(jsonb);
+DROP FUNCTION IF EXISTS collection_search_rows(jsonb);
+DROP FUNCTION IF EXISTS collection_fragments_properties(text);
+DROP FUNCTION IF EXISTS format_item(items, jsonb);
+DROP FUNCTION IF EXISTS geometrysearch(geometry, text, jsonb, integer, integer, interval, boolean, boolean);
+DROP FUNCTION IF EXISTS geojsonsearch(jsonb, text, jsonb, integer, integer, interval, boolean, boolean);
+DROP FUNCTION IF EXISTS xyzsearch(integer, integer, integer, text, jsonb, integer, integer, interval, boolean, boolean);
+DROP FUNCTION IF EXISTS search(jsonb);
+DROP FUNCTION IF EXISTS search_page(jsonb, integer, text, boolean);
+DROP FUNCTION IF EXISTS search_plan(jsonb, text);
+DROP FUNCTION IF EXISTS search_query(jsonb, boolean, jsonb);
+DROP FUNCTION IF EXISTS where_stats(text, text, boolean, jsonb);
+DROP FUNCTION IF EXISTS keyset_sortkeys(jsonb);
+DROP FUNCTION IF EXISTS paging_dtrange(jsonb);
+DROP FUNCTION IF EXISTS paging_collections(jsonb);
+DROP FUNCTION IF EXISTS get_token_filter(jsonb, items, boolean, boolean);
+DROP FUNCTION IF EXISTS get_token_record(text);
+DROP FUNCTION IF EXISTS get_token_val_str(text, items);
+DROP FUNCTION IF EXISTS sort_dir_to_op(text, boolean);
+DROP FUNCTION IF EXISTS sort_sqlorderby(jsonb, boolean);
+DROP FUNCTION IF EXISTS parse_sort_dir(text, boolean);
+DROP FUNCTION IF EXISTS cql2_envelope_safe(jsonb);
+DROP TABLE IF EXISTS search_wheres;

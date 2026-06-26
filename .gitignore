@@ -27,3 +27,4 @@ src/pgstac-migrate/dist/
 src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst
 src/pypgstac/uv.lock
 *_PLAN.md
+.claude/

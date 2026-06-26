@@ -25,7 +25,7 @@ DO $$
   END
 $$;
 
--- Register promoted native-column queryables (v0.10 split schema).
+-- Register promoted native-column queryables.
 -- Each entry maps a STAC property name to the promoted items column via property_path.
 -- CQL2 queries and auto-created indexes will use the native column, not JSONB extraction.
 -- The seed data lives in promoted_queryables_defaults() (002a_queryables.sql) so it
@@ -63,7 +63,6 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('context_estimated_count', '100000'),
   ('context_estimated_cost', '100000'),
   ('context_stats_ttl', '1 day'),
-  ('search_gc_retention_interval', '7 days'),
   ('default_filter_lang', 'cql2-json'),
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
@@ -117,61 +116,33 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
-ALTER FUNCTION update_partition_stats SECURITY DEFINER;
-ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
-ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
-ALTER FUNCTION create_table_constraints SECURITY DEFINER;
-ALTER FUNCTION check_partition SECURITY DEFINER;
-ALTER FUNCTION repartition SECURITY DEFINER;
-ALTER FUNCTION where_stats(text, text, boolean, jsonb) SECURITY DEFINER;
-ALTER FUNCTION search_query SECURITY DEFINER;
-ALTER FUNCTION name_search SECURITY DEFINER;
-ALTER FUNCTION rename_search SECURITY DEFINER;
-ALTER FUNCTION unname_search SECURITY DEFINER;
-ALTER FUNCTION pin_search SECURITY DEFINER;
-ALTER FUNCTION unpin_search SECURITY DEFINER;
-ALTER FUNCTION gc_anonymous_searches(interval, jsonb) SECURITY DEFINER;
-ALTER FUNCTION gc_search_caches(interval, jsonb) SECURITY DEFINER;
-ALTER FUNCTION gc_deleted_items_log_batch(interval, integer) SECURITY DEFINER;
-ALTER FUNCTION gc_deleted_items_log(interval, integer) SECURITY DEFINER;
-ALTER FUNCTION gc_deleted_items_log(interval) SECURITY DEFINER;
-ALTER FUNCTION format_item SECURITY DEFINER;
-ALTER FUNCTION maintain_index SECURITY DEFINER;
-ALTER FUNCTION pgstac.jsonb_hash(jsonb) SECURITY DEFINER;
-ALTER FUNCTION promoted_items_column_list() SECURITY DEFINER;
-ALTER FUNCTION items_content_distinct_sql(text, text) SECURITY DEFINER;
-ALTER FUNCTION items_content_changed(items, items) SECURITY DEFINER;
-ALTER FUNCTION items_touch_triggerfunc SECURITY DEFINER;
-ALTER FUNCTION items_delete_log_trigger SECURITY DEFINER;
-ALTER FUNCTION strip_promoted_properties(jsonb) SECURITY DEFINER;
-ALTER FUNCTION tstz_to_stac_text(timestamptz) SECURITY DEFINER;
-ALTER FUNCTION temporal_properties_from_item(items) SECURITY DEFINER;
-ALTER FUNCTION promoted_properties_from_item(items) SECURITY DEFINER;
-ALTER FUNCTION extract_fragment(jsonb, text[]) SECURITY DEFINER;
-ALTER FUNCTION pgstac_hash_fragment(jsonb) SECURITY DEFINER;
-ALTER FUNCTION gc_fragments(text, interval) SECURITY DEFINER;
-ALTER FUNCTION strip_fragment_col(jsonb, text, text[]) SECURITY DEFINER;
-ALTER FUNCTION update_field_registry_from_sample(text, jsonb[]) SECURITY DEFINER;
-ALTER FUNCTION update_field_registry_from_items(text) SECURITY DEFINER;
-ALTER FUNCTION refresh_field_registry(text, interval) SECURITY DEFINER;
-ALTER FUNCTION collection_fragment_config_default(jsonb) SECURITY DEFINER;
-ALTER FUNCTION jsonb_leaf_rows(jsonb, text) SECURITY DEFINER;
-ALTER FUNCTION jsonb_common_values(jsonb, jsonb) SECURITY DEFINER;
-ALTER FUNCTION fragment_path_text(text[]) SECURITY DEFINER;
-ALTER FUNCTION fragment_path_array(text) SECURITY DEFINER;
+-- SECURITY DEFINER is declared INLINE in each function's CREATE (the single source of truth),
+-- not re-applied here. Functions that create partitions/indexes/constraints declare it inline so
+-- the created objects are owned by pgstac_admin; functions that write the search cache from the
+-- read path declare it inline too. Pure helpers stay SECURITY INVOKER. Keeping a separate ALTER
+-- list here only let it drift from the definitions (stale/duplicate/wrong-signature entries).
 
-GRANT USAGE ON SCHEMA pgstac to pgstac_read;
-GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
-GRANT ALL ON SCHEMA pgstac to pgstac_admin;
+-- Schema USAGE for pgstac_read / pgstac_ingest is granted in 000_idempotent_pre.sql; pgstac_admin
+-- owns the schema. Not re-granted here.
 
--- pgstac_read role limited to using function apis
+-- pgstac_read API surface. Functions are EXECUTE-able by PUBLIC by default, so these grants are not
+-- required for access today; they document the intended top-level read API (and would be the point to
+-- enforce from if EXECUTE were ever revoked from PUBLIC). Internal helpers (keyset_*, partition_bounds,
+-- cql2_*, next_band, ...) are deliberately NOT listed — read reaches them only inside these entry points.
 GRANT EXECUTE ON FUNCTION search TO pgstac_read;
 GRANT EXECUTE ON FUNCTION search_query TO pgstac_read;
 GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
-GRANT EXECUTE ON FUNCTION format_item TO pgstac_read;
 GRANT EXECUTE ON FUNCTION content_hydrate TO pgstac_read;
-GRANT EXECUTE ON FUNCTION pgstac.jsonb_hash(jsonb) TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_page TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_plan TO pgstac_read;
+GRANT EXECUTE ON FUNCTION collection_search_plan TO pgstac_read;
+GRANT EXECUTE ON FUNCTION collection_search TO pgstac_read;
+GRANT EXECUTE ON FUNCTION geometrysearch TO pgstac_read;
+GRANT EXECUTE ON FUNCTION geojsonsearch TO pgstac_read;
+GRANT EXECUTE ON FUNCTION xyzsearch TO pgstac_read;
+GRANT EXECUTE ON FUNCTION search_from_json(jsonb, jsonb) TO pgstac_read;
+-- Tables are NOT readable by PUBLIC; read needs an explicit SELECT grant.
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
 
@@ -192,3 +163,4 @@ RESET ROLE;
 
 SET ROLE pgstac_ingest;
 SELECT update_partition_stats_q(partition) FROM partitions_view;
+RESET ROLE;

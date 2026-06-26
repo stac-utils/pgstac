@@ -1,6 +1,6 @@
 SELECT results_eq(
-    $$ SELECT sort_sqlorderby('{"sortby":{"field":"properties.eo:cloud_cover"}}'); $$,
-    $$ SELECT sort_sqlorderby('{"sortby":{"field":"eo:cloud_cover"}}'); $$,
+    $$ SELECT keyset_orderby('{"sortby":[{"field":"properties.eo:cloud_cover"}]}'::jsonb); $$,
+    $$ SELECT keyset_orderby('{"sortby":[{"field":"eo:cloud_cover"}]}'::jsonb); $$,
     'Make sure that sortby with/without properties prefix return the same sort statement.'
 );
 
