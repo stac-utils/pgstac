@@ -43,10 +43,18 @@ FROM t1;
 SELECT has_function('pgstac'::name, 'collection_search', ARRAY['jsonb']);
 
 
+-- collection_search paginates by keyset; next/prev are opaque keyset token links. Tokens here
+-- are built with keyset_encode so the expected value tracks the implementation rather than a
+-- hard-coded base64 blob.
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT jsonb_build_object(
+        'collections', '[{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]'::jsonb,
+        'numberMatched', 2, 'numberReturned', 1,
+        'links', jsonb_build_array(jsonb_build_object(
+            'rel','next','type','application/json','method','GET',
+            'href','./collections?token=next:'||keyset_encode(ARRAY['testcollection_1','collections']))))
     $$,
     'Test search passing in collection ids'
 );
@@ -54,7 +62,12 @@ SELECT results_eq($$
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"desc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-170, -90, -160, -80]]}, "temporal": {"interval": [["2000-01-15 00:00:00+00", "2000-03-15 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT jsonb_build_object(
+        'collections', '[{"id": "testcollection_2", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-170, -90, -160, -80]]}, "temporal": {"interval": [["2000-01-15 00:00:00+00", "2000-03-15 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]'::jsonb,
+        'numberMatched', 2, 'numberReturned', 1,
+        'links', jsonb_build_array(jsonb_build_object(
+            'rel','next','type','application/json','method','GET',
+            'href','./collections?token=next:'||keyset_encode(ARRAY['testcollection_2','collections']))))
     $$,
     'Test search passing in collection ids with descending sort'
 );
@@ -62,17 +75,22 @@ SELECT results_eq($$
 SELECT results_eq($$
     select collection_search('{"limit":1}') - '{collections}'::text[];
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
+    SELECT jsonb_build_object(
+        'numberMatched', 650, 'numberReturned', 1,
+        'links', jsonb_build_array(jsonb_build_object(
+            'rel','next','type','application/json','method','GET',
+            'href','./collections?token=next:'||keyset_encode(ARRAY['pgstac-test-collection','collections']))))
     $$,
     'Test search limit 1 - next link'
 );
 
-SELECT results_eq($$
-    select collection_search('{"limit":1, "offset":649}') - '{collections}'::text[];
-    $$,$$
-    SELECT '{"links": [{"rel": "prev", "body": {"offset": 648}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
-    $$,
-    'Test search limit 1, offset 649 - no next link'
+-- Supplying a next token exposes both a prev link (back to the origin page) and a
+-- further next link.
+SELECT ok(
+    (collection_search('{"limit":1}'::jsonb
+        || jsonb_build_object('token','next:'||keyset_encode(ARRAY['pgstac-test-collection','collections'])))
+     ->'links') @> '[{"rel":"prev"},{"rel":"next"}]'::jsonb,
+    'Test keyset: a token-driven page exposes prev + next links'
 );
 
 SELECT results_eq($$
@@ -87,7 +105,17 @@ SET pgstac.base_url='https://test.com/';
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');
     $$,$$
-    SELECT '{"links": [{"rel": "next", "body": {"offset": 1}, "href": "https://test.com/collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1, "collections": [{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]}'::jsonb
+    SELECT jsonb_build_object(
+        'collections', '[{"id": "testcollection_1", "type": "Collection", "title": "My Test Collection.", "extent": {"spatial": {"bbox": [[-180, -90, -170, -80]]}, "temporal": {"interval": [["2000-01-08 00:00:00+00", "2000-03-08 00:00:00+00"]]}}, "description": "Description of my test collection.", "stac_extensions": []}]'::jsonb,
+        'numberMatched', 2, 'numberReturned', 1,
+        'links', jsonb_build_array(jsonb_build_object(
+            'rel','next','type','application/json','method','GET',
+            'href','https://test.com/collections?token=next:'||keyset_encode(ARRAY['testcollection_1','collections']))))
     $$,
     'Test search passing in collection ids with base_url set'
 );
+
+-- A non-empty collection token that does not decode is a client error (parity with item search).
+SELECT throws_ok($$
+    SELECT collection_search('{"token":"next:testcollection_1"}')
+    $$, '22P02', NULL, 'collection_search: a malformed pagination token raises');

@@ -36,21 +36,21 @@ SELECT results_eq($$ SELECT bbox_geom('[0,1,2,3,4,5]'::jsonb) $$, $$ SELECT '010
 
 
 
-SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean']);
+SELECT has_function('pgstac'::name, 'keyset_orderby', ARRAY['jsonb','boolean']);
 
 SELECT results_eq($$
-    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
+    SELECT keyset_orderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, eo_cloud_cover ASC, id DESC';
+    SELECT 'datetime DESC, eo_cloud_cover ASC, id DESC, collection DESC';
     $$,
     'Test creation of sort sql'
 );
 
 
 SELECT results_eq($$
-    SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
+    SELECT keyset_orderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, eo_cloud_cover DESC, id ASC';
+    SELECT 'datetime ASC, eo_cloud_cover DESC, id ASC, collection ASC';
     $$,
     'Test creation of reverse sort sql'
 );
@@ -59,86 +59,61 @@ SELECT results_eq($$
 SELECT has_function('pgstac'::name, 'search', ARRAY['jsonb']);
 
 
+-- Follow the real keyset next-token to page 2, then page 2's prev-token back: the result must be
+-- identical to a fresh no-token first read, including a null prev link (issue #140).
 SELECT results_eq($$
-    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}], "token": "prev:pgstac-test-item-0011"}')
+    WITH base AS (SELECT '{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}'::jsonb AS s),
+    p1 AS (SELECT search((SELECT s FROM base))::jsonb AS j),
+    nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t),
+    p2 AS (SELECT search((SELECT s FROM base) || jsonb_build_object('token', (SELECT t FROM nt)))::jsonb AS j),
+    pt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p2), '$.links[*] ? (@.rel == "prev").href')->>0, 'token=', 2) AS t)
+    SELECT search((SELECT s FROM base) || jsonb_build_object('token', (SELECT t FROM pt)))::jsonb
     $$,$$
-    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}')
+    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}')::jsonb
     $$,
-    'Test prev token when reading first token_type=prev (https://github.com/stac-utils/pgstac/issues/140)'
+    'prev token from page 2 returns the first page, identical to a no-token read (issue #140)'
 );
 
+-- A non-empty token that does not decode to a keyset is a client error, not a silent first page.
+SELECT throws_ok($$
+    SELECT search('{"collections": ["pgstac-test-collection"], "token": "next:pgstac-test-item-0010"}')
+    $$, '22P02', NULL, 'a malformed pagination token raises rather than returning the first page');
 
-SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
-SELECT has_function('pgstac'::name, 'name_search', ARRAY['jsonb','text','jsonb']);
-SELECT has_function('pgstac'::name, 'rename_search', ARRAY['text','text']);
-SELECT has_function('pgstac'::name, 'unname_search', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'pin_search', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'unpin_search', ARRAY['text']);
-SELECT has_function('pgstac'::name, 'search_gc_retention_interval', ARRAY['jsonb']);
-SELECT has_function('pgstac'::name, 'gc_anonymous_searches', ARRAY['interval','jsonb']);
-SELECT has_function('pgstac'::name, 'gc_search_caches', ARRAY['interval','jsonb']);
+-- The fields extension actually projects the result (regression guard: search must pass the
+-- requested fields through to hydration, not return the whole item).
+SELECT results_eq($$
+    SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(jsonb_path_query_first(
+        search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id"]}}')::jsonb, '$.features[0]')) k
+    $$, $$ SELECT ARRAY['collection','id'] $$,
+    'fields include:[id] returns only id + forced collection');
 
-SELECT results_eq(
-    $$ SELECT (name_search('{"collections":["pgstac-test-collection"]}'::jsonb, 'pgstac-test-named-search')).name $$,
-    $$ SELECT 'pgstac-test-named-search'::text $$,
-    'name_search assigns a stable name'
-);
-SELECT results_eq(
-    $$ SELECT (rename_search('pgstac-test-named-search', 'pgstac-test-renamed-search')).name $$,
-    $$ SELECT 'pgstac-test-renamed-search'::text $$,
-    'rename_search renames an existing named search'
-);
-SELECT results_eq(
-    $$ SELECT (pin_search('pgstac-test-renamed-search')).pinned $$,
-    $$ SELECT TRUE $$,
-    'pin_search sets pinned=true'
-);
-SELECT results_eq(
-    $$ SELECT (unpin_search('pgstac-test-renamed-search')).pinned $$,
-    $$ SELECT FALSE $$,
-    'unpin_search sets pinned=false'
-);
-SELECT results_eq(
-    $$ SELECT (unname_search('pgstac-test-renamed-search')).name IS NULL $$,
-    $$ SELECT TRUE $$,
-    'unname_search clears search name'
-);
-SELECT results_eq(
-    $$ SELECT search_gc_retention_interval('{"search_gc_retention_interval":"3 days"}'::jsonb) $$,
-    $$ SELECT '3 days'::interval $$,
-    'GC retention interval honors conf override'
-);
-SELECT lives_ok(
-    $$
-        INSERT INTO searches (
-            hash,
-            search,
-            _where,
-            orderby,
-            metadata,
-            lastused,
-            usecount,
-            pinned,
-            name
-        ) VALUES (
-            pgstac_hash('gc-test-row-' || clock_timestamp()::text),
-            '{}'::jsonb,
-            'TRUE',
-            'datetime DESC, id DESC',
-            '{}'::jsonb,
-            now() - '2 days'::interval,
-            1,
-            false,
-            NULL
-        )
-    $$,
-    'Seed an old anonymous search row for GC test'
-);
-SELECT results_eq(
-    $$ SELECT gc_anonymous_searches(NULL, '{"search_gc_retention_interval":"1 day"}'::jsonb) > 0 $$,
-    $$ SELECT TRUE $$,
-    'gc_anonymous_searches uses retention from conf when interval arg is null'
-);
+SELECT results_eq($$
+    SELECT jsonb_path_query_first(
+        search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id","properties.datetime"]}}')::jsonb,
+        '$.features[0].properties') ?& array['datetime']
+       AND NOT jsonb_path_query_first(
+        search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id","properties.datetime"]}}')::jsonb,
+        '$.features[0].properties') ? 'eo:cloud_cover'
+    $$, $$ SELECT true $$,
+    'fields include:[properties.datetime] narrows properties to the requested key');
+
+SELECT results_eq($$
+    SELECT NOT jsonb_path_query_first(
+        search('{"ids":["pgstac-test-item-0097"],"fields":{"exclude":["assets"]}}')::jsonb,
+        '$.features[0]') ? 'assets'
+    $$, $$ SELECT true $$,
+    'fields exclude:[assets] drops assets from the result');
+
+-- include and exclude naming the same field: exclude wins (field_included and include_field agree).
+SELECT results_eq($$
+    SELECT NOT jsonb_path_query_first(
+        search('{"ids":["pgstac-test-item-0097"],"fields":{"include":["id","assets"],"exclude":["assets"]}}')::jsonb,
+        '$.features[0]') ? 'assets'
+    $$, $$ SELECT true $$,
+    'fields with a key in both include and exclude: exclude wins');
+
+
+SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','jsonb']);
 
 SELECT ok(
     to_regclass('pgstac.search_wheres') IS NULL,
@@ -180,9 +155,7 @@ SELECT results_eq(
             'hash',
             'lastused',
             'metadata',
-            'name',
             'orderby',
-            'pinned',
             'search',
             'statslastupdated',
             'usecount'
@@ -224,7 +197,7 @@ SELECT results_eq($$
     $q$),E' \n');
     $$, $$
     SELECT BTRIM($r$
-    st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340')
+    st_intersects(geometry, '0103000020E61000000100000005000000304CA60A464553C014D044D8F06443403E7958A8354153C014D044D8F06443403E7958A8354153C0DE718A8EE46A4340304CA60A464553C0DE718A8EE46A4340304CA60A464553C014D044D8F0644340'::geometry)
     $r$,E' \n');
     $$, 'Make sure that intersects returns valid query'
 );
@@ -844,19 +817,19 @@ SELECT * FROM pg_temp.testpaging('desc','asc');
 \copy items_staging (content) FROM 'tests/testdata/items_duplicate_ids.ndjson'
 
 SELECT is(
-    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"]}')->'features')),
+    (SELECT json_array_length(search('{"ids": ["pgstac-test-item-duplicated"]}')->'features')),
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, no collections specified. #192'
 );
 
 SELECT is(
-    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection"]}')->'features')),
+    (SELECT json_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection"]}')->'features')),
     '1',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, some collections specified. #192'
 );
 
 SELECT is(
-    (SELECT jsonb_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection", "pgstac-test-collection2"]}')->'features')),
+    (SELECT json_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection", "pgstac-test-collection2"]}')->'features')),
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, all collections specified. #192'
 );

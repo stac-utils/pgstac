@@ -81,10 +81,6 @@ CREATE OR REPLACE FUNCTION context_stats_ttl(conf jsonb DEFAULT NULL) RETURNS in
   SELECT pgstac.get_setting('context_stats_ttl', conf)::interval;
 $$ LANGUAGE SQL;
 
-CREATE OR REPLACE FUNCTION search_gc_retention_interval(conf jsonb DEFAULT NULL) RETURNS interval AS $$
-    SELECT pgstac.get_setting('search_gc_retention_interval', conf)::interval;
-$$ LANGUAGE SQL;
-
 CREATE OR REPLACE FUNCTION t2s(text) RETURNS text AS $$
     SELECT extract(epoch FROM $1::interval)::text || ' s';
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;

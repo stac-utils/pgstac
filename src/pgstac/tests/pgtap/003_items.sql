@@ -850,12 +850,12 @@ SELECT results_eq(
 );
 
 SELECT ok(
-    (search('{"ids": ["pgstac-test-range-datetime"]}') -> 'features' -> 0 -> 'properties') ? 'datetime',
+    (search('{"ids": ["pgstac-test-range-datetime"]}')::jsonb -> 'features' -> 0 -> 'properties') ? 'datetime',
     'search: properties.datetime key is present for a range item (not stripped)'
 );
 
 SELECT results_eq(
-    $$ SELECT search('{"ids": ["pgstac-test-range-datetime"]}') -> 'features' -> 0 -> 'properties' -> 'datetime' $$,
+    $$ SELECT search('{"ids": ["pgstac-test-range-datetime"]}')::jsonb -> 'features' -> 0 -> 'properties' -> 'datetime' $$,
     $$ SELECT 'null'::jsonb $$,
     'search: properties.datetime is JSON null for a range item (fixes #158)'
 );

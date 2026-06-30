@@ -144,6 +144,98 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
+-- q_to_tsquery: parse the STAC `q` free-text parameter (a string or array of strings) into a
+-- tsquery, honoring quoted phrases, AND/OR, +/- prefixes, commas (OR) and adjacency.
+CREATE OR REPLACE FUNCTION q_to_tsquery (jinput jsonb)
+    RETURNS tsquery
+    AS $$
+DECLARE
+    input text;
+    processed_text text;
+    temp_text text;
+    quote_array text[];
+    placeholder text := '@QUOTE@';
+BEGIN
+    IF jsonb_typeof(jinput) = 'string' THEN
+        input := jinput->>0;
+    ELSIF jsonb_typeof(jinput) = 'array' THEN
+        input := array_to_string(
+            array(select jsonb_array_elements_text(jinput)),
+            ' OR '
+        );
+    ELSE
+        RAISE EXCEPTION 'Input must be a string or an array of strings.';
+    END IF;
+    -- Extract all quoted phrases and store in array
+    quote_array := regexp_matches(input, '"[^"]*"', 'g');
+
+    -- Replace each quoted part with a unique placeholder if there are any quoted phrases
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        processed_text := input;
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, quote_array[i], placeholder || i || placeholder);
+        END LOOP;
+    ELSE
+        processed_text := input;
+    END IF;
+
+    -- Replace non-quoted text using regular expressions
+
+    -- , -> |
+    processed_text := regexp_replace(processed_text, ',(?=(?:[^"]*"[^"]*")*[^"]*$)', ' | ', 'g');
+
+    -- and -> &
+    processed_text := regexp_replace(processed_text, '\s+AND\s+', ' & ', 'gi');
+
+    -- or -> |
+    processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
+
+    -- + ->
+    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_]+)', '\1', 'g'); -- +term at start
+    processed_text := regexp_replace(processed_text, '\s*\+([a-zA-Z0-9_]+)', ' & \1', 'g'); -- +term elsewhere
+
+    -- - ->  !
+    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
+    processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
+
+    -- terms separated with spaces are assumed to represent adjacent terms. loop through these
+    -- occurrences and replace them with the adjacency operator (<->)
+    LOOP
+        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)(?!\s*[&|<>])', '\1 <-> \2', 'g');
+        IF temp_text = processed_text THEN
+            EXIT; -- No more replacements were made
+        END IF;
+        processed_text := temp_text;
+    END LOOP;
+
+
+    -- Replace placeholders back with quoted phrases if there were any
+    IF array_length(quote_array, 1) IS NOT NULL THEN
+        FOR i IN array_lower(quote_array, 1) .. array_upper(quote_array, 1) LOOP
+            processed_text := replace(processed_text, placeholder || i || placeholder, '''' || substring(quote_array[i] from 2 for length(quote_array[i]) - 2) || '''');
+        END LOOP;
+    END IF;
+
+    RETURN to_tsquery('english', processed_text);
+END;
+$$
+LANGUAGE plpgsql;
+
+-- q_op_query: SQL predicate for the pgstac `q` full-text operator. args is the search term(s)
+-- (a string or array of strings, the STAC `q` parameter); it is matched against a tsvector
+-- built from the row's description/title/keywords. Modeled on spatial_op_query /
+-- temporal_op_query so full-text is a first-class CQL2 op.
+CREATE OR REPLACE FUNCTION q_op_query(args jsonb) RETURNS text AS $$
+    SELECT format(
+        $q$(
+            to_tsvector('english', coalesce(properties->>'description', '')) ||
+            to_tsvector('english', coalesce(properties->>'title', '')) ||
+            to_tsvector('english', coalesce(properties->>'keywords', ''))
+        ) @@ %L$q$,
+        q_to_tsquery(args)
+    );
+$$ LANGUAGE SQL STABLE;
+
 CREATE OR REPLACE FUNCTION query_to_cql2(q jsonb) RETURNS jsonb AS $$
 -- Translates anything passed in through the deprecated "query" into equivalent CQL2
 WITH t AS (
@@ -198,6 +290,11 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql2 expressions;
+        -- pass them through unchanged so spatial ops keep their geometry intact.
+        IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
+            RETURN j;
+        END IF;
         SELECT jsonb_build_object(
                 'op', key,
                 'args', cql1_to_cql2(value)
@@ -308,12 +405,16 @@ BEGIN
     END IF;
     IF j ? 'interval' THEN
         RAISE EXCEPTION 'Please use temporal operators when using intervals.';
-        RETURN NONE;
     END IF;
 
     -- Spatial Query
     IF op ilike 's_%' or op = 'intersects' THEN
         RETURN spatial_op_query(op, args);
+    END IF;
+
+    -- Full-text Query (pgstac `q` operator)
+    IF op = 'q' THEN
+        RETURN q_op_query(args);
     END IF;
 
     IF op IN ('a_equals','a_contains','a_contained_by','a_overlaps') THEN
@@ -448,83 +549,34 @@ END;
 $$ LANGUAGE PLPGSQL STABLE;
 
 
-CREATE OR REPLACE FUNCTION paging_dtrange(
-    j jsonb
-) RETURNS tstzrange AS $$
-DECLARE
-    op text;
-    filter jsonb := j->'filter';
-    dtrange tstzrange := tstzrange('-infinity'::timestamptz,'infinity'::timestamptz);
-    sdate timestamptz := '-infinity'::timestamptz;
-    edate timestamptz := 'infinity'::timestamptz;
-    jpitem jsonb;
-BEGIN
+-- coerce a cql2 scalar (string | {"timestamp":..} | {"date":..}) to timestamptz
+CREATE OR REPLACE FUNCTION cql2_ts(v jsonb) RETURNS timestamptz LANGUAGE sql IMMUTABLE AS $$
+    SELECT coalesce(v->>'timestamp', v->>'date', v#>>'{}')::timestamptz;
+$$;
 
-    IF j ? 'datetime' THEN
-        dtrange := parse_dtrange(j->'datetime');
-        sdate := lower(dtrange);
-        edate := upper(dtrange);
-    END IF;
-    IF NOT (filter  @? '$.**.op ? (@ == "or" || @ == "not")') THEN
-        FOR jpitem IN SELECT j FROM jsonb_path_query(filter,'strict $.** ? (@.args[*].property == "datetime")'::jsonpath) j LOOP
-            op := lower(jpitem->>'op');
-            dtrange := parse_dtrange(jpitem->'args'->1);
-            IF op IN ('<=', 'lt', 'lte', '<', 'le', 't_before') THEN
-                sdate := greatest(sdate,'-infinity');
-                edate := least(edate, upper(dtrange));
-            ELSIF op IN ('>=', '>', 'gt', 'gte', 'ge', 't_after') THEN
-                edate := least(edate, 'infinity');
-                sdate := greatest(sdate, lower(dtrange));
-            ELSIF op IN ('=', 'eq') THEN
-                edate := least(edate, upper(dtrange));
-                sdate := greatest(sdate, lower(dtrange));
-            END IF;
-            RAISE NOTICE '2 OP: %, ARGS: %, DTRANGE: %, SDATE: %, EDATE: %', op, jpitem->'args'->1, dtrange, sdate, edate;
-        END LOOP;
-    END IF;
-    IF sdate > edate THEN
-        RETURN 'empty'::tstzrange;
-    END IF;
-    RETURN tstzrange(sdate,edate, '[]');
-END;
-$$ LANGUAGE PLPGSQL STABLE STRICT SET TIME ZONE 'UTC';
-
-CREATE OR REPLACE FUNCTION paging_collections(
-    IN j jsonb
-) RETURNS text[] AS $$
-DECLARE
-    filter jsonb := j->'filter';
-    jpitem jsonb;
-    op text;
-    args jsonb;
-    arg jsonb;
-    collections text[];
+-- Resolve a cql2 predicate on the `collection` property to an allowed collection SET.
+CREATE OR REPLACE FUNCTION cql2_collection_set(op text, args jsonb) RETURNS text[] LANGUAGE plpgsql STABLE AS $$
+DECLARE lst jsonb;
 BEGIN
-    IF j ? 'collections' THEN
-        collections := to_text_array(j->'collections');
+    IF op IN ('=','eq') AND jsonb_typeof(args->1) = 'string' THEN
+        RETURN ARRAY[args->>1];
+    ELSIF op = 'in' THEN
+        lst := CASE WHEN jsonb_typeof(args->1)='object' AND args->1 ? 'list' THEN args->1->'list' ELSE args->1 END;
+        IF jsonb_typeof(lst) <> 'array' THEN RETURN NULL; END IF;
+        RETURN to_text_array(lst);
+    ELSIF jsonb_typeof(args->1) = 'string' THEN
+        IF    op IN ('<','lt')   THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id <  (args->>1)), '{}');
+        ELSIF op IN ('<=','lte') THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id <= (args->>1)), '{}');
+        ELSIF op IN ('>','gt')   THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id >  (args->>1)), '{}');
+        ELSIF op IN ('>=','gte') THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id >= (args->>1)), '{}');
+        ELSIF op IN ('like')     THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id LIKE  (args->>1)), '{}');
+        ELSIF op IN ('ilike')    THEN RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id ILIKE (args->>1)), '{}');
+        END IF;
+    ELSIF op = 'between' AND jsonb_typeof(args->1)='string' AND jsonb_typeof(args->2)='string' THEN
+        RETURN coalesce((SELECT array_agg(id) FROM collections WHERE id BETWEEN (args->>1) AND (args->>2)), '{}');
     END IF;
-    IF NOT (filter  @? '$.**.op ? (@ == "or" || @ == "not")') THEN
-        FOR jpitem IN SELECT j FROM jsonb_path_query(filter,'strict $.** ? (@.args[*].property == "collection")'::jsonpath) j LOOP
-            RAISE NOTICE 'JPITEM: %', jpitem;
-            op := jpitem->>'op';
-            args := jpitem->'args';
-            IF op IN ('=', 'eq', 'in') THEN
-                FOR arg IN SELECT a FROM jsonb_array_elements(args) a LOOP
-                    IF jsonb_typeof(arg) IN ('string', 'array') THEN
-                        RAISE NOTICE 'arg: %, collections: %', arg, collections;
-                        IF collections IS NULL OR collections = '{}'::text[] THEN
-                            collections := to_text_array(arg);
-                        ELSE
-                            collections := array_intersection(collections, to_text_array(arg));
-                        END IF;
-                    END IF;
-                END LOOP;
-            END IF;
-        END LOOP;
-    END IF;
-    IF collections = '{}'::text[] THEN
-        RETURN NULL;
-    END IF;
-    RETURN collections;
+    RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL STABLE STRICT;
+$$;
+
+-- Recursive envelope of a normalized cql2 filter tree.

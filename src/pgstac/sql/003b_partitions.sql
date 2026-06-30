@@ -1,13 +1,18 @@
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
+    collection text,
+    partition_dtrange tstzrange,
     dtrange tstzrange,
     edtrange tstzrange,
     spatial geometry,
     last_updated timestamptz,
+    n bigint,
     keys text[]
 ) WITH (FILLFACTOR=90);
 
 CREATE INDEX partitions_range_idx ON partition_stats USING GIST(dtrange);
+CREATE INDEX partition_stats_collection_idx ON partition_stats (collection);
+CREATE INDEX partition_stats_spatial_idx ON partition_stats USING GIST(spatial) WHERE spatial IS NOT NULL;
 
 
 CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
@@ -151,7 +156,12 @@ FROM
     JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
-    LEFT JOIN pgstac.partition_stats USING (partition)
+    -- the view computes its own collection/partition_dtrange from the live tree; pull only the
+    -- data-extent columns from partition_stats to avoid colliding with those names.
+    LEFT JOIN (
+        SELECT partition, dtrange, edtrange, spatial, last_updated
+        FROM pgstac.partition_stats
+    ) ps USING (partition)
 WHERE isleaf
 ;
 
@@ -186,6 +196,8 @@ DECLARE
     cedtrange tstzrange;
     extent geometry;
     collection text;
+    _part_dtrange tstzrange;
+    _n bigint;
 BEGIN
     RAISE NOTICE 'Updating stats for %.', _partition;
     EXECUTE format(
@@ -200,20 +212,27 @@ BEGIN
     EXECUTE format('ANALYZE %I;', _partition);
     extent := st_estimatedextent('pgstac', _partition, 'geometry');
     RAISE DEBUG 'Estimated Extent: %', extent;
-    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
-        SELECT _partition, dtrange, edtrange, extent, now()
+
+    -- Per-partition metadata: collection + partition boundary from the live tree (partitions_view),
+    -- current constraint ranges (for the constraint check below), and the row estimate from pg_class.
+    SELECT pv.collection, pv.partition_dtrange, pv.constraint_dtrange, pv.constraint_edtrange
+        INTO collection, _part_dtrange, cdtrange, cedtrange
+    FROM partitions_view pv WHERE partition = _partition;
+    _n := (SELECT reltuples::bigint FROM pg_class WHERE oid = quote_ident(_partition)::regclass);
+
+    INSERT INTO partition_stats
+        (partition, collection, partition_dtrange, dtrange, edtrange, spatial, n, last_updated)
+        SELECT _partition, collection, _part_dtrange, dtrange, edtrange, extent, _n, now()
         ON CONFLICT (partition) DO
             UPDATE SET
+                collection=EXCLUDED.collection,
+                partition_dtrange=EXCLUDED.partition_dtrange,
                 dtrange=EXCLUDED.dtrange,
                 edtrange=EXCLUDED.edtrange,
                 spatial=EXCLUDED.spatial,
+                n=EXCLUDED.n,
                 last_updated=EXCLUDED.last_updated
     ;
-
-    SELECT
-        constraint_dtrange, constraint_edtrange, pv.collection
-        INTO cdtrange, cedtrange, collection
-    FROM partitions_view pv WHERE partition = _partition;
 
     RAISE NOTICE 'Checking if we need to modify constraints...';
     RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
