@@ -742,6 +742,22 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
+    -- Fail loudly on items whose collection does not exist instead of silently dropping them
+    -- in the collections JOINs below (matches the Rust loader, which also errors on this).
+    IF EXISTS (
+        SELECT 1 FROM newdata n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+        )
+    ) THEN
+        RAISE EXCEPTION 'cannot load item(s) into nonexistent collection(s): %',
+            (SELECT string_agg(DISTINCT coalesce(n.content->>'collection', '<null>'), ', ')
+             FROM newdata n
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+             ));
+    END IF;
+
     FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
