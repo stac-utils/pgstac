@@ -11,20 +11,107 @@ repository = "https://github.com/stac-utils/pgstac"
 license = "MIT OR Apache-2.0"
 rust-version = "1.88"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+# A Python extension module (built with maturin) exposing the read + geoparquet-export API over a
+# connection pool.
+python = ["pool", "export", "dep:pyo3", "dep:pyo3-async-runtimes"]
+# A `deadpool`-backed connection pool ([`PgstacPool`]) with rustls TLS.
+pool = [
+    "dep:deadpool-postgres",
+    "dep:tokio-postgres-rustls",
+    "dep:rustls",
+    "dep:rustls-pemfile",
+    "dep:webpki-roots",
+    "dep:async-stream",
+]
+# Export/dump library: row sources, hydration glue, formats, sinks, manifest. Pulls in the stac
+# geoparquet writer + checksum/spill helpers, plus the parquet/geoparquet/arrow crates the parallel
+# loader decode drives directly (same versions stac/geoparquet resolves transitively).
+export = [
+    "stac/geoparquet",
+    "dep:tempfile",
+    "dep:arrow-array",
+    "dep:parquet",
+    "dep:geoparquet",
+    "tokio/sync",
+    "tokio/macros",
+]
+# The `pgstac` binary (CLI). Implies `export` (dump/search) + `pool` (load/restore via the Rust loader).
+cli = [
+    "export",
+    "pool",
+    "dep:clap",
+    "dep:object_store",
+    "dep:url",
+    "dep:tar",
+    "dep:zstd",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+    "tokio/fs",
+]
+# Heap profiling helpers (the `memprofile` binary). Opt-in; pulls in `dhat`.
+profiling = ["pool", "export", "dep:dhat", "tokio/macros", "tokio/rt-multi-thread"]
+
 [dependencies]
+async-stream = { version = "0.3", optional = true }
+base64 = "0.22"
+bytes = "1"
+dhat = { version = "0.3", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+deadpool-postgres = { version = "0.14", optional = true }
+futures = "0.3"
+geozero = { version = "0.14", default-features = false, features = ["with-wkb", "with-geojson"] }
+rustls = { version = "0.23", optional = true }
+rustls-pemfile = { version = "2.2", optional = true }
 serde = "1.0"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
+sha2 = "0.10"
 stac = "0.17.0"
 thiserror = "2.0"
-tokio = { version = "1.44", features = ["rt"] }
-tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1"] }
+tokio = { version = "1.44", features = ["rt", "sync"] }
+tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1", "with-chrono-0_4"] }
+tokio-postgres-rustls = { version = "0.13", optional = true }
 tracing = "0.1.40"
+webpki-roots = { version = "0.26", optional = true }
+
+# export feature (sha2 is a non-optional dep above — canonical.rs always needs it)
+tempfile = { version = "3", optional = true }
+# export feature: parallel stac-geoparquet decode reads row groups directly. Versions match what
+# stac's `geoparquet` feature pulls in transitively (parquet 58, geoparquet 0.8, arrow-array 58).
+arrow-array = { version = "58", optional = true }
+parquet = { version = "58", optional = true }
+geoparquet = { version = "0.8", optional = true }
+
+# cli feature
+clap = { version = "4", optional = true, features = ["derive", "env"] }
+object_store = { version = "0.11", optional = true, features = ["aws"] }
+url = { version = "2", optional = true }
+tar = { version = "0.4", optional = true }
+zstd = { version = "0.13", optional = true }
+
+# python feature
+pyo3 = { version = "0.23", optional = true, features = ["macros"] }
+pyo3-async-runtimes = { version = "0.23", optional = true, features = ["tokio-runtime"] }
 
 [dev-dependencies]
 geojson = "1.0"
 rstest = "0.26.1"
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros"] }
 tokio-test = "0.4.4"
+
+[[bin]]
+name = "pgstac"
+path = "src/bin/pgstac.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "memprofile"
+path = "src/bin/memprofile.rs"
+required-features = ["profiling"]
 
 [package.metadata.docs.rs]
 all-features = true

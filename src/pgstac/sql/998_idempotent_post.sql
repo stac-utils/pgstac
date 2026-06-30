@@ -150,6 +150,28 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+-- Privilege wall (INV-1): the connecting role (inheriting pgstac_ingest) may READ these tables but may
+-- only MUTATE them through the SECURITY DEFINER write functions (check_partition, widen/tighten_partition_stats,
+-- ensure_fragments, make_binary_staging, flush_items_staging_binary, the items_staging trigger, create/
+-- update/upsert/delete_item, the field-registry/fragment helpers). This makes an un-widened or
+-- envelope-narrowing direct write structurally impossible. New partitions are created SELECT-only for
+-- pgstac_ingest by check_partition; the items parent is revoked here. Staging tables (items_staging*) stay
+-- writable so the SQL-only ingest path can COPY into them.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragments FROM pgstac_ingest;
+-- item_field_registry is the one exception to the wall: the loader WIDENS it directly with an add-only
+-- INSERT ... ON CONFLICT DO UPDATE (no SD function), so INSERT + UPDATE stay granted. DELETE/TRUNCATE remain
+-- revoked, so even a direct write cannot NARROW the registry — INV-1 (registry is a superset of the data)
+-- holds structurally against narrowing, while the cheap widen stays on the hot load path.
+REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
+
+-- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
+-- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
+-- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
+-- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
+-- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
+GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
+GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
+
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
@@ -161,6 +183,6 @@ GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgst
 
 RESET ROLE;
 
-SET ROLE pgstac_ingest;
-SELECT update_partition_stats_q(partition) FROM partitions_view;
-RESET ROLE;
+-- (No install-time stats seeding: a fresh install has no partitions, and partition_stats rows are now
+-- seeded by check_partition as partitions are created. Exact stats come from tighten_partition_stats via
+-- the maintenance sweeps.)

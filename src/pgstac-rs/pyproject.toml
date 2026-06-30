@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pypgstac-rs"
+description = "Rust-accelerated pgstac read API (search, collection search, getters, queryables) for stac-fastapi-pgstac"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+features = ["python", "pyo3/extension-module"]
+module-name = "pypgstac_rs"

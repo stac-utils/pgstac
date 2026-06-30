@@ -6,11 +6,9 @@ SET
 SELECT get_setting_bool('use_queue');
  f
 
-SET pgstac.update_collection_extent=TRUE;
-SET
-SELECT get_setting_bool('update_collection_extent');
- t
-
+-- NOTE: collection extent is no longer auto-updated on ingest. It is refreshed EXPLICITLY via
+-- update_collection_extents() (exercised at the end of this test), so the inline checks below show an
+-- unset extent right after ingest.
 --create base data to use with tests
 CREATE TEMP TABLE test_items AS
 SELECT jsonb_build_object(
@@ -25,55 +23,58 @@ INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-cr
 INSERT 0 1
 -- Create an item
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {}         | {}
 
--- Check to see if extent got updated
+-- Extent is NOT auto-updated on ingest (now explicit/async) -- expect it unset here
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
- {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"]]}}
+
 
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-01-01 00:00:00+00 | 2023-01-01 00:00:00+00 | {}         | {}
 
--- Check to see if extent got updated
+-- Extent is NOT auto-updated on ingest (now explicit/async) -- expect it unset here
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
- {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2023-01-01T00:00:00+00:00", "2023-01-01T00:00:00+00:00"]]}}
+
 
 -- Update item with new datetime that is in a different partition
 SELECT upsert_item((SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {}         | {}
 
 -- Delete an item
 SELECT delete_item('pgstactest-crudtest-1', 'pgstactest-crudtest');
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
 
 WITH c AS (SELECT content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT create_items(items) FROM aggregated;
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {}         | {}
  pgstactest-crudtest-2 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-02-01 00:00:00+00 | 2020-02-01 00:00:00+00 | {}         | {}
 
-DELETE FROM items WHERE collection='pgstactest-crudtest';
-DELETE 2
+-- clear the collection via delete_item (direct DELETE on items is blocked by the privilege wall)
+WITH ids AS MATERIALIZED (SELECT id FROM items WHERE collection='pgstactest-crudtest')
+SELECT count(*) AS cleared FROM (SELECT delete_item(id, 'pgstactest-crudtest') FROM ids) d;
+       2
+
 -- upsert items that do not exist yet
 WITH c AS (SELECT content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2020-01-01 00:00:00+00 | 2020-01-01 00:00:00+00 | {}         | {}
@@ -83,25 +84,25 @@ SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM 
 WITH c AS (SELECT content || '{"properties":{"datetime":"2023-02-01 00:00:00Z"}}'::jsonb as content FROM test_items LIMIT 2),
 aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
- 
+
 
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
  pgstactest-crudtest-1 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {}         | {}
  pgstactest-crudtest-2 | 0103000020E610000001000000050000005B3FFD67CD5355C0C4211B4817EF3E400CE6AF90B95355C0A112D731AE003F4004C93B87325855C0BEBC00FBE8003F40FA0AD28C455855C000E5EFDE51EF3E405B3FFD67CD5355C0C4211B4817EF3E40 | pgstactest-crudtest | 2023-02-01 00:00:00+00 | 2023-02-01 00:00:00+00 | {}         | {}
 
--- turn off update_collection_extent then add an item and verify that the extent did not get updated automatically
-SET pgstac.update_collection_extent=FALSE;
-SET
-SELECT get_setting_bool('update_collection_extent');
- f
+-- Collection extent is refreshed EXPLICITLY (maintenance), not automatically on ingest. Tighten the
+-- partitions to exact stats, then refresh the stored extent, and verify it is now populated.
+SELECT tighten_partition_stats(partition) FROM partitions_view WHERE collection='pgstactest-crudtest';
 
-SELECT update_item((SELECT content || '{"properties":{"datetime":"2024-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
- 
+
+
+SELECT update_collection_extents();
+
 
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
- {"spatial": {"bbox": [[-85.3792495727539, 30.933948516845703, -85.30819702148438, 31.003555297851562]]}, "temporal": {"interval": [["2023-02-01T00:00:00+00:00", "2023-02-01T00:00:00+00:00"]]}}
+ {"spatial": {"bbox": [[-85.379245, 30.933949, -85.308201, 31.003555]]}, "temporal": {"interval": [["2023-02-01T00:00:00+00:00", "2023-02-01T00:00:00+00:00"]]}}
 
 -- check formatting of temporal extent
 SELECT collection_temporal_extent('pgstactest-crudtest');
- [["2023-02-01T00:00:00+00:00", "2024-01-01T00:00:00+00:00"]]
+ [["2023-02-01T00:00:00+00:00", "2023-02-01T00:00:00+00:00"]]
 

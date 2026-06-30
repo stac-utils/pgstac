@@ -43,6 +43,26 @@ DO $$
   END
 $$;
 
+-- pgstac_load: the explicit up-privilege role used to direct-write the wall-protected tables (items /
+-- partition_stats / item_fragments) from the Rust loader via SET ROLE. NOLOGIN, and granted WITH INHERIT
+-- FALSE so nobody writes those tables implicitly — only a deliberate, auditable SET ROLE does.
+DO $$
+  BEGIN
+    CREATE ROLE pgstac_load NOLOGIN;
+  EXCEPTION WHEN duplicate_object THEN
+    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
+  END
+$$;
+
+-- Role MEMBERSHIP grants live here (idempotent_pre), where the installing superuser still holds the role
+-- context — pgstac.sql later does SET ROLE pgstac_admin, and pgstac_admin lacks ADMIN OPTION on a pgstac_load
+-- the superuser created, so a membership grant in 998 (as pgstac_admin) would fail. INHERIT FALSE keeps the
+-- privileges dormant (the wall holds); SET (default) lets the member `SET ROLE pgstac_load`. pgstac_admin also
+-- gets ADMIN OPTION so an incremental migration running AS pgstac_admin can re-assert these. (998 grants the
+-- table/usage privileges once the tables exist.)
+GRANT pgstac_load TO pgstac_admin  WITH ADMIN OPTION, INHERIT FALSE;
+GRANT pgstac_load TO pgstac_ingest WITH INHERIT FALSE;
+
 
 GRANT pgstac_admin TO current_user;
 
@@ -214,6 +234,7 @@ DROP FUNCTION IF EXISTS xyzsearch(integer, integer, integer, text, jsonb, intege
 DROP FUNCTION IF EXISTS search(jsonb);
 DROP FUNCTION IF EXISTS search_page(jsonb, integer, text, boolean);
 DROP FUNCTION IF EXISTS search_plan(jsonb, text);
+DROP FUNCTION IF EXISTS fields_to_itemcols(jsonb);
 DROP FUNCTION IF EXISTS search_query(jsonb, boolean, jsonb);
 DROP FUNCTION IF EXISTS where_stats(text, text, boolean, jsonb);
 DROP FUNCTION IF EXISTS keyset_sortkeys(jsonb);
@@ -2750,8 +2771,8 @@ CREATE OR REPLACE FUNCTION partition_bounds(
 ) RETURNS record LANGUAGE sql STABLE AS $$
     WITH cand AS (
         SELECT ps.collection,
-               lower(coalesce(ps.dtrange, ps.partition_dtrange)) AS lo,
-               upper(coalesce(ps.dtrange, ps.partition_dtrange)) AS hi,
+               lower(ps.dtrange) AS lo,
+               upper(ps.dtrange) AS hi,
                coalesce(ps.n, 0) AS n
         FROM partition_stats ps
         WHERE ((_env).colls IS NULL OR ps.collection = ANY((_env).colls))
@@ -2788,12 +2809,18 @@ $$;
 
 -- next_band: walk a histogram using array indexes. Given per-month counts, a
 -- cursor position, and a target row count, returns the next band's index range.
--- The caller converts band indexes back to timestamps for SQL queries.
+-- The caller converts band indexes back to timestamps for SQL queries. The band
+-- index range [band_start_idx, band_end_idx] is always low..high regardless of
+-- direction; only the walk order differs. For a descending search (_descending)
+-- the cursor starts at the most recent month and walks toward older months, so
+-- the most recent items are collected first (the bug fix: a descending walk must
+-- not start at the oldest band).
 CREATE OR REPLACE FUNCTION next_band(
     _counts bigint[],
     _cursor_idx int,
     _target numeric,
     _cap_months int,
+    _descending boolean DEFAULT false,
     OUT band_start_idx int,
     OUT band_end_idx int,
     OUT scanned bigint,
@@ -2802,6 +2829,7 @@ CREATE OR REPLACE FUNCTION next_band(
 ) RETURNS record LANGUAGE plpgsql STABLE AS $$
 DECLARE
     idx int;
+    n int;
     cumulative bigint := 0;
 BEGIN
     done := false; scanned := 0;
@@ -2811,14 +2839,39 @@ BEGIN
         done := true;  -- no histogram / no cursor => nothing to walk
         RETURN;
     END IF;
+    n := array_length(_counts, 1);
 
+    IF _descending THEN
+        -- Walk downward (newest -> oldest). The high bound is the cursor (clamped into range).
+        IF _cursor_idx < 1 THEN done := true; RETURN; END IF;
+        idx := LEAST(_cursor_idx, n);
+        FOR i IN REVERSE idx..GREATEST(1, idx - _cap_months + 1) LOOP
+            cumulative := cumulative + _counts[i];
+            scanned := scanned + _counts[i];
+            IF cumulative >= _target THEN
+                band_start_idx := i;      -- low (older) month bound
+                band_end_idx := idx;      -- high (newer) month bound
+                next_cursor_idx := i - 1;
+                IF next_cursor_idx < 1 THEN done := true; END IF;
+                RETURN;
+            END IF;
+        END LOOP;
+        -- Target not reached within the cap: end the band at the cap boundary.
+        band_start_idx := GREATEST(1, idx - _cap_months + 1);
+        band_end_idx := idx;
+        next_cursor_idx := band_start_idx - 1;
+        done := (band_start_idx <= 1);
+        RETURN;
+    END IF;
+
+    -- Ascending (oldest -> newest).
     idx := NULL;
-    FOR i IN 1..array_length(_counts, 1) LOOP
+    FOR i IN 1..n LOOP
         IF i >= _cursor_idx THEN idx := i; EXIT; END IF;
     END LOOP;
     IF idx IS NULL THEN done := true; next_cursor_idx := _cursor_idx; RETURN; END IF;
 
-    FOR i IN idx..array_length(_counts, 1) LOOP
+    FOR i IN idx..n LOOP
         IF i > idx + _cap_months - 1 THEN EXIT; END IF;
         cumulative := cumulative + _counts[i];
         scanned := scanned + _counts[i];
@@ -2826,7 +2879,7 @@ BEGIN
             band_start_idx := idx;
             band_end_idx := i;
             next_cursor_idx := i + 1;
-            IF next_cursor_idx > array_length(_counts, 1) THEN done := true; END IF;
+            IF next_cursor_idx > n THEN done := true; END IF;
             RETURN;
         END IF;
     END LOOP;
@@ -2834,9 +2887,9 @@ BEGIN
     -- Target not reached within the cap: end the band at the cap boundary (not the array end),
     -- so the cap actually limits band width. done only when we've consumed the whole histogram.
     band_start_idx := idx;
-    band_end_idx := LEAST(idx + _cap_months - 1, array_length(_counts, 1));
+    band_end_idx := LEAST(idx + _cap_months - 1, n);
     next_cursor_idx := band_end_idx + 1;
-    done := (band_end_idx >= array_length(_counts, 1));
+    done := (band_end_idx >= n);
 END;
 $$;
 -- END FRAGMENT: 002c_envelope.sql
@@ -3077,47 +3130,15 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
--- partition_after_triggerfunc: After-statement trigger on items.
--- Updates partition statistics for every partition touched by the current batch,
--- using run_or_queue() so the work is deferred rather than blocking the ingest
--- transaction.
-CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
-DECLARE
-    p text;
-    t timestamptz := clock_timestamp();
-BEGIN
-    RAISE NOTICE 'Updating partition stats %', t;
-    FOR p IN SELECT DISTINCT partition
-        FROM newdata n JOIN partition_sys_meta p
-        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
-    LOOP
-        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
-    END LOOP;
-    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
-    RETURN NULL;
-END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
-
+-- The old per-statement stats trigger (partition_after_triggerfunc) is intentionally GONE. Under the
+-- widen-now / tighten-async model, partition_stats coverage is maintained by the ingest path itself
+-- (check_partition seeds + widen_partition_stats covers, in their own transactions) and tightened
+-- off the hot path by tighten_partition_stats; a per-insert trigger that re-scanned partitions and
+-- refreshed matviews was the lock pathology this model removes.
 DROP TRIGGER IF EXISTS items_after_insert_trigger ON items;
-CREATE TRIGGER items_after_insert_trigger
-AFTER INSERT ON items
-REFERENCING NEW TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
-
 DROP TRIGGER IF EXISTS items_after_update_trigger ON items;
-CREATE TRIGGER items_after_update_trigger
-AFTER UPDATE ON items
-REFERENCING NEW TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
-
 DROP TRIGGER IF EXISTS items_after_delete_trigger ON items;
-CREATE TRIGGER items_after_delete_trigger
-AFTER DELETE ON items
-REFERENCING OLD TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
+DROP FUNCTION IF EXISTS partition_after_triggerfunc();
 
 -- items_content_distinct_sql / items_content_changed: detect whether a direct
 -- UPDATE actually changed the stored item content. Used by the touch trigger
@@ -3777,13 +3798,31 @@ BEGIN
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
+    -- Bump each partition's row-count estimate so search stepping sees the new rows. n drives
+    -- partition_bounds' histogram and the Rust keyset search_page skips zero-count bands, so a partition
+    -- left at n=0 would hide its freshly-ingested items from that path (SQL search() scans regardless).
+    -- Mirrors flush_items_staging_binary on the Rust loader. Over-count is safe (ignore/upsert may insert
+    -- fewer than staged); the async tightener resets n exactly. check_partition above already widened the
+    -- temporal envelope; spatial is left to the tightener on this fallback path. (n only affects search
+    -- stepping performance, never which rows/order come back — see geometrysearch band direction.)
+    UPDATE partition_stats ps
+    SET n = COALESCE(ps.n, 0) + agg.c, dirty = true, last_updated = now()
+    FROM (
+        SELECT (partition_name(nd.content->>'collection',
+                               lower(stac_daterange(nd.content->'properties')))).partition_name AS partition,
+               count(*) AS c
+        FROM newdata nd
+        GROUP BY 1
+    ) agg
+    WHERE ps.partition = agg.partition;
+
     RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
     EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 DROP TRIGGER IF EXISTS items_staging_insert_trigger ON items_staging;
@@ -3819,7 +3858,7 @@ out items%ROWTYPE;
 BEGIN
     DELETE FROM items WHERE id = _id AND (_collection IS NULL OR collection=_collection) RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 --/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
@@ -3908,7 +3947,7 @@ CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
         ),
         last_seen   = now()
     ;
-$$ LANGUAGE SQL VOLATILE;
+$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
 
 -- update_field_registry_from_items: Sample a live collection and UPSERT registry rows.
 -- Uses TABLESAMPLE BERNOULLI(5) for large collections (>10k rows by pg_class estimate)
@@ -4013,7 +4052,7 @@ CREATE OR REPLACE FUNCTION refresh_field_registry(
     SELECT collection, count(*)::int
     FROM deleted
     GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE;
+$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
 
 -- Item Fragment Management functions
 
@@ -4100,7 +4139,7 @@ CREATE OR REPLACE FUNCTION gc_fragments(
     SELECT collection, count(*)::int
     FROM deleted
     GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE;
+$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
 
 -- strip_fragment_col: Remove fragment-owned sub-keys from a split column value.
 -- col_name is the top-level STAC key that this column represents (e.g. 'assets' or 'properties').
@@ -4151,18 +4190,31 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
     collection text,
-    partition_dtrange tstzrange,
+    -- dtrange/edtrange are the DATA bounds used for search pruning + stepping; they are seeded NULL and
+    -- filled generously on ingest (widen) then narrowed to exact by the async tightener. The partition's
+    -- STRUCTURAL range is not duplicated here — it lives in the partition's own constraint and is read
+    -- live from partitions_view.constraint_dtrange when needed.
     dtrange tstzrange,
     edtrange tstzrange,
     spatial geometry,
     last_updated timestamptz,
     n bigint,
-    keys text[]
-) WITH (FILLFACTOR=90);
+    -- Deferred-maintenance flags driven by the widen-now / tighten-async ingest model.
+    --   dirty:           the stored envelope may be WIDER than the actual data; an async tightener
+    --                    should recompute exact min/max/extent and clear the flag. Search correctness
+    --                    never depends on this (a wide envelope only over-includes a partition).
+    --   indexes_pending: the partition currently carries only the parent-inherited indexes (id PK,
+    --                    datetime, geometry); its queryable-defined indexes have not been built yet.
+    dirty boolean NOT NULL DEFAULT false,
+    indexes_pending boolean NOT NULL DEFAULT false
+) WITH (FILLFACTOR=70);
 
 CREATE INDEX partitions_range_idx ON partition_stats USING GIST(dtrange);
 CREATE INDEX partition_stats_collection_idx ON partition_stats (collection);
 CREATE INDEX partition_stats_spatial_idx ON partition_stats USING GIST(spatial) WHERE spatial IS NOT NULL;
+-- Work-queue indexes: the maintenance sweeps find pending partitions without scanning every row.
+CREATE INDEX partition_stats_dirty_idx ON partition_stats (partition) WHERE dirty;
+CREATE INDEX partition_stats_indexes_pending_idx ON partition_stats (partition) WHERE indexes_pending;
 
 
 CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
@@ -4240,10 +4292,9 @@ SELECT
     level,
     c.reltuples,
     c.relhastriggers,
-    partition_dtrange,
     COALESCE(
         get_tstz_constraint(c.oid, 'datetime'),
-        partition_dtrange,
+        constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)),
         inf_range
     ) as constraint_dtrange,
     COALESCE(
@@ -4259,7 +4310,6 @@ FROM
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
-    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
 WHERE isleaf
@@ -4280,10 +4330,9 @@ SELECT
     level,
     c.reltuples,
     c.relhastriggers,
-    partition_dtrange,
     COALESCE(
         get_tstz_constraint(c.oid, 'datetime'),
-        partition_dtrange,
+        constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)),
         inf_range
     ) as constraint_dtrange,
     COALESCE(
@@ -4303,10 +4352,9 @@ FROM
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
-    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
     JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
-    -- the view computes its own collection/partition_dtrange from the live tree; pull only the
+    -- the view computes its own collection + constraint_dtrange from the live tree; pull only the
     -- data-extent columns from partition_stats to avoid colliding with those names.
     LEFT JOIN (
         SELECT partition, dtrange, edtrange, spatial, last_updated
@@ -4315,109 +4363,75 @@ FROM
 WHERE isleaf
 ;
 
-CREATE MATERIALIZED VIEW partitions AS
-SELECT * FROM partitions_view;
-CREATE UNIQUE INDEX ON partitions (partition);
+-- The `partitions` MATERIALIZED VIEW is intentionally gone: the widen-now / tighten-async model never
+-- refreshes matviews on the hot path, so a materialized snapshot would always be stale. `partitions_view`
+-- is the always-current equivalent — read it directly.
+DROP MATERIALIZED VIEW IF EXISTS partitions CASCADE;
 
-CREATE MATERIALIZED VIEW partition_steps AS
-SELECT
-    partition as name,
-    date_trunc('month',lower(partition_dtrange)) as sdate,
-    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
-    FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
-    ORDER BY dtrange ASC
-;
+-- partition_steps is gone: the v0.10 search plans bands from partition_bounds over partition_stats data
+-- ranges, so the per-partition month-step view has no consumers.
+DROP MATERIALIZED VIEW IF EXISTS partition_steps;
+DROP VIEW IF EXISTS partition_steps;
 
 
-CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
+-- tighten_partition_stats: async maintenance task. Recompute the EXACT envelope (min/max datetime +
+-- end_datetime, real spatial extent) and exact row count for one partition, then clear `dirty`. This is
+-- the ONLY thing that narrows a partition_stats envelope; it never runs on the ingest hot path (the
+-- maintenance sweeps drive it over `partition_stats WHERE dirty`). An empty partition tightens to an
+-- 'empty' range so search prunes it out entirely. No constraints, no matview refresh, no ANALYZE (the
+-- off-hours analyze sweep owns reltuples), no collection-extent side effects.
+CREATE OR REPLACE FUNCTION tighten_partition_stats(_partition text) RETURNS void AS $$
 DECLARE
-BEGIN
-    PERFORM run_or_queue(
-        format('SELECT update_partition_stats(%L, %L);', _partition, istrigger)
-    );
-END;
-$$ LANGUAGE PLPGSQL;
-
-CREATE OR REPLACE FUNCTION update_partition_stats(_partition text, istrigger boolean default false) RETURNS VOID AS $$
-DECLARE
-    dtrange tstzrange;
-    edtrange tstzrange;
-    cdtrange tstzrange;
-    cedtrange tstzrange;
-    extent geometry;
-    collection text;
-    _part_dtrange tstzrange;
     _n bigint;
+    _dtmin timestamptz; _dtmax timestamptz;
+    _edtmin timestamptz; _edtmax timestamptz;
+    _spatial geometry;
+    _dtrange tstzrange;
+    _edtrange tstzrange;
+    _collection text;
 BEGIN
-    RAISE NOTICE 'Updating stats for %.', _partition;
+    -- Hold the partition's advisory lock across BOTH the scan and the write: tighten narrows dtrange to
+    -- the scanned exact extent and clears dirty, so a concurrent ingest committing a row outside that
+    -- extent mid-tighten would otherwise be left uncovered (search would prune + miss it). The same lock
+    -- check_partition/flush use, so tighten serializes with ingest into this partition (different
+    -- partitions don't contend). tighten is the async/off-hours path, so the hold is acceptable.
+    PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
+
     EXECUTE format(
         $q$
-            SELECT
-                tstzrange(min(datetime), max(datetime),'[]'),
-                tstzrange(min(end_datetime), max(end_datetime), '[]')
+            SELECT count(*), min(datetime), max(datetime), min(end_datetime), max(end_datetime),
+                   st_setsrid(st_extent(geometry)::geometry, 4326)
             FROM %I
         $q$,
         _partition
-    ) INTO dtrange, edtrange;
-    EXECUTE format('ANALYZE %I;', _partition);
-    extent := st_estimatedextent('pgstac', _partition, 'geometry');
-    RAISE DEBUG 'Estimated Extent: %', extent;
+    ) INTO _n, _dtmin, _dtmax, _edtmin, _edtmax, _spatial;
 
-    -- Per-partition metadata: collection + partition boundary from the live tree (partitions_view),
-    -- current constraint ranges (for the constraint check below), and the row estimate from pg_class.
-    SELECT pv.collection, pv.partition_dtrange, pv.constraint_dtrange, pv.constraint_edtrange
-        INTO collection, _part_dtrange, cdtrange, cedtrange
+    IF _n = 0 THEN
+        _dtrange := 'empty'::tstzrange;
+        _edtrange := 'empty'::tstzrange;
+        _spatial := NULL;
+    ELSE
+        _dtrange := tstzrange(_dtmin, _dtmax, '[]');
+        _edtrange := tstzrange(_edtmin, _edtmax, '[]');
+    END IF;
+
+    SELECT pv.collection
+        INTO _collection
     FROM partitions_view pv WHERE partition = _partition;
-    _n := (SELECT reltuples::bigint FROM pg_class WHERE oid = quote_ident(_partition)::regclass);
 
     INSERT INTO partition_stats
-        (partition, collection, partition_dtrange, dtrange, edtrange, spatial, n, last_updated)
-        SELECT _partition, collection, _part_dtrange, dtrange, edtrange, extent, _n, now()
-        ON CONFLICT (partition) DO
-            UPDATE SET
-                collection=EXCLUDED.collection,
-                partition_dtrange=EXCLUDED.partition_dtrange,
-                dtrange=EXCLUDED.dtrange,
-                edtrange=EXCLUDED.edtrange,
-                spatial=EXCLUDED.spatial,
-                n=EXCLUDED.n,
-                last_updated=EXCLUDED.last_updated
-    ;
-
-    RAISE NOTICE 'Checking if we need to modify constraints...';
-    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
-    IF
-        (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
-        AND NOT istrigger
-    THEN
-        RAISE NOTICE 'Modifying Constraints';
-        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
-        RAISE NOTICE 'New      % %', dtrange, edtrange;
-        PERFORM drop_table_constraints(_partition);
-        PERFORM create_table_constraints(_partition, dtrange, edtrange);
-    END IF;
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
-    RAISE NOTICE 'Checking if we need to update collection extents.';
-    IF get_setting_bool('update_collection_extent') THEN
-        RAISE NOTICE 'updating collection extent for %', collection;
-        PERFORM run_or_queue(format($q$
-            UPDATE collections
-            SET content = jsonb_set_lax(
-                content,
-                '{extent}'::text[],
-                collection_extent(%L, FALSE),
-                true,
-                'use_json_null'
-            ) WHERE id=%L
-            ;
-        $q$, collection, collection));
-    ELSE
-        RAISE NOTICE 'Not updating collection extent for %', collection;
-    END IF;
-
+        (partition, collection, dtrange, edtrange, spatial, n, dirty, last_updated)
+        VALUES (_partition, _collection, _dtrange, _edtrange, _spatial, _n, false, now())
+        ON CONFLICT (partition) DO UPDATE SET
+            collection = EXCLUDED.collection,
+            dtrange = EXCLUDED.dtrange,
+            edtrange = EXCLUDED.edtrange,
+            spatial = EXCLUDED.spatial,
+            n = EXCLUDED.n,
+            dirty = false,
+            last_updated = now();
 END;
-$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -4452,107 +4466,90 @@ END;
 $$ LANGUAGE PLPGSQL STABLE;
 
 
-CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
+-- (drop_table_constraints / create_table_constraints removed: under INV-5 partitions carry no extra
+--  _dt CHECK constraints. Pruning is partition_stats-driven; get_tstz_constraint/constraint_tstzrange
+--  remain only so the views' constraint_* columns resolve to inf_range when no constraint exists.)
+
+
+-- widen_partition_stats: the covered?-guard. The ONLY hot-path writer of a partition_stats envelope.
+--
+-- If the stored envelope already covers (_dtrange, _edtrange, _spatial) it is a no-op (a plain snapshot
+-- read, no row write, no lock) — this is what keeps steady-state high-concurrency ingest contention-free.
+-- On a miss it widens GENEROUSLY (INV-6/INV-7) and sets dirty=true so an async tightener can later
+-- recompute exact bounds:
+--   * datetime  : sub-partitioned collections use the partition's datetime bound (covers everything that
+--                 can legally land there, so dtrange never misses); a NULL-partition_trunc partition has
+--                 no finite bound, so it uses the batch range padded by `partition_stats_widen_buffer`
+--                 (default 1 month) each side and extends by that buffer on a miss.
+--   * end_datetime: the datetime target extended by the batch's max (end_datetime - datetime) tail.
+--   * spatial   : NULL means "always a search candidate"; a spatial miss RESETS spatial to NULL (rather
+--                 than nudging it) so it cannot miss again until the tightener computes the real extent.
+-- Requires the partition_stats row to exist (check_partition seeds it); raises if it does not.
+CREATE OR REPLACE FUNCTION widen_partition_stats(
+    _partition text,
+    _dtrange tstzrange,
+    _edtrange tstzrange,
+    _spatial geometry DEFAULT NULL,
+    _constraint_dtrange tstzrange DEFAULT NULL
+) RETURNS void AS $$
 DECLARE
-    q text;
+    cur RECORD;
+    is_unbounded boolean;
+    tail interval;
+    buf interval := COALESCE(get_setting('partition_stats_widen_buffer'), '1 month')::interval;
+    target_dtrange tstzrange;
+    target_edtrange tstzrange;
+    new_dtrange tstzrange;
+    new_edtrange tstzrange;
+    new_spatial geometry;
+    dt_covered boolean;
+    edt_covered boolean;
+    spatial_covered boolean;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
-        RETURN NULL;
+    SELECT dtrange, edtrange, spatial
+        INTO cur
+        FROM partition_stats WHERE partition = _partition;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'partition_stats row for % does not exist; call check_partition first', _partition;
     END IF;
-    FOR q IN SELECT FORMAT(
-        $q$
-            ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-        $q$,
-        t,
-        conname
-    ) FROM pg_constraint
-        WHERE conrelid=t::regclass::oid AND contype='c'
-    LOOP
-        EXECUTE q;
-    END LOOP;
-    RETURN t;
-END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, _edtrange tstzrange) RETURNS text AS $$
-DECLARE
-    q text;
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
-        RETURN NULL;
+    dt_covered  := COALESCE(cur.dtrange  @> _dtrange,  false);
+    edt_covered := COALESCE(cur.edtrange @> _edtrange, false);
+    spatial_covered := cur.spatial IS NULL OR _spatial IS NULL OR ST_Covers(cur.spatial, _spatial);
+    IF dt_covered AND edt_covered AND spatial_covered THEN
+        RETURN; -- already covered: no write, no lock
     END IF;
-    RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
-    IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
-        q :=format(
-            $q$
-                DO $block$
-                BEGIN
-                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-                    ALTER TABLE %I
-                        ADD CONSTRAINT %I
-                            CHECK (((datetime IS NULL) AND (end_datetime IS NULL))) NOT VALID
-                    ;
-                    ALTER TABLE %I
-                        VALIDATE CONSTRAINT %I
-                    ;
 
-
-
-                EXCEPTION WHEN others THEN
-                    RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
-                END;
-                $block$;
-            $q$,
-            t,
-            format('%s_dt', t),
-            t,
-            format('%s_dt', t),
-            t,
-            format('%s_dt', t),
-            t
-        );
+    -- Clamp the widen to the partition's STRUCTURAL bound (_constraint_dtrange, read live from the
+    -- partition's datetime constraint by the caller). A sub-partitioned (month/year) collection's bound is
+    -- finite: cover the whole partition (everything that can legally land there) so dtrange never misses
+    -- AND never dilutes past the partition into a neighbour. A NULL-partition_trunc partition (or a NULL
+    -- bound) is unbounded: there is nothing to clamp to, so pad the batch range by the widen buffer each
+    -- side (INV-7: one widen now spares a write per nearby item later). The async tightener narrows either
+    -- kind to the exact data extent off the hot path.
+    is_unbounded := _constraint_dtrange IS NULL
+                 OR (lower(_constraint_dtrange) = '-infinity'::timestamptz
+                     AND upper(_constraint_dtrange) = 'infinity'::timestamptz);
+    tail := GREATEST(upper(_edtrange) - upper(_dtrange), '0'::interval);
+    IF is_unbounded THEN
+        target_dtrange  := tstzrange(lower(_dtrange) - buf, upper(_dtrange) + buf, '[]');
+        target_edtrange := tstzrange(lower(_dtrange) - buf, upper(_edtrange) + buf, '[]');
     ELSE
-        q :=format(
-            $q$
-                DO $block$
-                BEGIN
-
-                    ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
-                    ALTER TABLE %I
-                        ADD CONSTRAINT %I
-                            CHECK (
-                                (datetime >= %L)
-                                AND (datetime <= %L)
-                                AND (end_datetime >= %L)
-                                AND (end_datetime <= %L)
-                            ) NOT VALID
-                    ;
-                    ALTER TABLE %I
-                        VALIDATE CONSTRAINT %I
-                    ;
-
-
-
-                EXCEPTION WHEN others THEN
-                    RAISE WARNING '%%, Issue Altering Constraints. Please run update_partition_stats(%I)', SQLERRM USING ERRCODE = SQLSTATE;
-                END;
-                $block$;
-            $q$,
-            t,
-            format('%s_dt', t),
-            t,
-            format('%s_dt', t),
-            lower(_dtrange),
-            upper(_dtrange),
-            lower(_edtrange),
-            upper(_edtrange),
-            t,
-            format('%s_dt', t),
-            t
-        );
+        target_dtrange  := _constraint_dtrange;
+        target_edtrange := tstzrange(lower(_constraint_dtrange), upper(_constraint_dtrange) + tail, '[]');
     END IF;
-    PERFORM run_or_queue(q);
-    RETURN t;
+
+    new_dtrange  := range_merge(COALESCE(cur.dtrange,  target_dtrange),  target_dtrange);
+    new_edtrange := range_merge(COALESCE(cur.edtrange, target_edtrange), target_edtrange);
+    new_spatial  := CASE WHEN spatial_covered THEN cur.spatial ELSE NULL END;
+
+    UPDATE partition_stats
+        SET dtrange = new_dtrange,
+            edtrange = new_edtrange,
+            spatial = new_spatial,
+            dirty = true,
+            last_updated = now()
+        WHERE partition = _partition;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -4560,18 +4557,14 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION check_partition(
     _collection text,
     _dtrange tstzrange,
-    _edtrange tstzrange
+    _edtrange tstzrange,
+    _spatial geometry DEFAULT NULL
 ) RETURNS text AS $$
 DECLARE
     c RECORD;
-    pm RECORD;
     _partition_name text;
-    _partition_dtrange tstzrange;
-    _constraint_dtrange tstzrange;
-    _constraint_edtrange tstzrange;
-    q text;
-    deferrable_q text;
-    err_context text;
+    _parent_name text;
+    _partition_range tstzrange;
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
     IF NOT FOUND THEN
@@ -4579,115 +4572,101 @@ BEGIN
     END IF;
 
     IF c.partition_trunc IS NOT NULL THEN
-        _partition_dtrange := tstzrange(
+        _partition_range := tstzrange(
             date_trunc(c.partition_trunc, lower(_dtrange)),
             date_trunc(c.partition_trunc, lower(_dtrange)) + (concat('1 ', c.partition_trunc))::interval,
             '[)'
         );
     ELSE
-        _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
+        _partition_range := '[-infinity, infinity]'::tstzrange;
     END IF;
 
-    IF NOT _partition_dtrange @> _dtrange THEN
-        RAISE EXCEPTION 'dtrange % is greater than the partition size % for collection %', _dtrange, c.partition_trunc, _collection;
+    IF NOT _partition_range @> _dtrange THEN
+        RAISE EXCEPTION 'dtrange % spans more than the % partition window for collection %', _dtrange, c.partition_trunc, _collection;
     END IF;
 
-
+    _parent_name := format('_items_%s', c.key);
     IF c.partition_trunc = 'year' THEN
-        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYY'));
+        _partition_name := format('%s_%s', _parent_name, to_char(lower(_partition_range),'YYYY'));
     ELSIF c.partition_trunc = 'month' THEN
-        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYYMM'));
+        _partition_name := format('%s_%s', _parent_name, to_char(lower(_partition_range),'YYYYMM'));
     ELSE
-        _partition_name := format('_items_%s', c.key);
+        _partition_name := _parent_name;
     END IF;
 
-    SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
-    IF FOUND THEN
-        RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
-        _constraint_edtrange :=
-            tstzrange(
-                least(
-                    lower(_edtrange),
-                    nullif(lower(pm.constraint_edtrange), '-infinity')
-                ),
-                greatest(
-                    upper(_edtrange),
-                    nullif(upper(pm.constraint_edtrange), 'infinity')
-                ),
-                '[]'
+    -- Create the collection-level PARENT partition (_items_<key>) FIRST, for sub-partitioned collections.
+    -- It is shared across every child window of the collection, so concurrent setup of DIFFERENT children
+    -- (which take different child locks below) would otherwise race on its CREATE TABLE — the loser's error
+    -- was previously swallowed, leaving the child uncreated and a later write hitting "no partition found".
+    -- Guard it with a parent-scoped advisory lock taken BEFORE any child lock, and only when the parent is
+    -- actually missing. Acquiring parent-before-child gives one global lock order (parent < child) so it
+    -- cannot deadlock with ensure_partitions' sorted child-lock acquisition; skipping it once the parent
+    -- exists means steady-state ingest never serializes on the parent.
+    IF c.partition_trunc IS NOT NULL AND to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
+        PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_parent_name));
+        IF to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime)',
+                _parent_name, _collection
             );
-        _constraint_dtrange :=
-            tstzrange(
-                least(
-                    lower(_dtrange),
-                    nullif(lower(pm.constraint_dtrange), '-infinity')
-                ),
-                greatest(
-                    upper(_dtrange),
-                    nullif(upper(pm.constraint_dtrange), 'infinity')
-                ),
-                '[]'
-            );
-
-        IF pm.constraint_edtrange @> _edtrange AND pm.constraint_dtrange @> _dtrange THEN
-            RETURN pm.partition;
-        ELSE
-            PERFORM drop_table_constraints(_partition_name);
         END IF;
-    ELSE
-        _constraint_edtrange := _edtrange;
-        _constraint_dtrange := _dtrange;
-    END IF;
-    RAISE NOTICE 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
-    RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
-    IF c.partition_trunc IS NULL THEN
-        q := format(
-            $q$
-                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
-                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
-                GRANT ALL ON %I to pgstac_ingest;
-            $q$,
-            _partition_name,
-            _collection,
-            concat(_partition_name,'_pk'),
-            _partition_name,
-            _partition_name
-        );
-    ELSE
-        q := format(
-            $q$
-                CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L) PARTITION BY RANGE (datetime);
-                CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
-                CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
-                GRANT ALL ON %I TO pgstac_ingest;
-            $q$,
-            format('_items_%s', c.key),
-            _collection,
-            _partition_name,
-            format('_items_%s', c.key),
-            lower(_partition_dtrange),
-            upper(_partition_dtrange),
-            format('%s_pk', _partition_name),
-            _partition_name,
-            _partition_name
-        );
     END IF;
 
-    BEGIN
-        EXECUTE q;
-    EXCEPTION
-        WHEN duplicate_table THEN
-            RAISE NOTICE 'Partition % already exists.', _partition_name;
-        WHEN others THEN
-            GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
-            RAISE INFO 'Error Name:%',SQLERRM;
-            RAISE INFO 'Error State:%', SQLSTATE;
-            RAISE INFO 'Error Context:%', err_context;
-    END;
-    PERFORM maintain_partitions(_partition_name);
-    PERFORM update_partition_stats_q(_partition_name, true);
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
+    -- Serialize concurrent setup of THIS (leaf) partition with a partition-scoped advisory lock. Different
+    -- partitions hash to different keys, so this never serializes unrelated ingest; ensure_partitions
+    -- acquires these in sorted order, so concurrent multi-partition batches cannot deadlock. The lock
+    -- releases at commit (setup is fast + idempotent).
+    PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition_name));
+
+    -- Create the leaf partition if missing (the parent is guaranteed to exist by the block above). Parent-
+    -- inherited indexes ONLY (id PK here; datetime/geometry are inherited from the items parent). NO CHECK
+    -- constraints (INV-5); queryable indexes are deferred via indexes_pending (INV-4); NO matview refresh
+    -- (INV-3). A SELECT grant lets read/ingest query it; writes reach it only through pgstac_load / the SD
+    -- flush. Skip the DDL when it already exists (steady-state hot path): re-running CREATE/GRANT takes a
+    -- relation lock that deadlocks with concurrent INSERTs. The check is race-safe under the advisory lock.
+    IF to_regclass(format('pgstac.%I', _partition_name)) IS NULL THEN
+        BEGIN
+            IF c.partition_trunc IS NULL THEN
+                EXECUTE format(
+                    $q$
+                        CREATE TABLE IF NOT EXISTS %I partition OF items FOR VALUES IN (%L);
+                        CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                        GRANT SELECT ON %I TO pgstac_read, pgstac_ingest;
+                    $q$,
+                    _partition_name, _collection,
+                    concat(_partition_name, '_pk'), _partition_name,
+                    _partition_name
+                );
+            ELSE
+                EXECUTE format(
+                    $q$
+                        CREATE TABLE IF NOT EXISTS %I partition OF %I FOR VALUES FROM (%L) TO (%L);
+                        CREATE UNIQUE INDEX IF NOT EXISTS %I ON %I (id);
+                        GRANT SELECT ON %I TO pgstac_read, pgstac_ingest;
+                    $q$,
+                    _partition_name, _parent_name, lower(_partition_range), upper(_partition_range),
+                    concat(_partition_name, '_pk'), _partition_name,
+                    _partition_name
+                );
+            END IF;
+        EXCEPTION
+            -- A concurrent creator that finished between our checks: benign, it exists now.
+            WHEN duplicate_table THEN
+                RAISE DEBUG 'Partition % already exists.', _partition_name;
+            -- Do NOT swallow other errors: a failed creation must propagate so the caller never goes on to
+            -- write a partition that does not exist (invariant: check_partition succeeds before use).
+        END;
+    END IF;
+
+    -- Seed the partition_stats row (collection only — the data ranges start NULL), then cover this batch
+    -- via the shared widen guard, which fills dtrange/edtrange. ON CONFLICT keeps an existing row (so a
+    -- sweep that cleared indexes_pending/dirty is not reset on a later check_partition for the same
+    -- partition).
+    INSERT INTO partition_stats (partition, collection, dirty, indexes_pending)
+        VALUES (_partition_name, _collection, true, true)
+        ON CONFLICT (partition) DO NOTHING;
+    PERFORM widen_partition_stats(_partition_name, _dtrange, _edtrange, _spatial, _partition_range);
+
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -4767,6 +4746,219 @@ OR
 UPDATE ON collections
 FOR EACH ROW EXECUTE FUNCTION collections_trigger_func();
 -- END FRAGMENT: 003b_partitions.sql
+
+-- BEGIN FRAGMENT: 003c_ingest.sql
+-- ---------------------------------------------------------------------------
+-- Rust-first ingest: SECURITY DEFINER staging + flush + fragment helpers.
+--
+-- These are the server-side seam for the Rust loader's binary-COPY path. The connecting role never
+-- writes the real tables directly; it binary-COPYs fully-dehydrated rows into a session-local TEMP
+-- table (make_binary_staging) and calls flush_items_staging_binary, which is the only thing that writes
+-- `items`. Partition existence + stats (extent + n) and registry/fragment coverage are established BEFORE
+-- the load in their own transactions (prepare_partition_for_load / ensure_fragments); the flush writes only
+-- `items` and never touches partition_stats.
+-- ---------------------------------------------------------------------------
+
+-- ensure_fragments: upsert per-collection fragment payloads and return, for each input position, the
+-- item_fragments id the Rust loader stamps into items.fragment_id.
+--
+-- The caller (the Rust loader) deduplicates fragments locally and sends only the DISTINCT set (one input
+-- element per unique fragment), then maps each item -> its fragment via the returned `ord`. Sending one
+-- fragment per item would ship millions of duplicates when a collection has only a handful of distinct
+-- fragments. The function is nonetheless dup-safe (a DISTINCT ON guards the insert), so a caller that
+-- passes duplicates still gets the correct id for every position.
+--
+-- Each input element is {"content": <overlay or null>, "links_template": <array or null>}; the canonical
+-- hash matches pgstac_hash_fragment (so it dedups identically to the SQL ingest path). ON CONFLICT keeps
+-- existing rows; pre-existing ids come from item_fragments (snapshot), new ids from the INSERT's RETURNING.
+CREATE OR REPLACE FUNCTION ensure_fragments(
+    _collection text,
+    _fragments jsonb[]
+) RETURNS TABLE (ord int, frag_id bigint) AS $$
+    WITH input AS (
+        SELECT
+            o::int AS ord,
+            pgstac_hash_fragment(
+                jsonb_strip_nulls(jsonb_build_object(
+                    'content', NULLIF(f->'content', '{}'::jsonb),
+                    'links_template', f->'links_template'
+                ))
+            ) AS hash,
+            COALESCE(f->'content', '{}'::jsonb) AS content,
+            f->'links_template' AS links_template
+        FROM unnest(_fragments) WITH ORDINALITY AS u(f, o)
+    ),
+    distinct_hashes AS (
+        SELECT DISTINCT ON (hash) hash, content, links_template
+        FROM input
+        ORDER BY hash
+    ),
+    upserted AS (
+        INSERT INTO item_fragments (collection, hash, content, links_template)
+        SELECT _collection, hash, content, links_template FROM distinct_hashes
+        -- DO UPDATE (a no-op write) rather than DO NOTHING: it locks + RETURNS the conflicting row even when
+        -- a CONCURRENT transaction committed the same (collection, hash) mid-statement. DO NOTHING returns
+        -- nothing on conflict, and the old "UNION the existing rows via a separate SELECT" ran on the
+        -- statement-start snapshot, so it could MISS such a concurrent insert -> that hash dropped out of the
+        -- final join and the item was stamped with NO fragment_id. DO UPDATE returns every distinct hash
+        -- exactly once (newly inserted or pre-existing), making the stamp concurrency-safe.
+        ON CONFLICT (collection, hash) DO UPDATE SET content = item_fragments.content
+        RETURNING id, hash
+    )
+    SELECT input.ord, upserted.id
+    FROM input JOIN upserted ON input.hash = upserted.hash
+    ORDER BY input.ord;
+$$ LANGUAGE SQL SECURITY DEFINER;
+
+
+-- ensure_partitions: create + widen every partition a batch will land in, BEFORE the load (widen-now).
+-- The Rust loader passes parallel arrays of (collection, datetime, end_datetime) — one element per item.
+-- Grouping happens HERE, server-side, so the month/year truncation uses the server's date_trunc (correct
+-- timezone) rather than re-deriving partition boundaries in the client. One call per batch replaces the
+-- loader's per-item check_partition round trips: it groups by (collection, partition window) and calls
+-- check_partition once per distinct partition with that group's datetime range. Runs as its own committed
+-- statement before the load transaction, so partitions exist + their stats cover the batch by the time
+-- the binary COPY + flush run.
+CREATE OR REPLACE FUNCTION ensure_partitions(
+    _collections text[],
+    _datetimes timestamptz[],
+    _end_datetimes timestamptz[]
+) RETURNS void AS $$
+DECLARE
+    r RECORD;
+BEGIN
+    -- Call check_partition per distinct (collection, partition window) in a DETERMINISTIC order: each
+    -- check_partition takes that partition's advisory lock, so locking in a consistent order prevents two
+    -- concurrent multi-partition batches from advisory-deadlocking on the locks. (flush locks in the same
+    -- sorted order.) A PLPGSQL FOR loop guarantees the order; a set-returning SELECT would not.
+    FOR r IN
+        WITH t AS (
+            SELECT
+                unnest(_collections) AS collection,
+                unnest(_datetimes) AS dt,
+                unnest(_end_datetimes) AS edt
+        ),
+        j AS (
+            SELECT t.collection, t.dt, t.edt, c.partition_trunc
+            FROM t JOIN pgstac.collections c ON t.collection = c.id
+        )
+        SELECT
+            collection,
+            tstzrange(min(dt), max(dt), '[]') AS dtrange,
+            tstzrange(min(edt), max(edt), '[]') AS edtrange
+        FROM j
+        GROUP BY collection, COALESCE(date_trunc(partition_trunc::text, dt), '-infinity'::timestamptz)
+        ORDER BY collection, COALESCE(date_trunc(partition_trunc::text, dt), '-infinity'::timestamptz)
+    LOOP
+        PERFORM pgstac.check_partition(r.collection, r.dtrange, r.edtrange);
+    END LOOP;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+-- prepare_partition_for_load: per-partition metadata for the Rust direct / precheck load paths. ONE small
+-- self-contained txn per partition, run BEFORE any COPY: create + widen the partition to cover this batch
+-- (dt + edt + the real SPATIAL envelope, unlike ensure_partitions which passes NULL) and bump n, so
+-- partition_stats is at least as wide as the data (golden rule) and search treats the partition as non-empty
+-- before the data lands. Returns the partition name + the pre-load row count (n BEFORE the bump) so the
+-- loader can choose its adaptive precheck path: empty -> skip the precheck; batch > n -> pull the partition's
+-- (id,item_hash) to the client; n >= batch -> COPY the batch (id,hash) to a temp table + JOIN this partition.
+CREATE OR REPLACE FUNCTION prepare_partition_for_load(
+    _collection text,
+    _dt_lo timestamptz, _dt_hi timestamptz,
+    _edt_lo timestamptz, _edt_hi timestamptz,
+    _xmin float8, _ymin float8, _xmax float8, _ymax float8,
+    _n_add bigint,
+    OUT partition_name text,
+    OUT pre_load_n bigint
+) AS $$
+BEGIN
+    partition_name := pgstac.check_partition(
+        _collection,
+        tstzrange(_dt_lo, _dt_hi, '[]'),
+        tstzrange(_edt_lo, _edt_hi, '[]'),
+        st_setsrid(st_makeenvelope(_xmin, _ymin, _xmax, _ymax), 4326)
+    );
+    SELECT COALESCE(n, 0) INTO pre_load_n
+        FROM pgstac.partition_stats WHERE partition = partition_name;
+    -- Over-estimating n is the safe direction; the async tightener computes the exact count + extent off the
+    -- hot path. Single-row atomic UPDATE, so concurrent loads into the same partition serialize on the row.
+    UPDATE pgstac.partition_stats
+        SET n = COALESCE(n, 0) + _n_add, dirty = true, last_updated = now()
+        WHERE partition = partition_name;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+-- make_binary_staging: create a session-local TEMP staging table shaped exactly like `items`
+-- (ON COMMIT DROP) and grant INSERT to pgstac_ingest so the connecting role can binary-COPY into it.
+-- Created inside this SECURITY DEFINER function, so the temp table is owned by pgstac_admin (which also
+-- owns `items`), letting flush_items_staging_binary read it. Returns the generated table name.
+CREATE OR REPLACE FUNCTION make_binary_staging() RETURNS text AS $$
+DECLARE
+    _name text := format('_staging_%s', replace(gen_random_uuid()::text, '-', ''));
+BEGIN
+    EXECUTE format('CREATE TEMP TABLE %I (LIKE items) ON COMMIT DROP', _name);
+    EXECUTE format('GRANT INSERT ON pg_temp.%I TO pgstac_ingest', _name);
+    RETURN _name;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+-- flush_items_staging_binary: move fully-dehydrated rows from a TEMP staging table into `items` with the
+-- conflict policy. partition_stats (extent + n + dirty) is set entirely by prepare_partition_for_load in
+-- the preflight, so this writes only `items`:
+--        ignore  -> ON CONFLICT DO NOTHING (idempotent; orphans the old row on a cross-partition move)
+--        upsert  -> delete a changed row IN THE PARTITION IT ROUTES TO (window-pruned), then insert. A
+--                   datetime change that stays in the partition is applied; one that moves the item to a
+--                   different partition orphans the old row (use 'delsert').
+--        delsert -> delete a changed row CROSS-partition (by collection+id, move-safe), then insert
+--        error   -> plain INSERT (raises on any duplicate)
+-- Returns the number of rows inserted.
+CREATE OR REPLACE FUNCTION flush_items_staging_binary(
+    _staging text,
+    _policy text DEFAULT 'ignore'
+) RETURNS bigint AS $$
+DECLARE
+    nrows bigint;
+BEGIN
+    IF _policy = 'ignore' THEN
+        EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
+    ELSIF _policy = 'error' THEN
+        EXECUTE format('INSERT INTO items SELECT * FROM %1$I', _staging);
+    ELSIF _policy = 'upsert' THEN
+        -- Fast SAME-partition upsert: delete a changed row only in the partition the incoming row routes to.
+        -- The window range [date_trunc(trunc, s.datetime), + 1 trunc) is derived per staged row, so the
+        -- planner runtime-prunes `items` to that one partition (no cross-partition scan). A datetime change
+        -- within the partition is applied; one that MOVES the item to another partition isn't seen here, so
+        -- the old row orphans (use 'delsert'). NULL partition_trunc => the collection's single partition.
+        EXECUTE format($q$
+            DELETE FROM items i USING %1$I s JOIN collections c ON c.id = s.collection
+            WHERE i.collection = s.collection AND i.id = s.id
+              AND i.datetime >= (CASE WHEN c.partition_trunc IS NULL THEN '-infinity'::timestamptz
+                                      ELSE date_trunc(c.partition_trunc::text, s.datetime) END)
+              AND i.datetime <  (CASE WHEN c.partition_trunc IS NULL THEN 'infinity'::timestamptz
+                                      ELSE date_trunc(c.partition_trunc::text, s.datetime)
+                                           + ('1 ' || c.partition_trunc::text)::interval END)
+              AND ( %2$s )
+        $q$, _staging, items_content_distinct_sql('i', 's'));
+        EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
+    ELSIF _policy = 'delsert' THEN
+        -- Move-safe CROSS-partition upsert: delete the old row wherever it lives (by collection+id, no
+        -- datetime bound, so it probes every partition), then insert.
+        EXECUTE format($q$
+            DELETE FROM items i USING %1$I s
+            WHERE i.id = s.id AND i.collection = s.collection AND ( %2$s )
+        $q$, _staging, items_content_distinct_sql('i', 's'));
+        EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
+    ELSE
+        RAISE EXCEPTION 'unknown conflict policy % (expected ignore | upsert | delsert | error)', _policy;
+    END IF;
+    GET DIAGNOSTICS nrows = ROW_COUNT;
+    RETURN nrows;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+-- END FRAGMENT: 003c_ingest.sql
 
 -- BEGIN FRAGMENT: 004_search.sql
 -- Search hashing
@@ -4993,8 +5185,16 @@ $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 -- fields_to_itemcols: produce a SELECT list of item columns in attnum order.
 -- Heavy columns (geometry, bbox, assets, links, properties, extra) are emitted as
--- NULL::type when their controlling field is excluded/not-included.
-CREATE OR REPLACE FUNCTION fields_to_itemcols(fields jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
+-- NULL::type AS <col> when their controlling field is excluded/not-included: the
+-- column is kept (named) so the result schema is stable across any `fields` value
+-- -- a client preparing this query once can step bands without re-binding columns --
+-- while the heavy value itself is never transferred.
+-- When _skip_fragment is true (the caller determined the requested fields are
+-- satisfiable from item columns alone, via needs_fragment), fragment_id is emitted
+-- as NULL too: a client driving this query then sees no fragment_id and skips the
+-- per-row item_fragments lookup entirely -- the fragment-skip is carried in the
+-- projection itself, not a separate flag.
+CREATE OR REPLACE FUNCTION fields_to_itemcols(fields jsonb DEFAULT '{}'::jsonb, _skip_fragment boolean DEFAULT false) RETURNS text AS $$
 DECLARE
     includes text[] := ARRAY(SELECT jsonb_array_elements_text(fields->'include'));
     excludes text[] := ARRAY(SELECT jsonb_array_elements_text(fields->'exclude'));
@@ -5002,11 +5202,13 @@ DECLARE
 BEGIN
     SELECT string_agg(
         CASE
+          WHEN a.attname = 'fragment_id' AND _skip_fragment
+          THEN format('NULL::%s AS %I', format_type(a.atttypid, a.atttypmod), a.attname)
           WHEN a.attname = ANY (ARRAY['geometry','bbox','assets','links','link_hrefs',
                                       'extra','properties','stac_version','stac_extensions'])
                AND NOT field_included(CASE WHEN a.attname = 'link_hrefs' THEN 'links' ELSE a.attname END,
                                       includes, excludes)
-          THEN format('NULL::%s', format_type(a.atttypid, a.atttypmod))
+          THEN format('NULL::%s AS %I', format_type(a.atttypid, a.atttypmod), a.attname)
           ELSE format('i.%I', a.attname)
         END, ', ' ORDER BY a.attnum)
     INTO cols
@@ -5047,7 +5249,7 @@ DECLARE
     band_cap_months CONSTANT int := 18;
     page_rows items[] := '{}'::items[]; chunk_rows items[];
     target int := _limit + 1; got int := 0; got_band int;
-    is_asc boolean; cursor_ts timestamptz; band record;
+    is_asc boolean; band record;
     band_target numeric; obs_sel numeric; band_where text;
     guard int := 0; cum_scanned bigint := 0;
     proj_expr text; mo interval := interval '1 month';
@@ -5103,12 +5305,14 @@ BEGIN
     END IF;
 
     IF datetime_leading AND array_length(bnds.months, 1) IS NOT NULL THEN
-        cursor_ts := CASE WHEN is_asc THEN bnds.months[1] ELSE bnds.months[array_length(bnds.months, 1)] + mo END;
-        cursor_idx := 1;
+        -- Start the band walk at the leading edge for the sort direction: oldest month for ascending,
+        -- most recent month for descending. (A descending walk that started at the oldest band would
+        -- collect the oldest items and never reach the recent months.)
+        cursor_idx := CASE WHEN is_asc THEN 1 ELSE array_length(bnds.months, 1) END;
         band_target := target * band_margin;
         WHILE got < target AND guard < 80 LOOP
             guard := guard + 1;
-            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months);
+            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months, NOT is_asc);
             -- a valid band must be processed even when next_band also flags done (it consumed the
             -- last bucket); only stop when there is no band at all.
             EXIT WHEN band.band_start_idx IS NULL;
@@ -5242,7 +5446,6 @@ DECLARE
     bnds record; coll_clamp text := ''; clamp text;
 BEGIN
     IF _where IS NULL OR btrim(_where) = '' THEN _where := ' TRUE '; END IF;
-    collist := fields_to_itemcols(coalesce(_search->'fields', '{}'::jsonb));
     orderby_str := keyset_orderby(_search, is_prev);
     SELECT (array_agg(field ORDER BY ord))[1],
            (array_agg(CASE WHEN is_prev THEN (CASE dir WHEN 'ASC' THEN 'DESC' ELSE 'ASC' END) ELSE dir END ORDER BY ord))[1]
@@ -5268,10 +5471,20 @@ BEGIN
         coll_clamp := format('i.collection = ANY(%L::text[]) AND ', bnds.collections);
     END IF;
 
+    -- Build the projection now that the resolved collections are known: when the requested fields are
+    -- satisfiable from item columns alone (needs_fragment is false), fragment_id is nulled in the
+    -- projection so a client driving this query never looks up item_fragments -- the fragment-skip
+    -- rides in the returned query's SELECT list, not a separate flag.
+    collist := fields_to_itemcols(
+        coalesce(_search->'fields', '{}'::jsonb),
+        NOT needs_fragment(coalesce(_search->'fields', '{}'::jsonb), bnds.collections));
+
     IF datetime_leading AND array_length(bnds.months, 1) IS NOT NULL THEN
+        -- collections baked in as a literal so the query is parameterized only by $1 (band low),
+        -- $2 (band high), $3 (limit): the client prepares it once and binds per histogram band.
         query := format(
-            'SELECT %s FROM items i WHERE i.collection = ANY($4) AND i.datetime >= $1 AND i.datetime < $2 AND (%s) ORDER BY %s LIMIT $3',
-            collist, full_where, orderby_str);
+            'SELECT %s FROM items i WHERE %si.datetime >= $1 AND i.datetime < $2 AND (%s) ORDER BY %s LIMIT $3',
+            collist, coll_clamp, full_where, orderby_str);
         -- serialize the per-month histogram (months[]/counts[]) to jsonb for the streaming client
         histogram := (
             SELECT jsonb_agg(jsonb_build_object('m', m, 'n', n) ORDER BY ord)
@@ -5280,7 +5493,10 @@ BEGIN
     ELSE
         DECLARE dt_clamp text := ''; BEGIN
             IF array_length(bnds.months, 1) IS NOT NULL THEN
-                dt_clamp := format('i.datetime >= %L AND i.datetime <= %L AND ', bnds.months[1], bnds.months[array_length(bnds.months, 1)]);
+                -- months[] holds month *starts*; the last bucket spans [start, start + 1 month), so the
+                -- upper bound must be exclusive of the next month, not <= the last month's start (which
+                -- would drop items dated after the start of the final month).
+                dt_clamp := format('i.datetime >= %L AND i.datetime < %L AND ', bnds.months[1], bnds.months[array_length(bnds.months, 1)] + interval '1 month');
             END IF;
             query := format(
                 'SELECT %s FROM items i WHERE %s%s(%s) ORDER BY %s LIMIT $1',
@@ -5562,12 +5778,17 @@ BEGIN
     END IF;
 
     IF array_length(bnds.months, 1) IS NOT NULL THEN
-        cursor_idx := 1;
+        -- Walk bands in the SEARCH's datetime direction: newest month first for a descending search,
+        -- oldest first when sorting datetime ascending. Mirrors search_page (004_search). Walking the
+        -- wrong direction returns older items before newer ones for a descending limit/early-exit search,
+        -- and (because band grouping shifts with the partition_stats histogram) makes the result depend on
+        -- stats — a bug, since stats must only affect performance, never which rows come back.
+        cursor_idx := CASE WHEN is_asc THEN 1 ELSE array_length(bnds.months, 1) END;
         band_target := (_limit + 1) * band_margin;
         <<bands>>
         WHILE NOT exit_flag AND guard < 80 LOOP
             guard := guard + 1;
-            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months);
+            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months, NOT is_asc);
             -- process a valid band even when next_band also flags done; stop only on no band.
             EXIT bands WHEN band.band_start_idx IS NULL;
             query := format(
@@ -5680,6 +5901,38 @@ $$ LANGUAGE SQL;
 
 -- BEGIN FRAGMENT: 997_maintenance.sql
 
+-- tighten_dirty_partition_stats: the async "tighten" sweep of the widen-now / tighten-async model. Ingest
+-- leaves partition_stats GENEROUS + dirty (cheap covered-guard widen + n bump); this recomputes the EXACT
+-- envelope + row count for dirty partitions (oldest first), clearing dirty. Run it off-hours via pg_cron
+-- or the maintenance CLI. Optional + safe: a generous envelope only over-includes a partition in search,
+-- so skipping it never loses rows — tightening just restores tight pruning + honest counts. Each
+-- tighten_partition_stats serializes with concurrent ingest into the same partition via the shared
+-- advisory lock; different partitions never contend. `_limit` caps the batch (NULL = all dirty). Returns
+-- the number of partitions tightened.
+--
+-- pg_cron example (operators install this themselves):
+--   SELECT cron.schedule('pgstac-tighten', '*/15 * * * *',
+--                        $$SELECT pgstac.tighten_dirty_partition_stats(200)$$);
+CREATE OR REPLACE FUNCTION tighten_dirty_partition_stats(_limit int DEFAULT NULL)
+RETURNS int AS $$
+DECLARE
+    _part text;
+    _count int := 0;
+BEGIN
+    FOR _part IN
+        SELECT partition FROM pgstac.partition_stats
+        WHERE dirty
+        ORDER BY last_updated NULLS FIRST
+        LIMIT _limit
+    LOOP
+        PERFORM pgstac.tighten_partition_stats(_part);
+        _count := _count + 1;
+    END LOOP;
+    RETURN _count;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
 CREATE OR REPLACE PROCEDURE analyze_items() AS $$
 DECLARE
     q text;
@@ -5738,7 +5991,7 @@ DECLARE
     extent jsonb;
 BEGIN
     IF runupdate THEN
-        PERFORM update_partition_stats_q(partition)
+        PERFORM tighten_partition_stats(partition)
         FROM partitions_view WHERE collection=_collection;
     END IF;
     SELECT
@@ -5829,7 +6082,6 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
-
 -- END FRAGMENT: 997_maintenance.sql
 
 -- BEGIN FRAGMENT: 998_idempotent_post.sql
@@ -5985,6 +6237,28 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 
+-- Privilege wall (INV-1): the connecting role (inheriting pgstac_ingest) may READ these tables but may
+-- only MUTATE them through the SECURITY DEFINER write functions (check_partition, widen/tighten_partition_stats,
+-- ensure_fragments, make_binary_staging, flush_items_staging_binary, the items_staging trigger, create/
+-- update/upsert/delete_item, the field-registry/fragment helpers). This makes an un-widened or
+-- envelope-narrowing direct write structurally impossible. New partitions are created SELECT-only for
+-- pgstac_ingest by check_partition; the items parent is revoked here. Staging tables (items_staging*) stay
+-- writable so the SQL-only ingest path can COPY into them.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragments FROM pgstac_ingest;
+-- item_field_registry is the one exception to the wall: the loader WIDENS it directly with an add-only
+-- INSERT ... ON CONFLICT DO UPDATE (no SD function), so INSERT + UPDATE stay granted. DELETE/TRUNCATE remain
+-- revoked, so even a direct write cannot NARROW the registry — INV-1 (registry is a superset of the data)
+-- holds structurally against narrowing, while the cheap widen stays on the hot load path.
+REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
+
+-- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
+-- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
+-- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
+-- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
+-- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
+GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
+GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
+
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 
@@ -5996,9 +6270,9 @@ GRANT ALL ON PROCEDURE gc_deleted_items_log_committed(interval, integer) TO pgst
 
 RESET ROLE;
 
-SET ROLE pgstac_ingest;
-SELECT update_partition_stats_q(partition) FROM partitions_view;
-RESET ROLE;
+-- (No install-time stats seeding: a fresh install has no partitions, and partition_stats rows are now
+-- seeded by check_partition as partitions are created. Exact stats come from tighten_partition_stats via
+-- the maintenance sweeps.)
 -- END FRAGMENT: 998_idempotent_post.sql
 
 -- BEGIN FRAGMENT: 999_version.sql

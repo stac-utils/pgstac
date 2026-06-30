@@ -1,0 +1,43 @@
+#!/bin/bash
+# Build the clean, empty pgstac install used as the clone template by the pgstac-rs
+# (`src/pgstac-rs`) Rust tests. Each Rust test clones a fresh database from this template, so it
+# must be a pristine install (zero collections/items). Run this once against a running dev database
+# (see `scripts/server`); re-run after schema changes to refresh the template.
+#
+# Usage: scripts/pgstac-rs-test-db [TEMPLATE_NAME]
+#   TEMPLATE_NAME defaults to pgstac_rs_test_template (matches PGSTAC_RS_TEST_TEMPLATE in the tests).
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "$SCRIPT_DIR/pgstacenv"   # cd to repo root, ensure .env
+
+# Connection defaults (overridable via env / .env)
+[[ -f .env ]] && set -a && source .env && set +a
+PGHOST=${PGHOST:-localhost}
+PGPORT=${PGPORT:-5439}
+PGUSER=${PGUSER:-username}
+export PGPASSWORD=${PGPASSWORD:-password}
+
+TEMPLATE=${1:-${PGSTAC_RS_TEST_TEMPLATE:-pgstac_rs_test_template}}
+PGSTAC_SQL="src/pgstac/pgstac.sql"
+
+if [[ ! -f "$PGSTAC_SQL" ]]; then
+    echo "ERROR: $PGSTAC_SQL not found (run from a repo checkout)." >&2
+    exit 1
+fi
+
+echo "Building clean pgstac template '$TEMPLATE' on $PGHOST:$PGPORT ..."
+
+# (Re)create the template database from a maintenance connection (postgres/postgis), then load the
+# assembled pgstac.sql into it. Terminating sessions first lets a re-run drop an in-use template.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 -q <<SQL
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$TEMPLATE';
+DROP DATABASE IF EXISTS $TEMPLATE;
+CREATE DATABASE $TEMPLATE;
+ALTER DATABASE $TEMPLATE SET search_path TO pgstac, public;
+ALTER DATABASE $TEMPLATE SET client_min_messages TO WARNING;
+SQL
+
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -f "$PGSTAC_SQL"
+
+# Verify a pristine install.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$TEMPLATE" -tAc \
+    "SET search_path=pgstac,public; SELECT format('pgstac %s ready: %s collections, %s items', get_version(), (SELECT count(*) FROM collections), (SELECT count(*) FROM items));"

@@ -1,3 +1,5 @@
+use crate::Error;
+use crate::search::SearchPage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use stac::Link;
@@ -64,6 +66,40 @@ impl Page {
             .iter()
             .find(|link| link.rel == "prev")
             .and_then(|link| extract_token_from_href(&link.href))
+    }
+}
+
+impl TryFrom<SearchPage> for Page {
+    type Error = Error;
+
+    /// Adapts the Rust engine's [`SearchPage`] into the rustac [`Page`] shape: deserialize the hydrated
+    /// feature values into [`Item`]s, carry the keyset tokens (the engine prefixes them `next:`/`prev:`,
+    /// which [`Page::next_token`]/[`Page::prev_token`] re-add), and surface the match count as a
+    /// [`Context`] when the search counted one.
+    fn try_from(page: SearchPage) -> Result<Self, Error> {
+        let features = page
+            .features
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<Item>, _>>()?;
+        let strip = |token: Option<String>, prefix: &str| {
+            token.and_then(|t| t.strip_prefix(prefix).map(str::to_string))
+        };
+        let context = page.number_matched.map(|matched| Context {
+            returned: page.number_returned as u64,
+            limit: None,
+            matched: Some(matched as u64),
+            additional_fields: Map::new(),
+        });
+        Ok(Page {
+            features,
+            next: strip(page.next_token, "next:"),
+            prev: strip(page.prev_token, "prev:"),
+            context,
+            number_returned: Some(page.number_returned),
+            links: Vec::new(),
+            additional_fields: Map::new(),
+        })
     }
 }
 
