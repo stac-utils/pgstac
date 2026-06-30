@@ -243,16 +243,9 @@ pub async fn load_items(
         return Ok(0);
     }
 
-    // Env-gated phase profiling (PGSTAC_LOAD_PROFILE): splits Rust CPU work (dehydrate/hash/fragment
-    // payload) from the DB-side calls (ensure_partitions/stamp/COPY/flush/commit). Off by default.
-    let prof = std::env::var_os("PGSTAC_LOAD_PROFILE").is_some();
-    let ms = |since: std::time::Instant| since.elapsed().as_secs_f64() * 1000.0;
-    let mark = std::time::Instant::now();
-
     // Per-collection fragment_config for any fragment-enabled collection in the batch (empty/absent =
     // the no-fragment fast path).
     let configs = fetch_fragment_configs(client, &items).await?;
-    let (t_configs, mark) = (ms(mark), std::time::Instant::now());
 
     // Dehydrate each item; for a fragment collection, compute its fragment payload from the ORIGINAL item
     // (before dehydrate consumes it) and strip the fragment-owned keys from the dehydrated row.
@@ -280,7 +273,6 @@ pub async fn load_items(
         rows.push(row);
         payloads.push(payload);
     }
-    let (t_dehydrate, mark) = (ms(mark), std::time::Instant::now());
 
     // Create + widen every partition the batch lands in BEFORE the load. Bucket client-side
     // by (collection, partition window) and call prepare_partition_for_load once per partition — per-partition
@@ -365,7 +357,6 @@ pub async fn load_items(
             }
         }
     }
-    let (t_partitions, mark) = (ms(mark), std::time::Instant::now());
 
     // Add-only UPSERT of the COMPLETE per-collection path set walked above, so item_field_registry stays a
     // superset of every field the items carry. Direct INSERT ... ON CONFLICT (no SECURITY DEFINER function) —
@@ -402,12 +393,10 @@ pub async fn load_items(
             }
         }
     }
-    let (t_registry, mark) = (ms(mark), std::time::Instant::now());
 
     // Upsert + dedup the fragments and stamp each row's fragment_id, committed before the load (the
     // items COPY references fragment_id; the fragments must already exist).
     stamp_fragment_ids(client, &mut rows, &payloads).await?;
-    let (t_stamp, mark) = (ms(mark), std::time::Instant::now());
 
     // P5: staging + COPY + flush in one transaction (the staging table is ON COMMIT DROP).
     let tx = client.transaction().await?;
@@ -415,9 +404,7 @@ pub async fn load_items(
         .query_one("SELECT make_binary_staging()", &[])
         .await?
         .get(0);
-    let (t_staging, mark) = (ms(mark), std::time::Instant::now());
     let _ = copy_rows(&tx, &staging, rows, schema).await?;
-    let (t_copy, mark) = (ms(mark), std::time::Instant::now());
     let flushed: i64 = tx
         .query_one(
             "SELECT flush_items_staging_binary($1, $2)",
@@ -425,17 +412,8 @@ pub async fn load_items(
         )
         .await?
         .get(0);
-    let (t_flush, mark) = (ms(mark), std::time::Instant::now());
     tx.commit().await?;
-    let t_commit = ms(mark);
 
-    if prof {
-        eprintln!(
-            "LOADPROF rows={flushed} | RUST dehydrate={t_dehydrate:.1} | DB configs={t_configs:.1} \
-             ensure_part={t_partitions:.1} registry={t_registry:.1} stamp_frag={t_stamp:.1} staging={t_staging:.1} \
-             copy={t_copy:.1} flush={t_flush:.1} commit={t_commit:.1} (ms)"
-        );
-    }
     Ok(u64::try_from(flushed)?)
 }
 

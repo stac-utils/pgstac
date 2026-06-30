@@ -1052,26 +1052,14 @@ async fn load_source_streaming(
         })]
     };
 
-    // Pipeline profiling (PGSTAC_PIPE_PROFILE): t_recv = main task blocked waiting for the decoder to
-    // hand it a batch (high => decode-bound); t_join = main task blocked waiting for a load task to
-    // finish because `set` is full (high => load-bound). PGSTAC_DECODE_ONLY drains the decoder + counts
-    // without loading, to isolate pure decode throughput. Both off by default.
-    let pipe_prof = std::env::var_os("PGSTAC_PIPE_PROFILE").is_some();
-    let decode_only = std::env::var_os("PGSTAC_DECODE_ONLY").is_some();
     // Single ingest path: create_items (staging + flush), which resolves every conflict policy (a raw
     // COPY can't).
-    let mut t_recv = std::time::Duration::ZERO;
-    let mut t_join = std::time::Duration::ZERO;
-    let mut n_decoded: u64 = 0;
-    let wall = std::time::Instant::now();
 
     let mut set: tokio::task::JoinSet<Result<u64, pgstac::Error>> = tokio::task::JoinSet::new();
     let mut pending: Vec<Value> = Vec::with_capacity(batch_size);
     let mut pending_bytes = 0usize;
     loop {
-        let m = std::time::Instant::now();
         let msg = rx.recv().await;
-        t_recv += m.elapsed();
         let Some(msg) = msg else { break };
         if *remaining == 0 {
             break;
@@ -1081,19 +1069,13 @@ async fn load_source_streaming(
             batch.truncate(*remaining);
         }
         *remaining -= batch.len();
-        n_decoded += batch.len() as u64;
-        if decode_only {
-            continue; // isolate decode: don't dehydrate/load
-        }
         pending.append(&mut batch);
         pending_bytes += bytes;
         // Flush a task when pending reaches batch_size items OR the byte budget — the byte budget bounds the
         // in-flight working set (concurrency * chunk) for large items, which otherwise OOMs a big ndjson load.
         if pending.len() >= batch_size || (pending_bytes >= load_bytes && !pending.is_empty()) {
             while set.len() >= concurrency {
-                let m = std::time::Instant::now();
                 let r = set.join_next().await.expect("set is non-empty");
-                t_join += m.elapsed();
                 *total += r??;
             }
             let chunk = std::mem::replace(&mut pending, Vec::with_capacity(batch_size));
@@ -1102,29 +1084,17 @@ async fn load_source_streaming(
             set.spawn(async move { pool.create_items(chunk, policy).await });
         }
     }
-    if !pending.is_empty() && !decode_only {
+    if !pending.is_empty() {
         let pool = pool.clone();
         set.spawn(async move { pool.create_items(pending, policy).await });
     }
     while let Some(res) = set.join_next().await {
-        let m = std::time::Instant::now();
-        t_join += m.elapsed();
         *total += res??;
     }
     // Unblock the decoder(s) if we stopped early (channel full), then join them.
     rx.close();
     for decoder in decoders {
         let _ = decoder.join();
-    }
-    if pipe_prof {
-        let secs = wall.elapsed().as_secs_f64();
-        eprintln!(
-            "PIPEPROF decoded={n_decoded} wall={secs:.2}s ({:.0}/s) | main-task blocked: \
-             recv(wait-for-decode)={:.2}s join(wait-for-loaders)={:.2}s | decode_only={decode_only}",
-            n_decoded as f64 / secs,
-            t_recv.as_secs_f64(),
-            t_join.as_secs_f64(),
-        );
     }
     Ok(())
 }

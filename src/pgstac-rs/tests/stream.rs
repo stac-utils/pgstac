@@ -102,7 +102,7 @@ async fn collect_and_ndjson_helpers() {
     assert_eq!(collected.len(), 50);
 
     let mut buf: Vec<u8> = Vec::new();
-    let n = pool.stream_ndjson(body, Some(50), &mut buf).await.unwrap();
+    let n = pool.stream_ndjson(body, None, Some(50), &mut buf).await.unwrap();
     assert_eq!(n, 50);
     assert_eq!(buf.iter().filter(|&&b| b == b'\n').count(), 50);
     // The byte-path NDJSON (serialize-time merge) must equal the Value path feature-for-feature on real

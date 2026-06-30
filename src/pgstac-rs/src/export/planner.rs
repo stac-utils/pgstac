@@ -984,9 +984,11 @@ impl Footprint {
         {
             let vals: Vec<f64> = bbox.iter().filter_map(Value::as_f64).collect();
             if vals.len() >= 4 {
-                // bbox may be 4 or 6 (3D); use first two + last two for 2D extent.
+                // bbox may be 4 or 6 (3D): west/south are [0],[1]; east/north sit at len/2 and
+                // len/2+1 (indices 2,3 for a 4-element bbox; 3,4 for a 6-element 3D bbox).
+                let mid = vals.len() / 2;
                 let (w, s) = (vals[0], vals[1]);
-                let (e, n) = (vals[vals.len() - 2], vals[vals.len() - 1]);
+                let (e, n) = (vals[mid], vals[mid + 1]);
                 self.merge_bbox(w, s, e, n);
             }
         }

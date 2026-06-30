@@ -108,9 +108,9 @@ name = "pgstac"
 path = "src/bin/pgstac.rs"
 required-features = ["cli"]
 
-[[bin]]
+[[example]]
 name = "memprofile"
-path = "src/bin/memprofile.rs"
+path = "examples/memprofile.rs"
 required-features = ["profiling"]
 
 [package.metadata.docs.rs]
