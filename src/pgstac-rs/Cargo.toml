@@ -70,7 +70,7 @@ rustls-pemfile = { version = "2.2", optional = true }
 serde = "1.0"
 serde_json = { version = "1.0", features = ["raw_value"] }
 sha2 = "0.10"
-stac = "0.17.0"
+stac = { version = "0.17.0", features = ["async"] }
 thiserror = "2.0"
 tokio = { version = "1.44", features = ["rt", "sync"] }
 tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1", "with-chrono-0_4"] }

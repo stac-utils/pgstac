@@ -103,6 +103,8 @@ pub mod rawjson;
 pub mod search;
 pub mod source;
 #[cfg(feature = "pool")]
+mod stac_api;
+#[cfg(feature = "pool")]
 mod stream;
 pub mod temporal;
 #[cfg(feature = "pool")]

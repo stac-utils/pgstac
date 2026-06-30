@@ -3,7 +3,7 @@ use crate::search::SearchPage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use stac::Link;
-use stac::api::{Context, Item};
+use stac::api::{Context, Item, ItemCollection};
 
 /// A page of search results.
 #[derive(Debug, Deserialize, Serialize)]
@@ -66,6 +66,33 @@ impl Page {
             .iter()
             .find(|link| link.rel == "prev")
             .and_then(|link| extract_token_from_href(&link.href))
+    }
+}
+
+/// Adapts a [`Page`] into the rustac-native [`stac::api::ItemCollection`]: the features map directly
+/// (both are `Vec<stac::api::Item>`), the keyset `next`/`prev` tokens become `{"token": ...}` pagination
+/// maps, and the match count surfaces as `number_matched`. This is the one canonical conversion the
+/// `stac::api` client-trait impls route through, so there is a single page-to-ItemCollection path.
+impl TryFrom<Page> for ItemCollection {
+    type Error = Error;
+
+    fn try_from(page: Page) -> Result<Self, Error> {
+        let token_map = |token: String| {
+            let mut map = Map::new();
+            let _ = map.insert("token".into(), Value::String(token));
+            map
+        };
+        let next = page.next_token().map(token_map);
+        let prev = page.prev_token().map(token_map);
+        let number_matched = page.context.as_ref().and_then(|context| context.matched);
+        let mut item_collection = ItemCollection::new(page.features)?;
+        item_collection.links = page.links;
+        item_collection.number_matched = number_matched;
+        item_collection.context = page.context;
+        item_collection.additional_fields = page.additional_fields;
+        item_collection.next = next;
+        item_collection.prev = prev;
+        Ok(item_collection)
     }
 }
 
