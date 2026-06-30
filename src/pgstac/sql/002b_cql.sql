@@ -290,7 +290,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql2 expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
