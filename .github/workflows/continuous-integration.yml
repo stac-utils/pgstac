@@ -184,7 +184,6 @@ jobs:
         run: scripts/container-scripts/test
   rust-crate:
     name: Test rust crate
-    if: ${{ false }}  # FIXME: turn back on before v0.10 release
     runs-on: ubuntu-latest
     needs:
       - changes
@@ -215,15 +214,14 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-      - name: Install pypgstac
-        working-directory: src/pypgstac
+      - name: Build pgstac test databases
         run: |
-          uv venv /tmp/ci-venv
-          uv pip install --python /tmp/ci-venv/bin/python .[psycopg]
-          echo "/tmp/ci-venv/bin" >> "$GITHUB_PATH"
-      - name: Migrate pgstac
-        run: pypgstac migrate
-      - name: Set search_path
-        run: psql -c "ALTER ROLE username SET search_path TO pgstac, public;"
+          scripts/pgstac-rs-test-db
+          scripts/pgstac-rs-test-db pgstac_rs_ingest_template
+          scripts/pgstac-rs-test-rich-db
+      - name: Compile-check all features
+        run: cargo check --all-features --all-targets --manifest-path src/pgstac-rs/Cargo.toml
       - name: Test
-        run: cargo test -p pgstac --all-features --manifest-path src/pgstac-rs/Cargo.toml
+        env:
+          PGSTAC_RS_TEST_DB: postgresql://username:password@localhost:5439/pgstac_rs_test_rich
+        run: cargo test --features cli --manifest-path src/pgstac-rs/Cargo.toml

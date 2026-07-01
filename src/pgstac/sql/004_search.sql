@@ -222,8 +222,16 @@ $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 -- fields_to_itemcols: produce a SELECT list of item columns in attnum order.
 -- Heavy columns (geometry, bbox, assets, links, properties, extra) are emitted as
--- NULL::type when their controlling field is excluded/not-included.
-CREATE OR REPLACE FUNCTION fields_to_itemcols(fields jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
+-- NULL::type AS <col> when their controlling field is excluded/not-included: the
+-- column is kept (named) so the result schema is stable across any `fields` value
+-- -- a client preparing this query once can step bands without re-binding columns --
+-- while the heavy value itself is never transferred.
+-- When _skip_fragment is true (the caller determined the requested fields are
+-- satisfiable from item columns alone, via needs_fragment), fragment_id is emitted
+-- as NULL too: a client driving this query then sees no fragment_id and skips the
+-- per-row item_fragments lookup entirely -- the fragment-skip is carried in the
+-- projection itself, not a separate flag.
+CREATE OR REPLACE FUNCTION fields_to_itemcols(fields jsonb DEFAULT '{}'::jsonb, _skip_fragment boolean DEFAULT false) RETURNS text AS $$
 DECLARE
     includes text[] := ARRAY(SELECT jsonb_array_elements_text(fields->'include'));
     excludes text[] := ARRAY(SELECT jsonb_array_elements_text(fields->'exclude'));
@@ -231,11 +239,13 @@ DECLARE
 BEGIN
     SELECT string_agg(
         CASE
+          WHEN a.attname = 'fragment_id' AND _skip_fragment
+          THEN format('NULL::%s AS %I', format_type(a.atttypid, a.atttypmod), a.attname)
           WHEN a.attname = ANY (ARRAY['geometry','bbox','assets','links','link_hrefs',
                                       'extra','properties','stac_version','stac_extensions'])
                AND NOT field_included(CASE WHEN a.attname = 'link_hrefs' THEN 'links' ELSE a.attname END,
                                       includes, excludes)
-          THEN format('NULL::%s', format_type(a.atttypid, a.atttypmod))
+          THEN format('NULL::%s AS %I', format_type(a.atttypid, a.atttypmod), a.attname)
           ELSE format('i.%I', a.attname)
         END, ', ' ORDER BY a.attnum)
     INTO cols
@@ -276,7 +286,7 @@ DECLARE
     band_cap_months CONSTANT int := 18;
     page_rows items[] := '{}'::items[]; chunk_rows items[];
     target int := _limit + 1; got int := 0; got_band int;
-    is_asc boolean; cursor_ts timestamptz; band record;
+    is_asc boolean; band record;
     band_target numeric; obs_sel numeric; band_where text;
     guard int := 0; cum_scanned bigint := 0;
     proj_expr text; mo interval := interval '1 month';
@@ -332,12 +342,14 @@ BEGIN
     END IF;
 
     IF datetime_leading AND array_length(bnds.months, 1) IS NOT NULL THEN
-        cursor_ts := CASE WHEN is_asc THEN bnds.months[1] ELSE bnds.months[array_length(bnds.months, 1)] + mo END;
-        cursor_idx := 1;
+        -- Start the band walk at the leading edge for the sort direction: oldest month for ascending,
+        -- most recent month for descending. (A descending walk that started at the oldest band would
+        -- collect the oldest items and never reach the recent months.)
+        cursor_idx := CASE WHEN is_asc THEN 1 ELSE array_length(bnds.months, 1) END;
         band_target := target * band_margin;
         WHILE got < target AND guard < 80 LOOP
             guard := guard + 1;
-            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months);
+            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months, NOT is_asc);
             -- a valid band must be processed even when next_band also flags done (it consumed the
             -- last bucket); only stop when there is no band at all.
             EXIT WHEN band.band_start_idx IS NULL;
@@ -471,7 +483,6 @@ DECLARE
     bnds record; coll_clamp text := ''; clamp text;
 BEGIN
     IF _where IS NULL OR btrim(_where) = '' THEN _where := ' TRUE '; END IF;
-    collist := fields_to_itemcols(coalesce(_search->'fields', '{}'::jsonb));
     orderby_str := keyset_orderby(_search, is_prev);
     SELECT (array_agg(field ORDER BY ord))[1],
            (array_agg(CASE WHEN is_prev THEN (CASE dir WHEN 'ASC' THEN 'DESC' ELSE 'ASC' END) ELSE dir END ORDER BY ord))[1]
@@ -497,10 +508,20 @@ BEGIN
         coll_clamp := format('i.collection = ANY(%L::text[]) AND ', bnds.collections);
     END IF;
 
+    -- Build the projection now that the resolved collections are known: when the requested fields are
+    -- satisfiable from item columns alone (needs_fragment is false), fragment_id is nulled in the
+    -- projection so a client driving this query never looks up item_fragments -- the fragment-skip
+    -- rides in the returned query's SELECT list, not a separate flag.
+    collist := fields_to_itemcols(
+        coalesce(_search->'fields', '{}'::jsonb),
+        NOT needs_fragment(coalesce(_search->'fields', '{}'::jsonb), bnds.collections));
+
     IF datetime_leading AND array_length(bnds.months, 1) IS NOT NULL THEN
+        -- collections baked in as a literal so the query is parameterized only by $1 (band low),
+        -- $2 (band high), $3 (limit): the client prepares it once and binds per histogram band.
         query := format(
-            'SELECT %s FROM items i WHERE i.collection = ANY($4) AND i.datetime >= $1 AND i.datetime < $2 AND (%s) ORDER BY %s LIMIT $3',
-            collist, full_where, orderby_str);
+            'SELECT %s FROM items i WHERE %si.datetime >= $1 AND i.datetime < $2 AND (%s) ORDER BY %s LIMIT $3',
+            collist, coll_clamp, full_where, orderby_str);
         -- serialize the per-month histogram (months[]/counts[]) to jsonb for the streaming client
         histogram := (
             SELECT jsonb_agg(jsonb_build_object('m', m, 'n', n) ORDER BY ord)
@@ -509,7 +530,10 @@ BEGIN
     ELSE
         DECLARE dt_clamp text := ''; BEGIN
             IF array_length(bnds.months, 1) IS NOT NULL THEN
-                dt_clamp := format('i.datetime >= %L AND i.datetime <= %L AND ', bnds.months[1], bnds.months[array_length(bnds.months, 1)]);
+                -- months[] holds month *starts*; the last bucket spans [start, start + 1 month), so the
+                -- upper bound must be exclusive of the next month, not <= the last month's start (which
+                -- would drop items dated after the start of the final month).
+                dt_clamp := format('i.datetime >= %L AND i.datetime < %L AND ', bnds.months[1], bnds.months[array_length(bnds.months, 1)] + interval '1 month');
             END IF;
             query := format(
                 'SELECT %s FROM items i WHERE %s%s(%s) ORDER BY %s LIMIT $1',

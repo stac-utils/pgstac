@@ -162,8 +162,8 @@ CREATE OR REPLACE FUNCTION partition_bounds(
 ) RETURNS record LANGUAGE sql STABLE AS $$
     WITH cand AS (
         SELECT ps.collection,
-               lower(coalesce(ps.dtrange, ps.partition_dtrange)) AS lo,
-               upper(coalesce(ps.dtrange, ps.partition_dtrange)) AS hi,
+               lower(ps.dtrange) AS lo,
+               upper(ps.dtrange) AS hi,
                coalesce(ps.n, 0) AS n
         FROM partition_stats ps
         WHERE ((_env).colls IS NULL OR ps.collection = ANY((_env).colls))
@@ -200,12 +200,17 @@ $$;
 
 -- next_band: walk a histogram using array indexes. Given per-month counts, a
 -- cursor position, and a target row count, returns the next band's index range.
--- The caller converts band indexes back to timestamps for SQL queries.
+-- The caller converts band indexes back to timestamps for SQL queries. The band
+-- index range [band_start_idx, band_end_idx] is always low..high regardless of
+-- direction; only the walk order differs. For a descending search (_descending)
+-- the cursor starts at the most recent month and walks toward older months, so
+-- the most recent items are collected first.
 CREATE OR REPLACE FUNCTION next_band(
     _counts bigint[],
     _cursor_idx int,
     _target numeric,
     _cap_months int,
+    _descending boolean DEFAULT false,
     OUT band_start_idx int,
     OUT band_end_idx int,
     OUT scanned bigint,
@@ -214,6 +219,7 @@ CREATE OR REPLACE FUNCTION next_band(
 ) RETURNS record LANGUAGE plpgsql STABLE AS $$
 DECLARE
     idx int;
+    n int;
     cumulative bigint := 0;
 BEGIN
     done := false; scanned := 0;
@@ -223,14 +229,39 @@ BEGIN
         done := true;  -- no histogram / no cursor => nothing to walk
         RETURN;
     END IF;
+    n := array_length(_counts, 1);
 
+    IF _descending THEN
+        -- Walk downward (newest -> oldest). The high bound is the cursor (clamped into range).
+        IF _cursor_idx < 1 THEN done := true; RETURN; END IF;
+        idx := LEAST(_cursor_idx, n);
+        FOR i IN REVERSE idx..GREATEST(1, idx - _cap_months + 1) LOOP
+            cumulative := cumulative + _counts[i];
+            scanned := scanned + _counts[i];
+            IF cumulative >= _target THEN
+                band_start_idx := i;      -- low (older) month bound
+                band_end_idx := idx;      -- high (newer) month bound
+                next_cursor_idx := i - 1;
+                IF next_cursor_idx < 1 THEN done := true; END IF;
+                RETURN;
+            END IF;
+        END LOOP;
+        -- Target not reached within the cap: end the band at the cap boundary.
+        band_start_idx := GREATEST(1, idx - _cap_months + 1);
+        band_end_idx := idx;
+        next_cursor_idx := band_start_idx - 1;
+        done := (band_start_idx <= 1);
+        RETURN;
+    END IF;
+
+    -- Ascending (oldest -> newest).
     idx := NULL;
-    FOR i IN 1..array_length(_counts, 1) LOOP
+    FOR i IN 1..n LOOP
         IF i >= _cursor_idx THEN idx := i; EXIT; END IF;
     END LOOP;
     IF idx IS NULL THEN done := true; next_cursor_idx := _cursor_idx; RETURN; END IF;
 
-    FOR i IN idx..array_length(_counts, 1) LOOP
+    FOR i IN idx..n LOOP
         IF i > idx + _cap_months - 1 THEN EXIT; END IF;
         cumulative := cumulative + _counts[i];
         scanned := scanned + _counts[i];
@@ -238,7 +269,7 @@ BEGIN
             band_start_idx := idx;
             band_end_idx := i;
             next_cursor_idx := i + 1;
-            IF next_cursor_idx > array_length(_counts, 1) THEN done := true; END IF;
+            IF next_cursor_idx > n THEN done := true; END IF;
             RETURN;
         END IF;
     END LOOP;
@@ -246,8 +277,8 @@ BEGIN
     -- Target not reached within the cap: end the band at the cap boundary (not the array end),
     -- so the cap actually limits band width. done only when we've consumed the whole histogram.
     band_start_idx := idx;
-    band_end_idx := LEAST(idx + _cap_months - 1, array_length(_counts, 1));
+    band_end_idx := LEAST(idx + _cap_months - 1, n);
     next_cursor_idx := band_end_idx + 1;
-    done := (band_end_idx >= array_length(_counts, 1));
+    done := (band_end_idx >= n);
 END;
 $$;

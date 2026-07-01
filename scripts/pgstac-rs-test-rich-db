@@ -1,0 +1,75 @@
+#!/bin/bash
+# Build the RICH pgstac test template used by the pgstac-rs hydration/search tests: real
+# landsat-c2-l2 / sentinel-2-l2a / naip collections (many assets + properties) with `fragment_config`
+# set, plus 1000 items each dehydrated into `item_fragments`. This exercises the fragment-hydration
+# path, which is one of the largest bottlenecks. Re-run after schema changes.
+#
+# Usage: scripts/pgstac-rs-test-rich-db [TEMPLATE_NAME]   (default pgstac_rs_test_rich)
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "$SCRIPT_DIR/pgstacenv"   # cd to repo root, ensure .env
+
+[[ -f .env ]] && set -a && source .env && set +a
+PGHOST=${PGHOST:-localhost}
+PGPORT=${PGPORT:-5439}
+PGUSER=${PGUSER:-username}
+export PGPASSWORD=${PGPASSWORD:-password}
+
+TEMPLATE=${1:-${PGSTAC_RS_TEST_RICH_TEMPLATE:-pgstac_rs_test_rich}}
+PGSTAC_SQL="src/pgstac/pgstac.sql"
+FIXROOT="src/pgstac/tests/testdata/planetary-computer"
+FIXTURES=(landsat-c2-l2 sentinel-2-l2a naip)
+
+for required in "$PGSTAC_SQL" "$FIXROOT/collections.ndjson"; do
+    [[ -f "$required" ]] || { echo "ERROR: $required not found (run from a repo checkout)." >&2; exit 1; }
+done
+
+psql() { command psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$@"; }
+
+echo "Building rich pgstac template '$TEMPLATE' on $PGHOST:$PGPORT ..."
+
+psql -d postgres -v ON_ERROR_STOP=1 -q <<SQL
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$TEMPLATE';
+DROP DATABASE IF EXISTS $TEMPLATE;
+CREATE DATABASE $TEMPLATE;
+ALTER DATABASE $TEMPLATE SET search_path TO pgstac, public;
+ALTER DATABASE $TEMPLATE SET client_min_messages TO WARNING;
+SQL
+
+psql -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -f "$PGSTAC_SQL"
+
+# Load raw NDJSON into jsonb columns via CSV format with control-char quote/delimiter (chosen so they
+# never appear in the data): this reads each line verbatim as one field, avoiding COPY text-format
+# backslash de-escaping that would corrupt JSON escapes like \n.
+JSON_COPY="WITH (FORMAT csv, DELIMITER E'\\x02', QUOTE E'\\x01')"
+
+# Load collections, then BEFORE loading items: derive fragment_config from each collection's
+# item_assets (so items dehydrate into shared fragments) and set partition_trunc=month (so items land
+# in datetime sub-partitions and the search() band engine has a real histogram — matching how the
+# synth/landsat test collections are configured).
+psql -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q <<SQL
+\copy collections (content) FROM '$FIXROOT/collections.ndjson' $JSON_COPY
+UPDATE collections
+   SET fragment_config = collection_fragment_config_default(content),
+       partition_trunc = 'month'
+ WHERE fragment_config IS NULL;
+SQL
+
+for fixture in "${FIXTURES[@]}"; do
+    items="$FIXROOT/data/$fixture/items.ndjson"
+    [[ -f "$items" ]] || { echo "ERROR: $items not found." >&2; exit 1; }
+    psql -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q \
+        -c "\\copy items_staging (content) FROM '$items' $JSON_COPY"
+done
+
+# The bulk items_staging path does not populate partition_stats; analyze_items() fills the per-month
+# histogram so the search() band engine and partition_bounds work. (analyze_items is a procedure that
+# commits internally, so it must run on its own outside a transaction block.)
+psql -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -c "CALL analyze_items();"
+
+psql -d "$TEMPLATE" -tAc "SET search_path=pgstac,public;
+    SELECT format(
+        'rich template ready: %s collections (%s with fragment_config), %s items, %s fragments',
+        (SELECT count(*) FROM collections),
+        (SELECT count(*) FROM collections WHERE fragment_config IS NOT NULL),
+        (SELECT count(*) FROM items),
+        (SELECT count(*) FROM item_fragments));"

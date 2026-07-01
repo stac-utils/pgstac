@@ -75,11 +75,33 @@
 )]
 #![warn(missing_docs)]
 
-mod client;
-mod page;
+mod api;
+mod db;
+#[cfg(feature = "export")]
+pub mod export;
+mod json;
+mod load;
+#[cfg(feature = "python")]
+mod python;
+mod read;
 
-pub use client::Client;
-pub use page::Page;
+// The modules above live in api/ db/ json/ load/ python/ read/ subdirectories; they are re-exported at
+// the crate root so existing `pgstac::…` and internal `crate::…` paths are unchanged — public modules
+// stay public, previously-private ones stay crate-internal.
+pub use json::{canonical, geom, rawjson, temporal};
+pub use load::{dehydrate, fragment, ingest};
+#[cfg(feature = "export")]
+pub use load::parquet_decode;
+pub use read::{collections, feature, fields, hydrate, keyset, search, source};
+pub(crate) use load::field_registry;
+#[cfg(feature = "pool")]
+pub(crate) use db::tls;
+
+pub use db::client::Client;
+pub use db::connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
+pub use read::page::Page;
+#[cfg(feature = "pool")]
+pub use db::pool::{DEFAULT_POOL_SIZE, PgstacPool, PoolOptions, PoolerMode};
 use serde::{Serialize, de::DeserializeOwned};
 use stac::api::{ItemCollection, Search};
 use tokio_postgres::{GenericClient, NoTls, Row, types::ToSql};
@@ -96,6 +118,38 @@ pub enum Error {
     #[error(transparent)]
     Stac(#[from] stac::Error),
 
+    /// [geozero::error::GeozeroError]
+    #[error(transparent)]
+    Geozero(#[from] geozero::error::GeozeroError),
+
+    /// A malformed item could not be dehydrated.
+    #[error("dehydrate error: {0}")]
+    Dehydrate(String),
+
+    /// [std::io::Error]
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// [deadpool_postgres::PoolError]
+    #[cfg(feature = "pool")]
+    #[error(transparent)]
+    Pool(#[from] deadpool_postgres::PoolError),
+
+    /// [rustls::Error]
+    #[cfg(feature = "pool")]
+    #[error(transparent)]
+    Rustls(#[from] rustls::Error),
+
+    /// A TLS configuration error.
+    #[cfg(feature = "pool")]
+    #[error("tls configuration error: {0}")]
+    Tls(String),
+
+    /// [deadpool_postgres::BuildError]
+    #[cfg(feature = "pool")]
+    #[error(transparent)]
+    PoolBuild(#[from] deadpool_postgres::BuildError),
+
     /// [tokio_postgres::Error]
     #[error(transparent)]
     TokioPostgres(#[from] tokio_postgres::Error),
@@ -103,7 +157,31 @@ pub enum Error {
     /// [std::num::TryFromIntError]
     #[error(transparent)]
     TryFromInt(#[from] std::num::TryFromIntError),
+
+    /// A malformed search / keyset pagination token.
+    #[error("invalid search token: {0}")]
+    InvalidToken(String),
+
+    /// An export/dump error.
+    #[cfg(feature = "export")]
+    #[error("export error: {0}")]
+    Export(String),
+
+    /// [object_store::Error]
+    #[cfg(feature = "cli")]
+    #[error(transparent)]
+    ObjectStore(#[from] object_store::Error),
+
+    /// [url::ParseError]
+    #[cfg(feature = "cli")]
+    #[error(transparent)]
+    UrlParse(#[from] url::ParseError),
 }
+
+// `clap` is used only by the `pgstac` binary (a separate crate target), so the library would otherwise
+// flag it as an unused dependency.
+#[cfg(feature = "cli")]
+use clap as _;
 
 /// Crate-specific result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -218,14 +296,39 @@ pub trait Pgstac: GenericClient {
         ).await.map(|_| ()).map_err(Error::from)
     }
 
-    /// Fetches all collections.
-    async fn collections(&self) -> Result<Vec<JsonValue>> {
-        self.pgstac_vec("all_collections", &[]).await
+    /// Fetches all collections, via a blank collection-search paged to completion.
+    async fn collections(&self) -> Result<Vec<JsonValue>>
+    where
+        Self: Sized,
+    {
+        let mut all = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let page =
+                collections::collection_search(self, &serde_json::json!({}), token.as_deref())
+                    .await?;
+            let next = page.next_token;
+            all.extend(page.features);
+            match next {
+                Some(next) => token = Some(next),
+                None => break,
+            }
+        }
+        Ok(all)
     }
 
-    /// Fetches a collection by id.
-    async fn collection(&self, id: &str) -> Result<Option<JsonValue>> {
-        self.pgstac_opt("get_collection", &[&id]).await
+    /// Fetches a collection by id, via collection-search filtered to that id.
+    async fn collection(&self, id: &str) -> Result<Option<JsonValue>>
+    where
+        Self: Sized,
+    {
+        Ok(
+            collections::collection_search(self, &serde_json::json!({"ids": [id]}), None)
+                .await?
+                .features
+                .into_iter()
+                .next(),
+        )
     }
 
     /// Adds a collection.
@@ -265,58 +368,29 @@ pub trait Pgstac: GenericClient {
         self.pgstac_void("delete_collection", &[&id]).await
     }
 
-    /// Fetches an item.
-    async fn item(&self, id: &str, collection: Option<&str>) -> Result<Option<JsonValue>> {
-        self.pgstac_opt("get_item", &[&id, &collection]).await
+    /// Fetches an item, hydrated by the Rust engine.
+    async fn item(&self, id: &str, collection: Option<&str>) -> Result<Option<JsonValue>>
+    where
+        Self: Sized,
+    {
+        let body = match collection {
+            Some(collection) => {
+                serde_json::json!({"collections": [collection], "ids": [id], "limit": 1})
+            }
+            None => serde_json::json!({"ids": [id], "limit": 1}),
+        };
+        Ok(search::search_page(self, &body, None, 1)
+            .await?
+            .features
+            .into_iter()
+            .next())
     }
 
-    /// Adds an item.
-    async fn add_item<T>(&self, item: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let item = serde_json::to_value(item)?;
-        self.pgstac_void("create_item", &[&item]).await
-    }
-
-    /// Adds items.
-    async fn add_items<T>(&self, items: &[T]) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let items = serde_json::to_value(items)?;
-        self.pgstac_void("create_items", &[&items]).await
-    }
-
-    /// Updates an item.
-    async fn update_item<T>(&self, item: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let item = serde_json::to_value(item)?;
-        self.pgstac_void("update_item", &[&item]).await
-    }
-
-    /// Upserts an item.
-    async fn upsert_item<T>(&self, item: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let item = serde_json::to_value(item)?;
-        self.pgstac_void("upsert_item", &[&item]).await
-    }
-
-    /// Upserts items.
-    ///
-    /// To avoid having to iterate the entire slice to serialize, these items
-    /// must all be [serde_json::Value].
-    async fn upsert_items<T>(&self, items: &[T]) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let items = serde_json::to_value(items)?;
-        self.pgstac_void("upsert_items", &[&items]).await
-    }
+    // Item writes (add/upsert/update) are intentionally NOT on this trait: the Rust write path is the
+    // fast loader ([`crate::ingest::load_items`], surfaced via [`crate::PgstacPool`] /
+    // [`crate::Client`]'s `stac::api::TransactionClient`), and no Rust code calls the SQL ingest
+    // functions. The SQL `create_item`/`create_items`/`upsert_item(s)`/`update_item` functions remain
+    // in the schema as the compatible SQL ingest path for non-Rust clients — Rust just never calls them.
 
     /// Deletes an item.
     async fn delete_item(&self, id: &str, collection: Option<&str>) -> Result<()> {
@@ -324,10 +398,39 @@ pub trait Pgstac: GenericClient {
     }
 
     /// Searches for items.
-    async fn search(&self, search: Search) -> Result<Page> {
+    async fn search(&self, search: Search) -> Result<Page>
+    where
+        Self: Sized,
+    {
         let search = search.into_cql2_json()?;
-        let search = serde_json::to_value(search)?;
-        self.pgstac_value("search", &[&search]).await
+        let body = serde_json::to_value(search)?;
+        let token = body
+            .get("token")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string);
+        let limit = body.get("limit").and_then(JsonValue::as_i64).unwrap_or(10);
+        match search::search_page(self, &body, token.as_deref(), limit).await {
+            Ok(page) => page.try_into(),
+            // A malformed token surfaces as a `keyset_decode` error in SQL; map it to a clear
+            // InvalidToken rather than a raw DB error (and never an offset-style fallback).
+            Err(Error::TokioPostgres(e)) => {
+                let in_keyset = e
+                    .as_db_error()
+                    .and_then(|db| db.where_())
+                    .is_some_and(|w| w.contains("keyset_decode") || w.contains("keyset_where"));
+                let msg = e.to_string();
+                if in_keyset
+                    || msg.contains("token")
+                    || msg.contains("keyset")
+                    || msg.contains("base64")
+                {
+                    Err(Error::InvalidToken(msg))
+                } else {
+                    Err(Error::TokioPostgres(e))
+                }
+            }
+            Err(other) => Err(other),
+        }
     }
 
     /// Runs a pgstac function.
@@ -437,6 +540,17 @@ pub(crate) mod tests {
             .unwrap()
     }
 
+    /// Name of the clean, empty pgstac install used as the clone template for each test.
+    ///
+    /// Tests assume a *fresh* pgstac install (e.g. zero collections), so they must clone from a
+    /// known-clean template rather than from whatever database the maintenance connection
+    /// ([`config`]) points at — in local dev that database is often populated. Build the template
+    /// once with `scripts/pgstac-rs-test-db`, or override the name via `PGSTAC_RS_TEST_TEMPLATE`.
+    fn template() -> String {
+        std::env::var("PGSTAC_RS_TEST_TEMPLATE")
+            .unwrap_or_else(|_| "pgstac_rs_test_template".to_string())
+    }
+
     impl TestClient {
         async fn new(id: u16) -> TestClient {
             let dbname = format!("pgstac_test_{id}");
@@ -445,17 +559,23 @@ pub(crate) mod tests {
                 let _mutex = MUTEX.lock().await;
                 let (client, connection) = config.connect(NoTls).await.unwrap();
                 let _handle = tokio::spawn(async move { connection.await.unwrap() });
+                // Clone from the clean template (not the maintenance db, which may be populated).
+                // Connecting via `config` (a different database) means the template has no active
+                // session, so CREATE DATABASE ... TEMPLATE succeeds.
                 let _ = client
                     .execute(
-                        &format!(
-                            "CREATE DATABASE {} TEMPLATE {}",
-                            dbname,
-                            config.get_dbname().unwrap()
-                        ),
+                        &format!("CREATE DATABASE {} TEMPLATE {}", dbname, template()),
                         &[],
                     )
                     .await
-                    .unwrap();
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "failed to create test db {dbname} from template {}: {e}. \
+                             Build the template first with `scripts/pgstac-rs-test-db` \
+                             (or set PGSTAC_RS_TEST_TEMPLATE).",
+                            template()
+                        )
+                    });
             }
             let mut test_config = config.clone();
             let (client, connection) = test_config.dbname(&dbname).connect(NoTls).await.unwrap();
@@ -465,6 +585,65 @@ pub(crate) mod tests {
                 config,
                 dbname,
             }
+        }
+
+        /// Seeds items through the **Rust loader** (the single write path) on a fresh connection —
+        /// the test analogue of the removed SQL `create_item`/`upsert_item`. `policy` resolves id
+        /// collisions (Error = "add", Upsert = "upsert/update").
+        async fn load(
+            &self,
+            items: Vec<serde_json::Value>,
+            policy: crate::ingest::ConflictPolicy,
+        ) -> crate::Result<()> {
+            let mut config = self.config.clone();
+            let (mut client, connection) =
+                config.dbname(&self.dbname).connect(NoTls).await.unwrap();
+            let handle = tokio::spawn(connection);
+            client
+                .batch_execute("SET search_path TO pgstac, public")
+                .await?;
+            let schema = crate::dehydrate::DehydrateSchema::load(&client).await?;
+            let _ = crate::ingest::load_items(&mut client, items, &schema, policy).await?;
+            handle.abort();
+            Ok(())
+        }
+
+        async fn add_item<T: serde::Serialize>(&self, item: T) -> crate::Result<()> {
+            self.load(
+                vec![serde_json::to_value(item)?],
+                crate::ingest::ConflictPolicy::Error,
+            )
+            .await
+        }
+
+        async fn add_items<T: serde::Serialize>(&self, items: &[T]) -> crate::Result<()> {
+            let values = items
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            self.load(values, crate::ingest::ConflictPolicy::Error)
+                .await
+        }
+
+        async fn upsert_item<T: serde::Serialize>(&self, item: T) -> crate::Result<()> {
+            self.load(
+                vec![serde_json::to_value(item)?],
+                crate::ingest::ConflictPolicy::Upsert,
+            )
+            .await
+        }
+
+        async fn upsert_items<T: serde::Serialize>(&self, items: &[T]) -> crate::Result<()> {
+            let values = items
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            self.load(values, crate::ingest::ConflictPolicy::Upsert)
+                .await
+        }
+
+        async fn update_item<T: serde::Serialize>(&self, item: T) -> crate::Result<()> {
+            self.upsert_item(item).await
         }
 
         async fn terminate(&mut self) {
@@ -650,17 +829,25 @@ pub(crate) mod tests {
             .additional_fields
             .insert("type".into(), "Feature".into());
         client.add_item(item.clone()).await.unwrap();
-        assert_eq!(
-            client
-                .item("an-id", Some("collection-id"))
-                .await
-                .unwrap()
-                .unwrap(),
-            serde_json::to_value(item).unwrap(),
-        );
+        let got = client
+            .item("an-id", Some("collection-id"))
+            .await
+            .unwrap()
+            .expect("item present");
+        // v0.10 re-renders the item from its columns rather than echoing the stored JSON: the
+        // timestamptz `datetime` is microsecond precision (the input nanoseconds are truncated) and an
+        // empty `assets` object is dropped, so assert the round-tripped identity + geometry rather than
+        // byte-equality with the input.
+        assert_eq!(got["id"], "an-id");
+        assert_eq!(got["collection"], "collection-id");
+        assert_eq!(got["type"], "Feature");
+        assert_eq!(got["geometry"], serde_json::to_value(longmont()).unwrap());
+        assert!(got["properties"].get("datetime").is_some());
         client.update_collection_extents().await.unwrap();
     }
 
+    // The Rust loader (now the only write path) errors on an item whose collection does not exist,
+    // rather than the legacy SQL `create_item` behavior of silently dropping it.
     #[rstest]
     #[tokio::test]
     async fn item_without_collection(#[future(awt)] client: TestClient) {
@@ -782,10 +969,12 @@ pub(crate) mod tests {
         item.collection = Some("collection-id".to_string());
         item.geometry = Some(longmont());
         client.add_item(item.clone()).await.unwrap();
-        assert_eq!(
-            client.search(Search::default()).await.unwrap().features[0],
-            *serde_json::to_value(item).unwrap().as_object().unwrap()
-        );
+        // See `item`: v0.10 re-renders from columns, so assert identity + geometry, not byte-equality.
+        let page = client.search(Search::default()).await.unwrap();
+        let got = &page.features[0];
+        assert_eq!(got["id"], "an-id");
+        assert_eq!(got["collection"], "collection-id");
+        assert_eq!(got["geometry"], serde_json::to_value(longmont()).unwrap());
     }
 
     #[rstest]
@@ -955,14 +1144,18 @@ pub(crate) mod tests {
         search.items.limit = Some(1);
         let page = client.search(search.clone()).await.unwrap();
         assert_eq!(page.features[0]["id"], "an-id");
+        // Page with the real keyset token the server minted; the old "collection-id:an-id" offset-style
+        // token format no longer exists in v0.10 (keyset_decode rejects it).
+        let next = page.next_token().expect("next token");
         let _ = search
             .additional_fields
-            .insert("token".to_string(), "next:collection-id:an-id".into());
+            .insert("token".to_string(), next.into());
         let page = client.search(search.clone()).await.unwrap();
         assert_eq!(page.features[0]["id"], "another-id");
+        let prev = page.prev_token().expect("prev token");
         let _ = search
             .additional_fields
-            .insert("token".to_string(), "prev:collection-id:another-id".into());
+            .insert("token".to_string(), prev.into());
         let page = client.search(search).await.unwrap();
         assert_eq!(page.features[0]["id"], "an-id");
     }

@@ -132,47 +132,15 @@ CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from i
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
 
--- partition_after_triggerfunc: After-statement trigger on items.
--- Updates partition statistics for every partition touched by the current batch,
--- using run_or_queue() so the work is deferred rather than blocking the ingest
--- transaction.
-CREATE OR REPLACE FUNCTION partition_after_triggerfunc() RETURNS TRIGGER AS $$
-DECLARE
-    p text;
-    t timestamptz := clock_timestamp();
-BEGIN
-    RAISE NOTICE 'Updating partition stats %', t;
-    FOR p IN SELECT DISTINCT partition
-        FROM newdata n JOIN partition_sys_meta p
-        ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
-    LOOP
-        PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
-    END LOOP;
-    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
-    RETURN NULL;
-END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
-
+-- The old per-statement stats trigger (partition_after_triggerfunc) is intentionally GONE. Under the
+-- widen-now / tighten-async model, partition_stats coverage is maintained by the ingest path itself
+-- (check_partition seeds + widen_partition_stats covers, in their own transactions) and tightened
+-- off the hot path by tighten_partition_stats; a per-insert trigger that re-scanned partitions and
+-- refreshed matviews was the lock pathology this model removes.
 DROP TRIGGER IF EXISTS items_after_insert_trigger ON items;
-CREATE TRIGGER items_after_insert_trigger
-AFTER INSERT ON items
-REFERENCING NEW TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
-
 DROP TRIGGER IF EXISTS items_after_update_trigger ON items;
-CREATE TRIGGER items_after_update_trigger
-AFTER UPDATE ON items
-REFERENCING NEW TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
-
 DROP TRIGGER IF EXISTS items_after_delete_trigger ON items;
-CREATE TRIGGER items_after_delete_trigger
-AFTER DELETE ON items
-REFERENCING OLD TABLE AS newdata
-FOR EACH STATEMENT
-EXECUTE FUNCTION partition_after_triggerfunc();
+DROP FUNCTION IF EXISTS partition_after_triggerfunc();
 
 -- items_content_distinct_sql / items_content_changed: detect whether a direct
 -- UPDATE actually changed the stored item content. Used by the touch trigger
@@ -531,10 +499,8 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
--- content_hydrate: Reassemble a full STAC item JSON from the split columns
--- and the shared fragment content. This is the single hydrate function;
--- the old content_nonhydrated wrapper and 3-arg _collection parameter have
--- been removed.
+-- content_hydrate: reassemble a full STAC item JSON from the split columns and the shared fragment
+-- content. The single hydrate function.
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item items,
     fields jsonb DEFAULT '{}'::jsonb,
@@ -776,6 +742,22 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
+    -- Fail loudly on items whose collection does not exist instead of silently dropping them
+    -- in the collections JOINs below (matches the Rust loader, which also errors on this).
+    IF EXISTS (
+        SELECT 1 FROM newdata n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+        )
+    ) THEN
+        RAISE EXCEPTION 'cannot load item(s) into nonexistent collection(s): %',
+            (SELECT string_agg(DISTINCT coalesce(n.content->>'collection', '<null>'), ', ')
+             FROM newdata n
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+             ));
+    END IF;
+
     FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
@@ -832,13 +814,31 @@ BEGIN
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
+    -- Bump each partition's row-count estimate so search stepping sees the new rows. n drives
+    -- partition_bounds' histogram and the Rust keyset search_page skips zero-count bands, so a partition
+    -- left at n=0 would hide its freshly-ingested items from that path (SQL search() scans regardless).
+    -- Mirrors flush_items_staging_binary on the Rust loader. Over-count is safe (ignore/upsert may insert
+    -- fewer than staged); the async tightener resets n exactly. check_partition above already widened the
+    -- temporal envelope; spatial is left to the tightener on this fallback path. (n only affects search
+    -- stepping performance, never which rows/order come back — see geometrysearch band direction.)
+    UPDATE partition_stats ps
+    SET n = COALESCE(ps.n, 0) + agg.c, dirty = true, last_updated = now()
+    FROM (
+        SELECT (partition_name(nd.content->>'collection',
+                               lower(stac_daterange(nd.content->'properties')))).partition_name AS partition,
+               count(*) AS c
+        FROM newdata nd
+        GROUP BY 1
+    ) agg
+    WHERE ps.partition = agg.partition;
+
     RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
     EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 DROP TRIGGER IF EXISTS items_staging_insert_trigger ON items_staging;
@@ -874,7 +874,7 @@ out items%ROWTYPE;
 BEGIN
     DELETE FROM items WHERE id = _id AND (_collection IS NULL OR collection=_collection) RETURNING * INTO STRICT out;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 --/*
 CREATE OR REPLACE FUNCTION create_item(data jsonb) RETURNS VOID AS $$
@@ -919,156 +919,10 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections
-    SET content = jsonb_set_lax(
-        content,
-        '{extent}'::text[],
-        collection_extent(id, FALSE),
-        true,
-        'use_json_null'
-    )
-;
-$$ LANGUAGE SQL;
 
--- ---------------------------------------------------------------------------
--- Field Registry: walks JSONB item content to track which paths exist in each
--- collection.  Used to auto-populate queryables and support schema inference.
--- jsonb_field_rows is defined in 001a_jsonutils.sql (loaded first).
--- ---------------------------------------------------------------------------
 
--- update_field_registry_from_sample: UPSERT registry rows from a pre-selected array of
--- raw item content JSONBs.  Callers supply the sample to decouple sampling strategy
--- from the registry write; merge value_kinds to accumulate observed types over time.
-CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
-    _collection text,
-    item_contents jsonb[]
-) RETURNS void AS $$
-    INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-    SELECT
-        _collection,
-        r.path,
-        bool_and(r.is_leaf)                                                       AS is_leaf,
-        array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-        now(),
-        now()
-    FROM unnest(item_contents) AS item(content)
-    CROSS JOIN LATERAL jsonb_field_rows(item.content) AS r(path, is_leaf, value_kind)
-    GROUP BY r.path
-    ON CONFLICT (collection, path) DO UPDATE SET
-        is_leaf     = EXCLUDED.is_leaf,
-        value_kinds = (
-            SELECT array_agg(DISTINCT v)
-            FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-        ),
-        last_seen   = now()
-    ;
-$$ LANGUAGE SQL VOLATILE;
 
--- update_field_registry_from_items: Sample a live collection and UPSERT registry rows.
--- Uses TABLESAMPLE BERNOULLI(5) for large collections (>10k rows by pg_class estimate)
--- and LIMIT 1000 for smaller ones to avoid a full seq-scan for tiny collections.
--- pg_class.reltuples is an estimate (may be stale); its only role is threshold selection.
--- Returns (registered_paths, rows_processed) for observability.
-CREATE OR REPLACE FUNCTION update_field_registry_from_items(
-    _collection text
-) RETURNS TABLE (registered_paths int, rows_processed int) AS $$
-DECLARE
-    est_rows bigint;
-    nrows    int;
-    npaths   int;
-BEGIN
-    -- Sum reltuples across the registered item partitions for this collection.
-    -- reltuples can be -1 (never analyzed); treat negative values as zero.
-    SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
-    FROM partitions_view p
-    JOIN pg_class c ON c.relname = p.partition
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE p.collection = _collection
-      AND n.nspname = 'pgstac'
-      AND c.relkind = 'r';
 
-    IF est_rows > 10000 THEN
-        -- Large collection: use statistical sampling to avoid full seq-scan.
-        WITH sampled AS (
-            SELECT content_hydrate(i) AS content FROM items i TABLESAMPLE BERNOULLI(5) WHERE i.collection = _collection
-        ),
-        upserted AS (
-            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-            SELECT
-                _collection,
-                r.path,
-                bool_and(r.is_leaf)                                                       AS is_leaf,
-                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-                now(), now()
-            FROM sampled
-            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
-            GROUP BY r.path
-            ON CONFLICT (collection, path) DO UPDATE SET
-                is_leaf     = EXCLUDED.is_leaf,
-                value_kinds = (
-                    SELECT array_agg(DISTINCT v)
-                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-                ),
-                last_seen   = now()
-            RETURNING 1
-        )
-        SELECT
-            (SELECT count(*)::int FROM upserted),
-            (SELECT count(*)::int FROM sampled)
-        INTO npaths, nrows;
-    ELSE
-        -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
-        WITH sampled AS (
-            SELECT content_hydrate(i) AS content FROM items i WHERE i.collection = _collection LIMIT 1000
-        ),
-        upserted AS (
-            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-            SELECT
-                _collection,
-                r.path,
-                bool_and(r.is_leaf)                                                       AS is_leaf,
-                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-                now(), now()
-            FROM sampled
-            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
-            GROUP BY r.path
-            ON CONFLICT (collection, path) DO UPDATE SET
-                is_leaf     = EXCLUDED.is_leaf,
-                value_kinds = (
-                    SELECT array_agg(DISTINCT v)
-                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-                ),
-                last_seen   = now()
-            RETURNING 1
-        )
-        SELECT
-            (SELECT count(*)::int FROM upserted),
-            (SELECT count(*)::int FROM sampled)
-        INTO npaths, nrows;
-    END IF;
-
-    RETURN QUERY SELECT npaths, nrows;
-END;
-$$ LANGUAGE PLPGSQL VOLATILE SECURITY DEFINER;
-
--- refresh_field_registry: Expire stale registry entries that haven't been seen recently.
--- Intended for scheduled maintenance (e.g. pg_cron daily job).
--- Returns (collection, expired_paths) for each collection affected.
-CREATE OR REPLACE FUNCTION refresh_field_registry(
-    _collection text DEFAULT NULL,
-    retention_interval interval DEFAULT '90 days'
-) RETURNS TABLE (collection_id text, expired_paths int) AS $$
-    WITH deleted AS (
-        DELETE FROM item_field_registry
-        WHERE (_collection IS NULL OR collection = _collection)
-          AND last_seen < now() - retention_interval
-        RETURNING collection
-    )
-    SELECT collection, count(*)::int
-    FROM deleted
-    GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE;
 
 -- Item Fragment Management functions
 
@@ -1125,37 +979,6 @@ CREATE OR REPLACE FUNCTION pgstac_hash_fragment(fragment jsonb) RETURNS bytea AS
 SELECT sha256(convert_to(fragment::text, 'UTF8'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
--- gc_fragments: Garbage collect orphaned fragments using a single set-based DELETE so the
--- planner can choose the optimal join/anti-join strategy across all collections.
--- The NOT EXISTS sub-select is evaluated per fragment; with an index on items.fragment_id
--- this is an efficient anti-join rather than a full seq-scan.
---
--- Operational note: because items.fragment_id is intentionally unmanaged by an FK
--- (partitioned-items incremental NOT VALID FKs are not supported), gc_fragments has a
--- small race window with concurrent inserts. A fragment that is unreferenced at the time
--- the DELETE snapshot is taken but becomes referenced by a later insert could be removed.
--- The retention_interval guard makes this unlikely for normal ingest, but operators should
--- still run gc_fragments during low-ingest periods or with a sufficiently conservative
--- retention interval. This is a documented operational tradeoff, not a silent invariant.
-CREATE OR REPLACE FUNCTION gc_fragments(
-    _collection text DEFAULT NULL,
-    retention_interval interval DEFAULT '90 days'
-) RETURNS TABLE (
-    collection_id text,
-    fragments_removed int
-) AS $$
-    WITH deleted AS (
-        DELETE FROM item_fragments f
-        WHERE
-            (_collection IS NULL OR f.collection = _collection)
-            AND f.created_at < now() - retention_interval
-            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id)
-        RETURNING f.collection
-    )
-    SELECT collection, count(*)::int
-    FROM deleted
-    GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE;
 
 -- strip_fragment_col: Remove fragment-owned sub-keys from a split column value.
 -- col_name is the top-level STAC key that this column represents (e.g. 'assets' or 'properties').

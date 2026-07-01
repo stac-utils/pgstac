@@ -21,6 +21,7 @@ nav:
   - PgSTAC: "pgstac.md"
   - Promoted Fields: "promoted-fields.md"
   - pyPgSTAC: "pypgstac.md"
+  - "Rust client & CLI": "pgstac-rs.md"
   - Performance:
     - item_size_analysis.ipynb
   - Development - Contributing: "contributing.md"

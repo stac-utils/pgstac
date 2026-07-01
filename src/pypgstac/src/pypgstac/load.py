@@ -11,12 +11,11 @@ from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import (
+    IO,
     Any,
-    BinaryIO,
     Generator,
     Iterable,
     Iterator,
-    TextIO,
 )
 
 import orjson
@@ -98,7 +97,7 @@ def open_std(
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
-    fh: TextIO | BinaryIO
+    fh: IO[Any]
     if (
         filename is None
         or filename == "-"
