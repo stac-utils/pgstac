@@ -493,8 +493,7 @@ fn make_sink(out: &str) -> Result<Box<dyn std::io::Write>, Box<dyn std::error::E
 /// page, or stac-geoparquet. Every page is built in Rust from `search_plan` (Rust band-stepping +
 /// keyset minting); the SQL `search()` function is never called.
 async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> {
-    use pgstac::export::SearchSource;
-    use stac::api::Search;
+    use stac::api::{ItemsClient, Search};
     use std::io::Write as _;
 
     let mut config = ConnectConfig::from_env();
@@ -545,21 +544,31 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
             eprintln!("search: streamed {n} item(s) as NDJSON");
         }
         SearchFormat::Itemcollection => {
-            // A single keyset page assembled in Rust (search_plan + Rust band-stepping): features,
-            // next/prev tokens, links, and context all minted client-side — never SQL `search()`.
+            // A single keyset page assembled in Rust via ItemsClient::search (search_plan + Rust
+            // band-stepping): features, next/prev tokens, links, and context all minted client-side.
             let mut out = make_sink(&args.out)?;
-            let client = pool.get().await?;
-            let mut source = SearchSource::new(search);
             if let Some(token) = &args.token {
-                source = source.with_token(token.clone());
+                let _ = search
+                    .additional_fields
+                    .insert("token".into(), serde_json::Value::String(token.clone()));
             }
-            let fc = source.item_collection_page(&**client).await?;
+            let item_collection = ItemsClient::search(&pool, search).await?;
+            let mut fc = serde_json::to_value(&item_collection)?;
+            // ItemCollection serializes next/prev only into links; also surface them as top-level
+            // fields (as before) so token-paging callers need not re-parse links.
+            if let serde_json::Value::Object(map) = &mut fc {
+                if let Some(t) = item_collection.next.as_ref().and_then(|m| m.get("token")) {
+                    let _ = map.insert("next".into(), t.clone());
+                }
+                if let Some(t) = item_collection.prev.as_ref().and_then(|m| m.get("token")) {
+                    let _ = map.insert("prev".into(), t.clone());
+                }
+            }
             serde_json::to_writer(&mut out, &fc)?;
             out.flush()?;
-            let n = fc
-                .get("numberReturned")
-                .and_then(|v| v.as_u64())
-                .unwrap_or_default();
+            let n = item_collection
+                .number_returned
+                .unwrap_or(item_collection.items.len() as u64);
             eprintln!("search: wrote 1 ItemCollection page ({n} item(s))");
         }
         SearchFormat::Geoparquet => {

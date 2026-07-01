@@ -1,11 +1,8 @@
-//! Write methods on [`PgstacPool`]: the Rust-optimized ingest path.
+//! Write methods on [`PgstacPool`]: the Rust ingest path.
 //!
-//! Every write — even a single item from a stac-fastapi transaction — runs the full loader: load the
-//! per-collection promoted schema, dehydrate in Rust, then binary-COPY through the SECURITY DEFINER
-//! staging/flush functions (direct writes to `items` are revoked from `pgstac_ingest`; see [`load_items`]).
-//! There are no per-item SQL ingest functions and no thin pool wrappers: the single-item and bulk paths are
-//! the same pipeline at different batch sizes. Collection writes go through the SQL
-//! `create_collection`/`update_collection`/`delete_collection` functions (not subject to that restriction).
+//! Item writes dehydrate in Rust and binary-COPY through the SECURITY DEFINER staging/flush functions
+//! (direct writes to `items` are revoked from `pgstac_ingest`). Collection writes use the SQL
+//! `create_collection` / `update_collection` / `delete_collection` functions.
 
 use crate::PgstacPool;
 use crate::Result;
@@ -35,11 +32,9 @@ impl PgstacPool {
         load_items(&mut client, items, &schema, policy).await
     }
 
-    /// EXPERIMENTAL precheck-driven upsert/ignore. Skips unchanged items on re-ingest (no transfer,
-    /// dehydrate, or write — the sync win) and loads only new + changed via `create_items(policy)`.
-    /// Per-partition, parallel, adaptive (skip empty / pull small partition / probe via temp-table + JOIN),
-    /// with no per-item SQL-function arguments — see [`crate::ingest::precheck_upsert`] for the full
-    /// classification + move semantics. Returns `(unchanged_skipped, loaded)`.
+    /// Loads `items`, skipping any whose content is unchanged from what's already stored (a per-partition
+    /// content-hash pre-filter) and loading only new + changed items via `create_items(policy)`. Returns
+    /// `(unchanged_skipped, loaded)`.
     pub async fn upsert_items_precheck(
         &self,
         items: Vec<Value>,

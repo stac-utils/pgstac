@@ -14,12 +14,10 @@ pub mod metadata;
 pub mod parallel;
 pub mod plan;
 pub mod planner;
-pub mod search;
 pub mod sink;
 
 pub use parallel::{ClientFactory, DsnFactory, Snapshot};
 pub use planner::{DumpConfig, DumpPlanner, DumpReport};
-pub use search::SearchSource;
 
 use crate::Result;
 use crate::hydrate::{CollectionContext, HydrationModel};

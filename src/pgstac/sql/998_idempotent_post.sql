@@ -164,13 +164,6 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragment
 -- holds structurally against narrowing, while the cheap widen stays on the hot load path.
 REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
 
--- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
--- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
--- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
--- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
--- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
-GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
-GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
 
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;

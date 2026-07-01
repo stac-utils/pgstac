@@ -75,46 +75,33 @@
 )]
 #![warn(missing_docs)]
 
-pub mod canonical;
-mod client;
-pub mod collections;
-mod connect;
-pub mod dehydrate;
+mod api;
+mod db;
 #[cfg(feature = "export")]
 pub mod export;
-pub mod feature;
-mod field_registry;
-pub mod fields;
-pub mod fragment;
-pub mod geom;
-pub mod hydrate;
-pub mod ingest;
-pub mod keyset;
-mod page;
-#[cfg(feature = "export")]
-pub mod parquet_decode;
-#[cfg(feature = "pool")]
-mod pool;
-#[cfg(feature = "pool")]
-mod pool_ingest;
+mod json;
+mod load;
 #[cfg(feature = "python")]
 mod python;
-pub mod rawjson;
-pub mod search;
-pub mod source;
-#[cfg(feature = "pool")]
-mod stac_api;
-#[cfg(feature = "pool")]
-mod stream;
-pub mod temporal;
-#[cfg(feature = "pool")]
-mod tls;
+mod read;
 
-pub use client::Client;
-pub use connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
-pub use page::Page;
+// The modules above live in api/ db/ json/ load/ python/ read/ subdirectories; they are re-exported at
+// the crate root so existing `pgstac::…` and internal `crate::…` paths are unchanged — public modules
+// stay public, previously-private ones stay crate-internal.
+pub use json::{canonical, geom, rawjson, temporal};
+pub use load::{dehydrate, fragment, ingest};
+#[cfg(feature = "export")]
+pub use load::parquet_decode;
+pub use read::{collections, feature, fields, hydrate, keyset, search, source};
+pub(crate) use load::field_registry;
 #[cfg(feature = "pool")]
-pub use pool::{DEFAULT_POOL_SIZE, PgstacPool, PoolOptions, PoolerMode};
+pub(crate) use db::tls;
+
+pub use db::client::Client;
+pub use db::connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
+pub use read::page::Page;
+#[cfg(feature = "pool")]
+pub use db::pool::{DEFAULT_POOL_SIZE, PgstacPool, PoolOptions, PoolerMode};
 use serde::{Serialize, de::DeserializeOwned};
 use stac::api::{ItemCollection, Search};
 use tokio_postgres::{GenericClient, NoTls, Row, types::ToSql};
@@ -171,6 +158,10 @@ pub enum Error {
     #[error(transparent)]
     TryFromInt(#[from] std::num::TryFromIntError),
 
+    /// A malformed search / keyset pagination token.
+    #[error("invalid search token: {0}")]
+    InvalidToken(String),
+
     /// An export/dump error.
     #[cfg(feature = "export")]
     #[error("export error: {0}")]
@@ -191,10 +182,6 @@ pub enum Error {
 // flag it as an unused dependency.
 #[cfg(feature = "cli")]
 use clap as _;
-
-// `dhat` is used only by the `memprofile` binary (a separate crate target).
-#[cfg(feature = "profiling")]
-use dhat as _;
 
 /// Crate-specific result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -422,9 +409,28 @@ pub trait Pgstac: GenericClient {
             .and_then(JsonValue::as_str)
             .map(str::to_string);
         let limit = body.get("limit").and_then(JsonValue::as_i64).unwrap_or(10);
-        search::search_page(self, &body, token.as_deref(), limit)
-            .await?
-            .try_into()
+        match search::search_page(self, &body, token.as_deref(), limit).await {
+            Ok(page) => page.try_into(),
+            // A malformed token surfaces as a `keyset_decode` error in SQL; map it to a clear
+            // InvalidToken rather than a raw DB error (and never an offset-style fallback).
+            Err(Error::TokioPostgres(e)) => {
+                let in_keyset = e
+                    .as_db_error()
+                    .and_then(|db| db.where_())
+                    .is_some_and(|w| w.contains("keyset_decode") || w.contains("keyset_where"));
+                let msg = e.to_string();
+                if in_keyset
+                    || msg.contains("token")
+                    || msg.contains("keyset")
+                    || msg.contains("base64")
+                {
+                    Err(Error::InvalidToken(msg))
+                } else {
+                    Err(Error::TokioPostgres(e))
+                }
+            }
+            Err(other) => Err(other),
+        }
     }
 
     /// Runs a pgstac function.

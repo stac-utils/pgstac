@@ -351,7 +351,8 @@ BEGIN
 
     -- Create the leaf partition if missing. Parent-inherited indexes only (id PK here; datetime/geometry
     -- come from the items parent); no CHECK constraints; queryable indexes are deferred via
-    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through pgstac_load.
+    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through the
+    -- SECURITY DEFINER write functions (the privilege wall in 998_idempotent_post).
     -- Skip the DDL when it already exists: re-running CREATE/GRANT takes a relation lock that deadlocks
     -- with concurrent INSERTs. The existence check is race-safe under the advisory lock.
     IF to_regclass(format('pgstac.%I', _partition_name)) IS NULL THEN

@@ -1,9 +1,9 @@
 //! High-concurrency ingest correctness tests — especially many writers hammering a SINGLE partition,
 //! which is where the partition-creation / partition_stats / fragment locking has to be right.
 //!
-//! Gated on `PGSTAC_TEST_DSN` (a DSN to a pgstac DB that already has the schema + the `pgstac_load` role
-//! + `prepare_partition_for_load` applied); the test is a no-op skip when it's unset, so `cargo test`
-//! stays green without a database. Each test uses a unique collection id so runs don't collide.
+//! Gated on `PGSTAC_TEST_DSN` (a DSN to a pgstac DB that already has the pgstac schema); the test is a
+//! no-op skip when it's unset, so `cargo test` stays green without a database. Each test uses a unique
+//! collection id so runs don't collide.
 //!
 //! Run: `PGSTAC_TEST_DSN=postgresql://username:password@localhost:5439/<db> cargo test --features pool \
 //!       --test concurrency -- --nocapture`

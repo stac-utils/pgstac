@@ -543,17 +543,14 @@ struct PrecheckBucket {
 
 static PRECHECK_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// EXPERIMENTAL precheck-driven upsert/ignore — per-partition, parallel, adaptive, with NO per-item SQL
-/// function arguments. A cheap pass (canonical hash + datetime parse, no full dehydrate) buckets the item
-/// indices by partition window. Per partition, in parallel, [`precheck_one_partition`] decides which items
-/// are unchanged (and can be SKIPPED — the re-ingest / sync win) vs new/changed; the survivors go through
-/// the normal [`crate::PgstacPool::create_items`] load (which resolves any same-partition conflict per
-/// `policy`).
+/// Loads `items`, skipping those whose content is unchanged from what's already stored and loading only new
+/// + changed items via [`crate::PgstacPool::create_items`]. A cheap hash + datetime pass buckets items by
+/// partition window; [`precheck_one_partition`] classifies each partition's bucket in parallel, and the
+/// survivors take the normal load (resolving same-partition conflicts per `policy`).
 ///
-/// Matching on id (not exact datetime) catches a datetime change that stays WITHIN a partition. A
-/// cross-partition move reads as 'new' (its old row is in another partition); with `Ignore` (or a future
-/// same-partition upsert) that orphans the old row, while the current `Upsert` flush deletes it
-/// cross-partition. Returns `(unchanged_skipped, loaded)`.
+/// Matching is by id: a datetime change within a partition is caught, but a cross-partition move reads as
+/// new (the old row lives in another partition) — `Upsert` leaves that old row in place, `Delsert` removes
+/// it. Returns `(unchanged_skipped, loaded)`.
 pub async fn precheck_upsert(
     pool: &crate::PgstacPool,
     items: Vec<Value>,

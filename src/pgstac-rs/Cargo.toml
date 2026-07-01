@@ -53,14 +53,11 @@ cli = [
     "tokio/rt-multi-thread",
     "tokio/fs",
 ]
-# Heap profiling helpers (the `memprofile` binary). Opt-in; pulls in `dhat`.
-profiling = ["pool", "export", "dep:dhat", "tokio/macros", "tokio/rt-multi-thread"]
 
 [dependencies]
 async-stream = { version = "0.3", optional = true }
 base64 = "0.22"
 bytes = "1"
-dhat = { version = "0.3", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 deadpool-postgres = { version = "0.14", optional = true }
 futures = "0.3"
@@ -107,11 +104,6 @@ tokio-test = "0.4.4"
 name = "pgstac"
 path = "src/bin/pgstac.rs"
 required-features = ["cli"]
-
-[[example]]
-name = "memprofile"
-path = "examples/memprofile.rs"
-required-features = ["profiling"]
 
 [package.metadata.docs.rs]
 all-features = true

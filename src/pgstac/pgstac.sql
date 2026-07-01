@@ -43,25 +43,6 @@ DO $$
   END
 $$;
 
--- pgstac_load: the explicit up-privilege role used to direct-write the wall-protected tables (items /
--- partition_stats / item_fragments) from the Rust loader via SET ROLE. NOLOGIN, and granted WITH INHERIT
--- FALSE so nobody writes those tables implicitly — only a deliberate, auditable SET ROLE does.
-DO $$
-  BEGIN
-    CREATE ROLE pgstac_load NOLOGIN;
-  EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
--- Role MEMBERSHIP grants live here (idempotent_pre), where the installing superuser still holds the role
--- context — pgstac.sql later does SET ROLE pgstac_admin, and pgstac_admin lacks ADMIN OPTION on a pgstac_load
--- the superuser created, so a membership grant in 998 (as pgstac_admin) would fail. INHERIT FALSE keeps the
--- privileges dormant (the wall holds); SET (default) lets the member `SET ROLE pgstac_load`. pgstac_admin also
--- gets ADMIN OPTION so an incremental migration running AS pgstac_admin can re-assert these. (998 grants the
--- table/usage privileges once the tables exist.)
-GRANT pgstac_load TO pgstac_admin  WITH ADMIN OPTION, INHERIT FALSE;
-GRANT pgstac_load TO pgstac_ingest WITH INHERIT FALSE;
 
 
 GRANT pgstac_admin TO current_user;
@@ -4381,7 +4362,8 @@ BEGIN
 
     -- Create the leaf partition if missing. Parent-inherited indexes only (id PK here; datetime/geometry
     -- come from the items parent); no CHECK constraints; queryable indexes are deferred via
-    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through pgstac_load.
+    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through the
+    -- SECURITY DEFINER write functions (the privilege wall in 998_idempotent_post).
     -- Skip the DDL when it already exists: re-running CREATE/GRANT takes a relation lock that deadlocks
     -- with concurrent INSERTs. The existence check is race-safe under the advisory lock.
     IF to_regclass(format('pgstac.%I', _partition_name)) IS NULL THEN
@@ -6242,13 +6224,6 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragment
 -- holds structurally against narrowing, while the cheap widen stays on the hot load path.
 REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
 
--- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
--- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
--- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
--- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
--- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
-GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
-GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
 
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;

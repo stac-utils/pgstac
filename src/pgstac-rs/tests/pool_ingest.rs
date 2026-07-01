@@ -601,7 +601,7 @@ async fn transaction_client_routes_through_loader() {
     use stac::api::TransactionClient;
 
     let db = CloneDb::create().await;
-    let mut pool = pool(&db).await;
+    let pool = pool(&db).await;
     pool.create_collection(&collection()).await.unwrap();
 
     // A pooled Client as TransactionClient: typed add_items -> loader.
@@ -669,7 +669,7 @@ async fn transaction_client_routes_through_loader() {
 #[tokio::test]
 async fn load_widens_field_registry() {
     let db = CloneDb::create().await;
-    let mut pool = pool(&db).await;
+    let pool = pool(&db).await;
     pool.create_collection(&collection()).await.unwrap();
     pool.create_items(
         vec![

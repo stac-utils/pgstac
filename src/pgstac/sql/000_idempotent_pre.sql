@@ -38,25 +38,6 @@ DO $$
   END
 $$;
 
--- pgstac_load: the explicit up-privilege role used to direct-write the wall-protected tables (items /
--- partition_stats / item_fragments) from the Rust loader via SET ROLE. NOLOGIN, and granted WITH INHERIT
--- FALSE so nobody writes those tables implicitly — only a deliberate, auditable SET ROLE does.
-DO $$
-  BEGIN
-    CREATE ROLE pgstac_load NOLOGIN;
-  EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
--- Role MEMBERSHIP grants live here (idempotent_pre), where the installing superuser still holds the role
--- context — pgstac.sql later does SET ROLE pgstac_admin, and pgstac_admin lacks ADMIN OPTION on a pgstac_load
--- the superuser created, so a membership grant in 998 (as pgstac_admin) would fail. INHERIT FALSE keeps the
--- privileges dormant (the wall holds); SET (default) lets the member `SET ROLE pgstac_load`. pgstac_admin also
--- gets ADMIN OPTION so an incremental migration running AS pgstac_admin can re-assert these. (998 grants the
--- table/usage privileges once the tables exist.)
-GRANT pgstac_load TO pgstac_admin  WITH ADMIN OPTION, INHERIT FALSE;
-GRANT pgstac_load TO pgstac_ingest WITH INHERIT FALSE;
 
 
 GRANT pgstac_admin TO current_user;
