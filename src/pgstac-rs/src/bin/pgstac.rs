@@ -109,6 +109,11 @@ struct LoadArgs {
     /// Cap the total number of items loaded (across all sources). For benchmarking / sampling.
     #[arg(long)]
     limit: Option<usize>,
+
+    /// Skip items already present-and-current, loading only new + changed (a per-partition precheck for
+    /// re-ingest / sync). `upsert`/`delsert` skip ids whose content hash matches; `ignore` skips by id alone.
+    #[arg(long)]
+    skip_unchanged: bool,
 }
 
 /// Default ingest parallelism: CPU count capped at 8 (a safe ceiling for decode/connection fan-out).
@@ -623,6 +628,13 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let policy: ConflictPolicy = args.policy.into();
+    if args.skip_unchanged && matches!(policy, ConflictPolicy::Error) {
+        return Err(
+            "--skip-unchanged is incompatible with --policy error (error must fail on an existing id, \
+             not skip it)"
+                .into(),
+        );
+    }
 
     for cf in &collection_files {
         let raw: Value = serde_json::from_slice(&std::fs::read(cf)?)?;
@@ -666,6 +678,7 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
             args.batch_size,
             args.concurrency,
             policy,
+            args.skip_unchanged,
             &mut remaining,
             &mut total,
         )
@@ -701,6 +714,7 @@ async fn run_restore(args: RestoreArgs) -> Result<(), Box<dyn std::error::Error>
         policy: LoadPolicy::Upsert,
         pool_size: args.pool_size,
         limit: None,
+        skip_unchanged: false,
     })
     .await
 }
@@ -1005,6 +1019,7 @@ async fn load_source_streaming(
     batch_size: usize,
     concurrency: usize,
     policy: ConflictPolicy,
+    skip_unchanged: bool,
     remaining: &mut usize,
     total: &mut u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1090,12 +1105,28 @@ async fn load_source_streaming(
             let chunk = std::mem::replace(&mut pending, Vec::with_capacity(batch_size));
             pending_bytes = 0;
             let pool = pool.clone();
-            set.spawn(async move { pool.create_items(chunk, policy).await });
+            set.spawn(async move {
+                if skip_unchanged {
+                    pool.upsert_items_precheck(chunk, policy)
+                        .await
+                        .map(|(_skipped, loaded)| loaded)
+                } else {
+                    pool.create_items(chunk, policy).await
+                }
+            });
         }
     }
     if !pending.is_empty() {
         let pool = pool.clone();
-        set.spawn(async move { pool.create_items(pending, policy).await });
+        set.spawn(async move {
+            if skip_unchanged {
+                pool.upsert_items_precheck(pending, policy)
+                    .await
+                    .map(|(_skipped, loaded)| loaded)
+            } else {
+                pool.create_items(pending, policy).await
+            }
+        });
     }
     while let Some(res) = set.join_next().await {
         *total += res??;

@@ -372,6 +372,95 @@ async fn precheck_skip_unchanged_and_partition_move() {
     cleanup(&pool, &collection).await;
 }
 
+/// Ignore + precheck (id-only): every existing id is skipped regardless of content, so a changed re-ingest
+/// under `Ignore` loads nothing and leaves the stored rows untouched; only genuinely new ids are loaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn precheck_ignore_skips_existing_by_id() {
+    let Some(dsn) = dsn() else {
+        eprintln!("skip precheck_ignore_skips_existing_by_id: PGSTAC_TEST_DSN unset");
+        return;
+    };
+    let pool = connect(&dsn).await;
+    let collection = format!("precheck_ign_{}", std::process::id());
+    cleanup(&pool, &collection).await;
+    setup_collection(&pool, &collection).await;
+
+    let n = 1000usize;
+    let items: Vec<Value> = (0..n)
+        .map(|i| {
+            make_item(
+                &collection,
+                &format!("item-{i}"),
+                2020,
+                7,
+                1 + u32::try_from(i % 28).unwrap(),
+            )
+        })
+        .collect();
+    let count_sql = "SELECT count(*) FROM pgstac.items WHERE collection=$1";
+
+    // initial ignore load: everything is new.
+    let (skipped0, loaded0) = pool
+        .upsert_items_precheck(items.clone(), ConflictPolicy::Ignore)
+        .await
+        .unwrap();
+    assert_eq!(
+        (skipped0, loaded0),
+        (0, n as u64),
+        "initial ignore load: all new"
+    );
+
+    // re-ingest with content CHANGED on every id (same ids). id-only ignore skips them ALL by id — a
+    // hash-based precheck would instead call them 'changed' and skip none.
+    let mut changed = items.clone();
+    for it in &mut changed {
+        it["properties"]["pgstac:test"] = json!("modified");
+    }
+    let (skipped1, loaded1) = pool
+        .upsert_items_precheck(changed, ConflictPolicy::Ignore)
+        .await
+        .unwrap();
+    assert_eq!(
+        (skipped1, loaded1),
+        (n as u64, 0),
+        "ignore skips every existing id (changed or not); nothing loaded"
+    );
+    assert_eq!(
+        count(&pool, count_sql, &collection).await,
+        n as i64,
+        "ignore must not add or duplicate rows"
+    );
+
+    // a batch mixing the existing ids with genuinely new ones -> only the new ids load.
+    let new_ids = 50usize;
+    let mut mixed = items.clone();
+    for j in 0..new_ids {
+        mixed.push(make_item(
+            &collection,
+            &format!("new-{j}"),
+            2020,
+            7,
+            1 + u32::try_from(j % 28).unwrap(),
+        ));
+    }
+    let (skipped2, loaded2) = pool
+        .upsert_items_precheck(mixed, ConflictPolicy::Ignore)
+        .await
+        .unwrap();
+    assert_eq!(
+        (skipped2, loaded2),
+        (n as u64, new_ids as u64),
+        "ignore loads only the new ids, skips all existing"
+    );
+    assert_eq!(
+        count(&pool, count_sql, &collection).await,
+        (n + new_ids) as i64,
+        "exactly the new ids were added"
+    );
+
+    cleanup(&pool, &collection).await;
+}
+
 /// Locks in the upsert vs delsert semantics on a cross-partition move: `Upsert` only touches the partition
 /// the new row routes to, so it ORPHANS the old row; `Delsert` deletes cross-partition, so it does not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -543,10 +543,11 @@ struct PrecheckBucket {
 
 static PRECHECK_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Loads `items`, skipping those whose content is unchanged from what's already stored and loading only new
-/// + changed items via [`crate::PgstacPool::create_items`]. A cheap hash + datetime pass buckets items by
-/// partition window; [`precheck_one_partition`] classifies each partition's bucket in parallel, and the
-/// survivors take the normal load (resolving same-partition conflicts per `policy`).
+/// Loads `items`, loading only those not already present-and-current and skipping the rest, via
+/// [`crate::PgstacPool::create_items`]. A cheap pass (id + datetime, plus a content hash for upsert/delsert)
+/// buckets items by partition window; [`precheck_one_partition`] classifies each partition's bucket in
+/// parallel, and the survivors take the normal load (resolving same-partition conflicts per `policy`).
+/// `ignore` skips every existing id; `upsert`/`delsert` skip only ids whose content is unchanged.
 ///
 /// Matching is by id: a datetime change within a partition is caught, but a cross-partition move reads as
 /// new (the old row lives in another partition) — `Upsert` leaves that old row in place, `Delsert` removes
@@ -559,6 +560,9 @@ pub async fn precheck_upsert(
     if items.is_empty() {
         return Ok((0, 0));
     }
+    // ignore/error only care whether the id already exists in the partition, not whether content changed —
+    // skip the content hash entirely (cheaper pass) and skip ALL existing ids, not just unchanged ones.
+    let use_hash = matches!(policy, ConflictPolicy::Upsert | ConflictPolicy::Delsert);
     let meta = pool.get().await?;
     let truncs = fetch_partition_truncs(&meta, &items).await?;
     drop(meta);
@@ -590,14 +594,16 @@ pub async fn precheck_upsert(
             .ords
             .push(i32::try_from(i).expect("batch index fits i32"));
         bucket.ids.push(id.to_string());
-        bucket.hashes.push(jsonb_hash(item).to_vec());
+        if use_hash {
+            bucket.hashes.push(jsonb_hash(item).to_vec());
+        }
     }
 
     // Classify each partition's bucket in parallel -> (ords to load, unchanged count).
     let mut set: tokio::task::JoinSet<Result<(Vec<i32>, u64)>> = tokio::task::JoinSet::new();
     for (_key, bucket) in buckets {
         let pool = pool.clone();
-        let _ = set.spawn(async move { precheck_one_partition(&pool, bucket).await });
+        let _ = set.spawn(async move { precheck_one_partition(&pool, bucket, use_hash).await });
     }
     let mut load_ords: HashSet<i32> = HashSet::new();
     let mut unchanged: u64 = 0;
@@ -621,14 +627,16 @@ pub async fn precheck_upsert(
     Ok((unchanged, loaded))
 }
 
-/// Classify one partition's bucket: returns the ords (original item indices) to LOAD (new + changed) and the
-/// count of UNCHANGED items skipped. Picks the cheaper side: empty/just-created partition -> all new (no
-/// probe); batch bigger than the partition -> pull the partition's `(id, item_hash)` and compare in memory;
-/// otherwise binary-COPY the (smaller) batch `(ord, id, hash)` into a TEMP table and JOIN this one partition
-/// (window-pruned). No per-item SQL-function arguments either way.
+/// Classify one partition's bucket: returns the ords (original item indices) to LOAD and the count SKIPPED.
+/// With `use_hash` (upsert/delsert) an existing id is skipped only when its content hash matches; without it
+/// (ignore) an existing id is skipped regardless of content. Picks the cheaper side: empty/just-created
+/// partition -> all new (no probe); batch bigger than the partition -> pull the partition's ids (+ item_hash
+/// when hashing) and compare in memory; otherwise binary-COPY the (smaller) batch into a TEMP table and JOIN
+/// this one partition (window-pruned). No per-item SQL-function arguments either way.
 async fn precheck_one_partition(
     pool: &crate::PgstacPool,
     bucket: PrecheckBucket,
+    use_hash: bool,
 ) -> Result<(Vec<i32>, u64)> {
     // Pre-load row count for the partition that holds repr_dt (named by the server's own partition_name).
     // No row / 0 => empty or just-created => every item is new; skip the probe entirely. ONE connection for
@@ -649,12 +657,47 @@ async fn precheck_one_partition(
 
     let batch = bucket.ords.len() as i64;
     if batch > n {
-        // PULL: the partition is the smaller side. Stream its (id, item_hash); compare client-side.
+        // PULL: the partition is the smaller side. Stream its ids (+ item_hash for upsert); compare in memory.
+        if use_hash {
+            let rows = match bucket.bounds {
+                Some((ws, we)) => {
+                    client
+                        .query(
+                            "SELECT id, item_hash FROM pgstac.items \
+                             WHERE collection = $1 AND datetime >= $2 AND datetime < $3",
+                            &[&bucket.collection, &ws, &we],
+                        )
+                        .await?
+                }
+                None => {
+                    client
+                        .query(
+                            "SELECT id, item_hash FROM pgstac.items WHERE collection = $1",
+                            &[&bucket.collection],
+                        )
+                        .await?
+                }
+            };
+            let mut stored: HashMap<String, Option<Vec<u8>>> = HashMap::with_capacity(rows.len());
+            for row in &rows {
+                let _ = stored.insert(row.get(0), row.get(1));
+            }
+            let mut to_load = Vec::new();
+            let mut unchanged = 0u64;
+            for ((ord, id), hash) in bucket.ords.iter().zip(&bucket.ids).zip(&bucket.hashes) {
+                match stored.get(id) {
+                    Some(Some(stored_hash)) if stored_hash == hash => unchanged += 1,
+                    _ => to_load.push(*ord),
+                }
+            }
+            return Ok((to_load, unchanged));
+        }
+        // ignore/error: only id existence matters — skip ALL existing ids (no hash).
         let rows = match bucket.bounds {
             Some((ws, we)) => {
                 client
                     .query(
-                        "SELECT id, item_hash FROM pgstac.items \
+                        "SELECT id FROM pgstac.items \
                          WHERE collection = $1 AND datetime >= $2 AND datetime < $3",
                         &[&bucket.collection, &ws, &we],
                     )
@@ -663,55 +706,108 @@ async fn precheck_one_partition(
             None => {
                 client
                     .query(
-                        "SELECT id, item_hash FROM pgstac.items WHERE collection = $1",
+                        "SELECT id FROM pgstac.items WHERE collection = $1",
                         &[&bucket.collection],
                     )
                     .await?
             }
         };
-        let mut stored: HashMap<String, Option<Vec<u8>>> = HashMap::with_capacity(rows.len());
-        for row in &rows {
-            let _ = stored.insert(row.get(0), row.get(1));
-        }
+        let stored: HashSet<String> = rows.iter().map(|row| row.get(0)).collect();
         let mut to_load = Vec::new();
         let mut unchanged = 0u64;
-        for ((ord, id), hash) in bucket.ords.iter().zip(&bucket.ids).zip(&bucket.hashes) {
-            match stored.get(id) {
-                Some(Some(stored_hash)) if stored_hash == hash => unchanged += 1,
-                _ => to_load.push(*ord),
+        for (ord, id) in bucket.ords.iter().zip(&bucket.ids) {
+            if stored.contains(id) {
+                unchanged += 1;
+            } else {
+                to_load.push(*ord);
             }
         }
         return Ok((to_load, unchanged));
     }
 
-    // PROBE: the batch is the smaller side. Binary-COPY (ord, id, hash) into a TEMP table, JOIN this one
-    // partition (window-pruned). Status: 0 = new (no match), 1 = unchanged (hash equal), 2 = changed.
-    // Reuses the task's single connection (the n-query above) — see the pool-deadlock note there.
+    // PROBE: the batch is the smaller side. Binary-COPY it into a TEMP table, JOIN this one partition
+    // (window-pruned). Reuses the task's single connection (the n-query above) — see the pool-deadlock note.
     let tx = client.transaction().await?;
     let tmp = format!("_pc_{}", PRECHECK_TEMP_SEQ.fetch_add(1, Ordering::Relaxed));
+    if use_hash {
+        // (ord, id, hash); status: 0 = new (no match), 1 = unchanged (hash equal), 2 = changed. Load 0 + 2.
+        tx.batch_execute(&format!(
+            "CREATE TEMP TABLE {tmp} (ord int4, id text, hash bytea) ON COMMIT DROP"
+        ))
+        .await?;
+        {
+            let sink = tx
+                .copy_in(&format!("COPY {tmp} FROM STDIN WITH (FORMAT BINARY)"))
+                .await?;
+            let writer = BinaryCopyInWriter::new(sink, &[Type::INT4, Type::TEXT, Type::BYTEA]);
+            pin_mut!(writer);
+            for ((ord, id), hash) in bucket.ords.iter().zip(&bucket.ids).zip(&bucket.hashes) {
+                let params: [&(dyn ToSql + Sync); 3] = [ord, id, hash];
+                writer.as_mut().write(&params).await?;
+            }
+            let _ = writer.finish().await?;
+        }
+        let classify = "CASE WHEN p.id IS NULL THEN 0 \
+                        WHEN t.hash IS NOT DISTINCT FROM p.item_hash THEN 1 ELSE 2 END";
+        let rows = match bucket.bounds {
+            Some((ws, we)) => {
+                tx.query(
+                    &format!(
+                        "SELECT t.ord, {classify} FROM {tmp} t \
+                         LEFT JOIN pgstac.items p \
+                           ON p.collection = $1 AND p.datetime >= $2 AND p.datetime < $3 AND p.id = t.id"
+                    ),
+                    &[&bucket.collection, &ws, &we],
+                )
+                .await?
+            }
+            None => {
+                tx.query(
+                    &format!(
+                        "SELECT t.ord, {classify} FROM {tmp} t \
+                         LEFT JOIN pgstac.items p ON p.collection = $1 AND p.id = t.id"
+                    ),
+                    &[&bucket.collection],
+                )
+                .await?
+            }
+        };
+        let mut to_load = Vec::new();
+        let mut unchanged = 0u64;
+        for row in &rows {
+            let ord: i32 = row.get(0);
+            let status: i32 = row.get(1);
+            if status == 1 {
+                unchanged += 1;
+            } else {
+                to_load.push(ord);
+            }
+        }
+        tx.commit().await?;
+        return Ok((to_load, unchanged));
+    }
+    // ignore/error: (ord, id) only — an existing id is skipped, a new id is loaded.
     tx.batch_execute(&format!(
-        "CREATE TEMP TABLE {tmp} (ord int4, id text, hash bytea) ON COMMIT DROP"
+        "CREATE TEMP TABLE {tmp} (ord int4, id text) ON COMMIT DROP"
     ))
     .await?;
     {
         let sink = tx
             .copy_in(&format!("COPY {tmp} FROM STDIN WITH (FORMAT BINARY)"))
             .await?;
-        let writer = BinaryCopyInWriter::new(sink, &[Type::INT4, Type::TEXT, Type::BYTEA]);
+        let writer = BinaryCopyInWriter::new(sink, &[Type::INT4, Type::TEXT]);
         pin_mut!(writer);
-        for ((ord, id), hash) in bucket.ords.iter().zip(&bucket.ids).zip(&bucket.hashes) {
-            let params: [&(dyn ToSql + Sync); 3] = [ord, id, hash];
+        for (ord, id) in bucket.ords.iter().zip(&bucket.ids) {
+            let params: [&(dyn ToSql + Sync); 2] = [ord, id];
             writer.as_mut().write(&params).await?;
         }
         let _ = writer.finish().await?;
     }
-    let classify = "CASE WHEN p.id IS NULL THEN 0 \
-                    WHEN t.hash IS NOT DISTINCT FROM p.item_hash THEN 1 ELSE 2 END";
     let rows = match bucket.bounds {
         Some((ws, we)) => {
             tx.query(
                 &format!(
-                    "SELECT t.ord, {classify} FROM {tmp} t \
+                    "SELECT t.ord, (p.id IS NOT NULL) FROM {tmp} t \
                      LEFT JOIN pgstac.items p \
                        ON p.collection = $1 AND p.datetime >= $2 AND p.datetime < $3 AND p.id = t.id"
                 ),
@@ -722,7 +818,7 @@ async fn precheck_one_partition(
         None => {
             tx.query(
                 &format!(
-                    "SELECT t.ord, {classify} FROM {tmp} t \
+                    "SELECT t.ord, (p.id IS NOT NULL) FROM {tmp} t \
                      LEFT JOIN pgstac.items p ON p.collection = $1 AND p.id = t.id"
                 ),
                 &[&bucket.collection],
@@ -734,8 +830,8 @@ async fn precheck_one_partition(
     let mut unchanged = 0u64;
     for row in &rows {
         let ord: i32 = row.get(0);
-        let status: i32 = row.get(1);
-        if status == 1 {
+        let exists: bool = row.get(1);
+        if exists {
             unchanged += 1;
         } else {
             to_load.push(ord);
