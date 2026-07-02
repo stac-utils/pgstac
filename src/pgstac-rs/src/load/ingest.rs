@@ -552,7 +552,7 @@ static PRECHECK_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Loads `items`, loading only those not already present-and-current and skipping the rest, via
 /// [`crate::PgstacPool::create_items`]. A cheap pass (id + datetime, plus a content hash for upsert/delsert)
-/// buckets items by partition window; [`precheck_one_partition`] classifies each partition's bucket in
+/// buckets items by partition window; `precheck_one_partition` classifies each partition's bucket in
 /// parallel, and the survivors take the normal load (resolving same-partition conflicts per `policy`).
 /// `ignore` skips every existing id; `upsert`/`delsert` skip only ids whose content is unchanged.
 ///

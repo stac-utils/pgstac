@@ -232,6 +232,10 @@ jobs:
             cargo check $feat --all-targets --manifest-path src/pgstac-rs/Cargo.toml
             echo "::endgroup::"
           done
+      - name: Check docs (deny warnings)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --all-features --no-deps --manifest-path src/pgstac-rs/Cargo.toml
       - name: Test
         env:
           PGSTAC_RS_TEST_DB: postgresql://username:password@localhost:5439/pgstac_rs_test_rich

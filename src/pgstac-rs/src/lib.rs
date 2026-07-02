@@ -44,7 +44,10 @@
 //!
 //! # Features
 //!
-//! - `tls`: provide a function to create an unverified tls provider, which can be useful in some circumstances (see <https://github.com/stac-utils/rustac/issues/375>)
+//! - `pool`: a `deadpool`-backed connection pool (`PgstacPool`) with rustls TLS.
+//! - `export`: the stac-geoparquet dump/export library.
+//! - `cli`: the `pgstac` binary (implies `export` + `pool`).
+//! - `python`: the Python extension module built with maturin (implies `pool` + `export`).
 
 #![deny(
     elided_lifetimes_in_paths,

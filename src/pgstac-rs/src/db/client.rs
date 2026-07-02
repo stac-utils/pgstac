@@ -39,7 +39,7 @@ impl PgConn for deadpool_postgres::Client {
     }
 }
 
-/// A wrapper around a [`GenericClient`] that implements the STAC client traits ([`ItemsClient`],
+/// A wrapper around a [`GenericClient`](tokio_postgres::GenericClient) that implements the STAC client traits ([`ItemsClient`],
 /// [`CollectionsClient`], and [`TransactionClient`]) on the Rust pgstac engine.
 ///
 /// Unlike calling the [`Pgstac`] trait directly on a bare connection — which re-detects the database's
@@ -197,7 +197,7 @@ impl<C: PgConn + Send + Sync> CollectionsClient for Client<C> {
 /// Writes go through the **Rust loader**, not the SQL `create_item`/`create_items` functions:
 /// `add_items` dehydrates, splits fragments, and binary-COPYs entirely in Rust (see [`load_items`]).
 /// The loader needs a `&mut tokio_postgres::Client` to open its own transaction for the binary COPY; it
-/// reaches it via `pg_mut()`, so this works for any [`PgConn`] — a direct or a pooled connection.
+/// reaches it via `pg_mut()`, so this works for any `PgConn` — a direct or a pooled connection.
 impl<C: PgConn + Send + Sync> TransactionClient for Client<C> {
     type Error = Error;
 

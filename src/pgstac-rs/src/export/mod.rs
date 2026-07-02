@@ -1,4 +1,4 @@
-//! Data export (dump) library for pgstac.
+//! Data export (dump) module for pgstac.
 //!
 //! This module turns a pgstac instance (0.9.11 or 0.10) into a self-describing,
 //! restorable dump: fully hydrated items as stac-geoparquet (one file per

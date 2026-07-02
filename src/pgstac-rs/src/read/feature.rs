@@ -6,7 +6,7 @@
 //! **at serialize time** — descending only where both sides are objects at a key, and emitting arrays,
 //! scalars, and one-sided keys **verbatim** from the raw bytes. `bbox` is likewise emitted from raw
 //! bytes (preserving PostgreSQL `numeric` precision that an f64 round-trip would lose). Everything else
-//! reuses [`hydrate_fragment_core`].
+//! reuses `hydrate_fragment_core`.
 //!
 //! The merge reproduces SQL `jsonb_merge_recursive(frag, item)` exactly (see the parallel
 //! implementation in [`crate::hydrate`]); validated by parsing the output back and comparing to

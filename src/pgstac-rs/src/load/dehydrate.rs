@@ -197,7 +197,7 @@ pub struct DehydratedRow {
 /// Dehydrates one self-contained STAC item into a [`DehydratedRow`], consuming `item`.
 ///
 /// Matches SQL `content_dehydrate(item)`: computes the canonical `item_hash` over the whole item, splits
-/// the geometry to EWKB, derives the temporal columns ([`stac_daterange`] semantics), promotes the
+/// the geometry to EWKB, derives the temporal columns (`stac_daterange` semantics), promotes the
 /// queryable columns out of `properties`, and routes the remaining top-level keys to `extra`.
 pub fn dehydrate(item: Value, schema: &DehydrateSchema) -> Result<DehydratedRow> {
     // The hash is over the full item, so compute it before deconstructing (borrow, no clone).
