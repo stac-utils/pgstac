@@ -486,10 +486,7 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
     use stac::api::{ItemsClient, Search};
     use std::io::Write as _;
 
-    let mut config = ConnectConfig::from_env();
-    if let Some(dsn) = args.dsn.clone() {
-        config.dsn = Some(dsn);
-    }
+    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
     let pool = PgstacPool::connect(config).await?;
 
     // Build the Search from CLI args.
@@ -599,10 +596,7 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Err("no loadable inputs found (.parquet/.geoparquet/.ndjson/.json)".into());
     }
 
-    let mut config = ConnectConfig::from_env();
-    if let Some(dsn) = args.dsn.clone() {
-        config.dsn = Some(dsn);
-    }
+    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
     let pool_size = args.pool_size.unwrap_or_else(|| args.concurrency.max(4));
     let pool = PgstacPool::connect_with(
         config,
@@ -734,10 +728,7 @@ async fn run_maintain(args: MaintainArgs) -> Result<(), Box<dyn std::error::Erro
 /// Delete an item (with `--item`) or a whole collection (without). Both go through the pool's
 /// SECURITY DEFINER delete functions.
 async fn run_delete(args: DeleteArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = ConnectConfig::from_env();
-    if let Some(dsn) = args.dsn.clone() {
-        config.dsn = Some(dsn);
-    }
+    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
     let pool = PgstacPool::connect(config).await?;
     match &args.item {
         Some(item) => {

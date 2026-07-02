@@ -134,6 +134,24 @@ impl ConnectConfig {
         }
     }
 
+    /// Makes `dsn` the authoritative connection target, if given: it clears any host/port/dbname/user/
+    /// password already on this config so the DSN wins over ambient `PG*` environment values (e.g. a
+    /// `PGDATABASE` loaded by [`from_env`](Self::from_env)). TLS, options, and search-path settings are
+    /// kept. Use this for a CLI `--dsn` flag, where an explicit DSN must take precedence over the
+    /// environment.
+    #[must_use]
+    pub fn with_dsn(mut self, dsn: Option<String>) -> Self {
+        if let Some(dsn) = dsn {
+            self.dsn = Some(dsn);
+            self.host = None;
+            self.port = None;
+            self.dbname = None;
+            self.user = None;
+            self.password = None;
+        }
+        self
+    }
+
     /// Builds a [`tokio_postgres::Config`], guaranteeing `search_path` is set at startup via `options`.
     ///
     /// If [`dsn`](Self::dsn) is set it is parsed as the base config; any explicitly-set field then
@@ -293,6 +311,33 @@ mod tests {
         };
         let pg = cfg.to_pg_config().unwrap();
         assert_eq!(pg.get_dbname(), Some("override"));
+    }
+
+    #[test]
+    fn with_dsn_wins_over_env_target() {
+        // An explicit `--dsn` must be authoritative: an ambient `PGDATABASE`/`PGHOST` loaded by
+        // `from_env` must not override the database the DSN names. Regression for the CI failure where
+        // `pgstac load --dsn <clone>` connected to `PGDATABASE=postgis` (no pgstac) instead of the clone.
+        let cfg = ConnectConfig {
+            dbname: Some("postgis".to_string()),
+            host: Some("envhost".to_string()),
+            port: Some(1111),
+            ..Default::default()
+        }
+        .with_dsn(Some("postgresql://u:p@dsnhost:5432/target".to_string()));
+        let pg = cfg.to_pg_config().unwrap();
+        assert_eq!(pg.get_dbname(), Some("target"));
+        assert_eq!(pg.get_ports(), &[5432]);
+    }
+
+    #[test]
+    fn with_dsn_none_keeps_env() {
+        let cfg = ConnectConfig {
+            dbname: Some("postgis".to_string()),
+            ..Default::default()
+        }
+        .with_dsn(None);
+        assert_eq!(cfg.dbname.as_deref(), Some("postgis"));
     }
 
     #[test]
