@@ -1,9 +1,12 @@
 use crate::dehydrate::DehydrateSchema;
 use crate::ingest::{ConflictPolicy, load_items};
+use crate::db::call;
+use crate::read::collections;
 use crate::search::search_page_with;
 use crate::source::CachedHydration;
-use crate::{Error, Page, Pgstac};
-use serde_json::{Map, Value};
+use crate::{Error, Page};
+use serde::Serialize;
+use serde_json::Value;
 use stac::api::{CollectionsClient, ItemCollection, ItemsClient, Search, TransactionClient};
 use stac::{Collection, Item};
 use std::ops::{Deref, DerefMut};
@@ -39,14 +42,15 @@ impl PgConn for deadpool_postgres::Client {
     }
 }
 
-/// A wrapper around a [`GenericClient`](tokio_postgres::GenericClient) that implements the STAC client traits ([`ItemsClient`],
+/// A wrapper around a connection (a bare [`tokio_postgres::Client`] or, with the `pool` feature, a pooled
+/// `deadpool_postgres::Client`) that implements the STAC client traits ([`ItemsClient`],
 /// [`CollectionsClient`], and [`TransactionClient`]) on the Rust pgstac engine.
 ///
-/// Unlike calling the [`Pgstac`] trait directly on a bare connection — which re-detects the database's
-/// hydration invariants (storage model + promoted schema) on every search/item — `Client` caches those
-/// invariants on first use and reuses them across every read on this connection, saving the catalog
-/// round trips per call. Use [`Deref`] to reach the underlying [`Pgstac`] methods (version, settings,
-/// CRUD, …).
+/// `Client` caches the database's hydration invariants (storage model + promoted schema) on first use and
+/// reuses them across every read on this connection, saving the catalog round trips a fresh detection would
+/// cost per call. The pgstac-specific operations that are not STAC CRUD — version, settings, and collection
+/// maintenance — are inherent methods; [`Deref`] reaches the underlying [`tokio_postgres::Client`] for raw
+/// SQL.
 ///
 /// # Examples
 ///
@@ -110,6 +114,63 @@ impl<C: PgConn + Send + Sync> Client<C> {
             .await
             .cloned()
     }
+
+    /// Returns the **pgstac** version.
+    pub async fn pgstac_version(&self) -> Result<String, Error> {
+        call::string(self.client.pg(), "get_version", &[]).await
+    }
+
+    /// Returns whether the **pgstac** database is readonly.
+    pub async fn readonly(&self) -> Result<bool, Error> {
+        call::boolean(self.client.pg(), "readonly", &[]).await
+    }
+
+    /// Returns the value of the `context` **pgstac** setting (defaults to "off").
+    pub async fn context(&self) -> Result<bool, Error> {
+        call::string(self.client.pg(), "get_setting", &[&"context"])
+            .await
+            .map(|value| value == "on")
+    }
+
+    /// Sets the value of a **pgstac** setting.
+    pub async fn set_pgstac_setting(&self, key: &str, value: &str) -> Result<(), Error> {
+        let _ = self
+            .client
+            .pg()
+            .execute(
+                "INSERT INTO pgstac_settings (name, value) VALUES ($1, $2) ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;",
+                &[&key, &value],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Adds or updates a collection.
+    pub async fn upsert_collection<T: Serialize>(&self, collection: T) -> Result<(), Error> {
+        let collection = serde_json::to_value(collection)?;
+        call::void(self.client.pg(), "upsert_collection", &[&collection]).await
+    }
+
+    /// Updates a collection.
+    pub async fn update_collection<T: Serialize>(&self, collection: T) -> Result<(), Error> {
+        let collection = serde_json::to_value(collection)?;
+        call::void(self.client.pg(), "update_collection", &[&collection]).await
+    }
+
+    /// Updates all collection extents.
+    pub async fn update_collection_extents(&self) -> Result<(), Error> {
+        call::void(self.client.pg(), "update_collection_extents", &[]).await
+    }
+
+    /// Deletes a collection.
+    pub async fn delete_collection(&self, id: &str) -> Result<(), Error> {
+        call::void(self.client.pg(), "delete_collection", &[&id]).await
+    }
+
+    /// Deletes an item.
+    pub async fn delete_item(&self, id: &str, collection: Option<&str>) -> Result<(), Error> {
+        call::void(self.client.pg(), "delete_item", &[&id, &collection]).await
+    }
 }
 
 impl<C: PgConn + Send + Sync> ItemsClient for Client<C> {
@@ -124,7 +185,7 @@ impl<C: PgConn + Send + Sync> ItemsClient for Client<C> {
             .and_then(Value::as_str)
             .map(str::to_string);
         let limit = body.get("limit").and_then(Value::as_i64).unwrap_or(10);
-        let page: Page = search_page_with(
+        let page: Page = match search_page_with(
             self.client.pg(),
             hydration.model,
             hydration.schema.as_deref(),
@@ -132,23 +193,29 @@ impl<C: PgConn + Send + Sync> ItemsClient for Client<C> {
             token.as_deref(),
             limit,
         )
-        .await?
-        .try_into()?;
-        let next_token = page.next_token();
-        let prev_token = page.prev_token();
-        let mut item_collection = ItemCollection::new(page.features)?;
-        if let Some(next_token) = next_token {
-            let mut next = Map::new();
-            let _ = next.insert("token".into(), next_token.into());
-            item_collection.next = Some(next);
-        }
-        if let Some(prev_token) = prev_token {
-            let mut prev = Map::new();
-            let _ = prev.insert("token".into(), prev_token.into());
-            item_collection.prev = Some(prev);
-        }
-        item_collection.context = page.context;
-        Ok(item_collection)
+        .await
+        {
+            Ok(page) => page.try_into()?,
+            // A malformed token surfaces as a `keyset_decode` error in SQL; map it to a clear
+            // InvalidToken rather than a raw DB error (and never an offset-style fallback).
+            Err(Error::TokioPostgres(e)) => {
+                let in_keyset = e
+                    .as_db_error()
+                    .and_then(|db| db.where_())
+                    .is_some_and(|w| w.contains("keyset_decode") || w.contains("keyset_where"));
+                let msg = e.to_string();
+                if in_keyset
+                    || msg.contains("token")
+                    || msg.contains("keyset")
+                    || msg.contains("base64")
+                {
+                    return Err(Error::InvalidToken(msg));
+                }
+                return Err(Error::TokioPostgres(e));
+            }
+            Err(other) => return Err(other),
+        };
+        ItemCollection::try_from(page)
     }
 
     async fn item(&self, collection_id: &str, item_id: &str) -> Result<Option<Item>, Error> {
@@ -178,16 +245,16 @@ impl<C: PgConn + Send + Sync> CollectionsClient for Client<C> {
     type Error = Error;
 
     async fn collections(&self) -> Result<Vec<Collection>, Error> {
-        let values = Pgstac::collections(self.client.pg()).await?;
-        values
+        collections::all(self.client.pg())
+            .await?
             .into_iter()
             .map(|v| serde_json::from_value(v).map_err(Error::from))
             .collect()
     }
 
     async fn collection(&self, id: &str) -> Result<Option<Collection>, Error> {
-        let value = Pgstac::collection(self.client.pg(), id).await?;
-        value
+        collections::get_collection(self.client.pg(), id)
+            .await?
             .map(serde_json::from_value)
             .transpose()
             .map_err(Error::from)
@@ -204,7 +271,8 @@ impl<C: PgConn + Send + Sync> TransactionClient for Client<C> {
     /// Creates a collection via the SQL `create_collection` (which derives the `fragment_config` from
     /// `item_assets`). Collections are not subject to the item-write restriction and are not a bulk path.
     async fn add_collection(&mut self, collection: Collection) -> Result<(), Error> {
-        Pgstac::add_collection(self.client.pg(), collection).await
+        let collection = serde_json::to_value(collection)?;
+        call::void(self.client.pg(), "create_collection", &[&collection]).await
     }
 
     /// Creates a single item through the Rust loader, erroring if its id already exists.

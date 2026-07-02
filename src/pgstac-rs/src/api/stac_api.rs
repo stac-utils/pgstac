@@ -3,7 +3,7 @@
 //! the rest of the crate uses — the keyset search in [`crate::search`] and the Rust loader for writes —
 //! so these traits are the rustac-native API surface over that engine, not a second implementation.
 
-use crate::{Error, Pgstac, PgstacPool};
+use crate::{Error, PgstacPool};
 use futures::{Stream, StreamExt};
 use stac::api::{
     CollectionsClient, ItemCollection, ItemsClient, Search, StreamItemsClient, TransactionClient,
@@ -14,9 +14,7 @@ impl ItemsClient for PgstacPool {
     type Error = Error;
 
     async fn search(&self, search: Search) -> Result<ItemCollection, Error> {
-        let client = self.get().await?;
-        let page = Pgstac::search(&**client, search).await?;
-        ItemCollection::try_from(page)
+        self.client().await?.search(search).await
     }
 
     async fn item(&self, collection_id: &str, item_id: &str) -> Result<Option<Item>, Error> {
@@ -31,12 +29,7 @@ impl CollectionsClient for PgstacPool {
     type Error = Error;
 
     async fn collections(&self) -> Result<Vec<Collection>, Error> {
-        let client = self.get().await?;
-        Pgstac::collections(&**client)
-            .await?
-            .into_iter()
-            .map(|value| serde_json::from_value(value).map_err(Error::from))
-            .collect()
+        self.client().await?.collections().await
     }
 
     async fn collection(&self, id: &str) -> Result<Option<Collection>, Error> {

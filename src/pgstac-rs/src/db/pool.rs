@@ -2,7 +2,7 @@
 
 use crate::source::CachedHydration;
 use crate::tls::make_tls_connect;
-use crate::{ConnectConfig, Pgstac, Result};
+use crate::{ConnectConfig, Result};
 use deadpool_postgres::{Client, Manager, ManagerConfig, Pool, RecyclingMethod};
 use serde_json::Value;
 use std::sync::Arc;
@@ -149,7 +149,8 @@ impl PgstacPool {
 
     /// Acquires a connection from the pool.
     ///
-    /// The returned client dereferences to a [`tokio_postgres::Client`] and implements [`Pgstac`].
+    /// The returned client dereferences to a [`tokio_postgres::Client`]; use [`client`](Self::client) for
+    /// the STAC client traits with cached hydration.
     pub async fn get(&self) -> Result<Client> {
         self.pool.get().await.map_err(Into::into)
     }
@@ -167,7 +168,7 @@ impl PgstacPool {
 
     /// Returns the pgstac version reported by the database.
     pub async fn version(&self) -> Result<String> {
-        self.get().await?.pgstac_version().await
+        self.client().await?.pgstac_version().await
     }
 
     /// Runs one page of a search and returns the hydrated features plus the keyset pagination tokens.

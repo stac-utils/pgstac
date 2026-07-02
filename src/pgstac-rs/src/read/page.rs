@@ -88,6 +88,7 @@ impl TryFrom<Page> for ItemCollection {
         let mut item_collection = ItemCollection::new(page.features)?;
         item_collection.links = page.links;
         item_collection.number_matched = number_matched;
+        item_collection.number_returned = page.number_returned.map(|n| n as u64);
         item_collection.context = page.context;
         item_collection.additional_fields = page.additional_fields;
         item_collection.next = next;

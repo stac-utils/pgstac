@@ -2,43 +2,45 @@
 //!
 //! # Examples
 //!
-//! [Pgstac] is a trait to query a **pgstac** database.
-//! It is implemented for anything that implements [tokio_postgres::GenericClient]:
+//! [Client] wraps a connection and talks to a **pgstac** database, caching the database's hydration
+//! invariants across calls:
 //!
 //! ```no_run
-//! use pgstac::Pgstac;
+//! use pgstac::Client;
 //! use tokio_postgres::NoTls;
 //!
 //! # tokio_test::block_on(async {
 //! let config = "postgresql://username:password@localhost:5432/postgis";
-//! let (client, connection) = tokio_postgres::connect(config, NoTls).await.unwrap();
+//! let (connection, conn) = tokio_postgres::connect(config, NoTls).await.unwrap();
 //! tokio::spawn(async move {
-//!     if let Err(e) = connection.await {
+//!     if let Err(e) = conn.await {
 //!      eprintln!("connection error: {}", e);
 //!     }
 //! });
+//! let client = Client::new(connection);
 //! println!("{}", client.pgstac_version().await.unwrap());
 //! # })
 //! ```
 //!
-//! If you want to work in a transaction, you can do that too:
+//! Reads and writes both go through the same `Client` via the [`stac::api`] client traits:
 //!
 //! ```no_run
-//! use pgstac::Pgstac;
+//! use pgstac::Client;
 //! use stac::Collection;
+//! use stac::api::{ItemsClient, TransactionClient};
 //! use tokio_postgres::NoTls;
 //!
 //! # tokio_test::block_on(async {
 //! let config = "postgresql://username:password@localhost:5432/postgis";
-//! let (mut client, connection) = tokio_postgres::connect(config, NoTls).await.unwrap();
+//! let (connection, conn) = tokio_postgres::connect(config, NoTls).await.unwrap();
 //! tokio::spawn(async move {
-//!     if let Err(e) = connection.await {
+//!     if let Err(e) = conn.await {
 //!      eprintln!("connection error: {}", e);
 //!     }
 //! });
-//! let transaction = client.transaction().await.unwrap();
-//! transaction.add_collection(Collection::new("an-id", "a description")).await.unwrap();
-//! transaction.commit().await.unwrap();
+//! let mut client = Client::new(connection);
+//! client.add_collection(Collection::new("an-id", "a description")).await.unwrap();
+//! let items = client.search(Default::default()).await.unwrap();
 //! # })
 //! ```
 //!
@@ -102,12 +104,11 @@ pub(crate) use db::tls;
 
 pub use db::client::Client;
 pub use db::connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
-pub use read::page::Page;
+pub(crate) use read::page::Page;
 #[cfg(feature = "pool")]
 pub use db::pool::{DEFAULT_POOL_SIZE, PgstacPool, PoolOptions, PoolerMode};
-use serde::{Serialize, de::DeserializeOwned};
-use stac::api::{ItemCollection, Search};
-use tokio_postgres::{GenericClient, NoTls, Row, types::ToSql};
+use stac::api::{ItemCollection, ItemsClient, Search};
+use tokio_postgres::NoTls;
 
 /// Crate-specific error enum.
 #[derive(Debug, thiserror::Error)]
@@ -233,17 +234,23 @@ pub async fn search(
         search.items.limit = Some(max_items.try_into()?);
     }
 
+    let client = Client::new(client);
     loop {
         tracing::info!("Fetching page");
         let page = client.search(search.clone()).await?;
-        let next_token = page.next_token();
+        let next_token = page
+            .next
+            .as_ref()
+            .and_then(|token_map| token_map.get("token"))
+            .and_then(|token| token.as_str())
+            .map(str::to_string);
         let has_next_token = next_token.is_some();
         if let Some(token) = next_token {
             let _ = search
                 .additional_fields
                 .insert("token".into(), token.into());
         }
-        for item in page.features {
+        for item in page.items {
             all_items.push(item);
             if let Some(max_items) = max_items
                 && all_items.len() >= max_items
@@ -267,261 +274,18 @@ pub async fn search(
     Ok(ItemCollection::new(all_items)?)
 }
 
-/// Methods for working with **pgstac**.
-#[allow(async_fn_in_trait)]
-pub trait Pgstac: GenericClient {
-    /// Returns the **pgstac** version.
-    async fn pgstac_version(&self) -> Result<String> {
-        self.pgstac_string("get_version", &[]).await
-    }
-
-    /// Returns whether the **pgstac** database is readonly.
-    async fn readonly(&self) -> Result<bool> {
-        self.pgstac_bool("readonly", &[]).await
-    }
-
-    /// Returns the value of the `context` **pgstac** setting.
-    ///
-    /// This setting defaults to "off".  See [the **pgstac**
-    /// docs](https://github.com/stac-utils/pgstac/blob/main/docs/src/pgstac.md#pgstac-settings)
-    /// for more information on the settings and their meaning.
-    async fn context(&self) -> Result<bool> {
-        self.pgstac_string("get_setting", &[&"context"])
-            .await
-            .map(|value| value == "on")
-    }
-
-    /// Sets the value of a **pgstac** setting.
-    async fn set_pgstac_setting(&self, key: &str, value: &str) -> Result<()> {
-        self.execute(
-            "INSERT INTO pgstac_settings (name, value) VALUES ($1, $2) ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;",
-            &[&key, &value],
-        ).await.map(|_| ()).map_err(Error::from)
-    }
-
-    /// Fetches all collections, via a blank collection-search paged to completion.
-    async fn collections(&self) -> Result<Vec<JsonValue>>
-    where
-        Self: Sized,
-    {
-        let mut all = Vec::new();
-        let mut token: Option<String> = None;
-        loop {
-            let page =
-                collections::collection_search(self, &serde_json::json!({}), token.as_deref())
-                    .await?;
-            let next = page.next_token;
-            all.extend(page.features);
-            match next {
-                Some(next) => token = Some(next),
-                None => break,
-            }
-        }
-        Ok(all)
-    }
-
-    /// Fetches a collection by id, via collection-search filtered to that id.
-    async fn collection(&self, id: &str) -> Result<Option<JsonValue>>
-    where
-        Self: Sized,
-    {
-        Ok(
-            collections::collection_search(self, &serde_json::json!({"ids": [id]}), None)
-                .await?
-                .features
-                .into_iter()
-                .next(),
-        )
-    }
-
-    /// Adds a collection.
-    async fn add_collection<T>(&self, collection: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let collection = serde_json::to_value(collection)?;
-        self.pgstac_void("create_collection", &[&collection]).await
-    }
-
-    /// Adds or updates a collection.
-    async fn upsert_collection<T>(&self, collection: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let collection = serde_json::to_value(collection)?;
-        self.pgstac_void("upsert_collection", &[&collection]).await
-    }
-
-    /// Updates all collection extents.
-    async fn update_collection_extents(&self) -> Result<()> {
-        self.pgstac_void("update_collection_extents", &[]).await
-    }
-
-    /// Updates a collection.
-    async fn update_collection<T>(&self, collection: T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        let collection = serde_json::to_value(collection)?;
-        self.pgstac_void("update_collection", &[&collection]).await
-    }
-
-    /// Deletes a collection.
-    async fn delete_collection(&self, id: &str) -> Result<()> {
-        self.pgstac_void("delete_collection", &[&id]).await
-    }
-
-    /// Fetches an item, hydrated by the Rust engine.
-    async fn item(&self, id: &str, collection: Option<&str>) -> Result<Option<JsonValue>>
-    where
-        Self: Sized,
-    {
-        let body = match collection {
-            Some(collection) => {
-                serde_json::json!({"collections": [collection], "ids": [id], "limit": 1})
-            }
-            None => serde_json::json!({"ids": [id], "limit": 1}),
-        };
-        Ok(search::search_page(self, &body, None, 1)
-            .await?
-            .features
-            .into_iter()
-            .next())
-    }
-
-    // Item writes (add/upsert/update) are intentionally NOT on this trait: the Rust write path is the
-    // fast loader ([`crate::ingest::load_items`], surfaced via [`crate::PgstacPool`] /
-    // [`crate::Client`]'s `stac::api::TransactionClient`), and no Rust code calls the SQL ingest
-    // functions. The SQL `create_item`/`create_items`/`upsert_item(s)`/`update_item` functions remain
-    // in the schema as the compatible SQL ingest path for non-Rust clients — Rust just never calls them.
-
-    /// Deletes an item.
-    async fn delete_item(&self, id: &str, collection: Option<&str>) -> Result<()> {
-        self.pgstac_void("delete_item", &[&id, &collection]).await
-    }
-
-    /// Searches for items.
-    async fn search(&self, search: Search) -> Result<Page>
-    where
-        Self: Sized,
-    {
-        let search = search.into_cql2_json()?;
-        let body = serde_json::to_value(search)?;
-        let token = body
-            .get("token")
-            .and_then(JsonValue::as_str)
-            .map(str::to_string);
-        let limit = body.get("limit").and_then(JsonValue::as_i64).unwrap_or(10);
-        match search::search_page(self, &body, token.as_deref(), limit).await {
-            Ok(page) => page.try_into(),
-            // A malformed token surfaces as a `keyset_decode` error in SQL; map it to a clear
-            // InvalidToken rather than a raw DB error (and never an offset-style fallback).
-            Err(Error::TokioPostgres(e)) => {
-                let in_keyset = e
-                    .as_db_error()
-                    .and_then(|db| db.where_())
-                    .is_some_and(|w| w.contains("keyset_decode") || w.contains("keyset_where"));
-                let msg = e.to_string();
-                if in_keyset
-                    || msg.contains("token")
-                    || msg.contains("keyset")
-                    || msg.contains("base64")
-                {
-                    Err(Error::InvalidToken(msg))
-                } else {
-                    Err(Error::TokioPostgres(e))
-                }
-            }
-            Err(other) => Err(other),
-        }
-    }
-
-    /// Runs a pgstac function.
-    async fn pgstac(
-        &self,
-        function: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> std::result::Result<Row, tokio_postgres::Error> {
-        let param_string = (0..params.len())
-            .map(|i| format!("${}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = format!("SELECT * from pgstac.{function}({param_string})");
-        self.query_one(&query, params).await
-    }
-
-    /// Returns a string result from a pgstac function.
-    async fn pgstac_string(
-        &self,
-        function: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<String> {
-        let row = self.pgstac(function, params).await?;
-        row.try_get(function).map_err(Error::from)
-    }
-
-    /// Returns a bool result from a pgstac function.
-    async fn pgstac_bool(&self, function: &str, params: &[&(dyn ToSql + Sync)]) -> Result<bool> {
-        let row = self.pgstac(function, params).await?;
-        row.try_get(function).map_err(Error::from)
-    }
-
-    /// Returns a vector from a pgstac function.
-    async fn pgstac_vec<T>(&self, function: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<T>>
-    where
-        T: DeserializeOwned,
-    {
-        if let Some(value) = self.pgstac_opt(function, params).await? {
-            Ok(value)
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Returns an optional value from a pgstac function.
-    async fn pgstac_opt<T>(
-        &self,
-        function: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<T>>
-    where
-        T: DeserializeOwned,
-    {
-        let row = self.pgstac(function, params).await?;
-        let option: Option<JsonValue> = row.try_get(function)?;
-        let option = option.map(|v| serde_json::from_value(v)).transpose()?;
-        Ok(option)
-    }
-
-    /// Returns a deserializable value from a pgstac function.
-    async fn pgstac_value<T>(&self, function: &str, params: &[&(dyn ToSql + Sync)]) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let row = self.pgstac(function, params).await?;
-        let value = row.try_get(function)?;
-        serde_json::from_value(value).map_err(Error::from)
-    }
-
-    /// Returns nothing from a pgstac function.
-    async fn pgstac_void(&self, function: &str, params: &[&(dyn ToSql + Sync)]) -> Result<()> {
-        let _ = self.pgstac(function, params).await?;
-        Ok(())
-    }
-}
-
-impl<T> Pgstac for T where T: GenericClient {}
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::Pgstac;
+    use super::Client as PgstacClient;
     use geojson::Geometry;
     use rstest::{fixture, rstest};
     use serde_json::{Map, json};
-    use stac::api::{Fields, Filter, Search, Sortby};
+    use stac::api::{
+        CollectionsClient, Fields, Filter, ItemsClient, Search, Sortby, TransactionClient,
+    };
     use stac::{Collection, Item};
     use std::{
-        ops::Deref,
+        ops::{Deref, DerefMut},
         sync::{LazyLock, atomic::AtomicU16},
     };
     use tokio::sync::Mutex;
@@ -531,7 +295,7 @@ pub(crate) mod tests {
     static MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     struct TestClient {
-        client: Client,
+        client: PgstacClient<Client>,
         config: Config,
         dbname: String,
     }
@@ -595,7 +359,7 @@ pub(crate) mod tests {
             let (client, connection) = test_config.dbname(&dbname).connect(NoTls).await.unwrap();
             let _handle = tokio::spawn(async move { connection.await.unwrap() });
             TestClient {
-                client,
+                client: PgstacClient::new(client),
                 config,
                 dbname,
             }
@@ -692,14 +456,28 @@ pub(crate) mod tests {
     }
 
     impl Deref for TestClient {
-        type Target = Client;
+        type Target = PgstacClient<Client>;
         fn deref(&self) -> &Self::Target {
             &self.client
         }
     }
 
+    impl DerefMut for TestClient {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.client
+        }
+    }
+
     fn longmont() -> Geometry {
         Geometry::new_point(vec![-105.1019, 40.1672])
+    }
+
+    /// Extracts the keyset token string from an `ItemCollection` `next`/`prev` pagination map.
+    fn token(link: &Option<Map<String, serde_json::Value>>) -> Option<String> {
+        link.as_ref()
+            .and_then(|map| map.get("token"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
     }
 
     #[fixture]
@@ -740,7 +518,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn collections(#[future(awt)] client: TestClient) {
+    async fn collections(#[future(awt)] mut client: TestClient) {
         assert!(client.collections().await.unwrap().is_empty());
         client
             .add_collection(Collection::new("an-id", "a description"))
@@ -751,7 +529,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn add_collection_duplicate(#[future(awt)] client: TestClient) {
+    async fn add_collection_duplicate(#[future(awt)] mut client: TestClient) {
         assert!(client.collections().await.unwrap().is_empty());
         let collection = Collection::new("an-id", "a description");
         client.add_collection(collection.clone()).await.unwrap();
@@ -767,14 +545,14 @@ pub(crate) mod tests {
         collection.title = Some("a title".to_string());
         client.upsert_collection(collection).await.unwrap();
         assert_eq!(
-            client.collection("an-id").await.unwrap().unwrap()["title"],
-            "a title"
+            client.collection("an-id").await.unwrap().unwrap().title,
+            Some("a title".to_string())
         );
     }
 
     #[rstest]
     #[tokio::test]
-    async fn update_collection(#[future(awt)] client: TestClient) {
+    async fn update_collection(#[future(awt)] mut client: TestClient) {
         let mut collection = Collection::new("an-id", "a description");
         client.add_collection(collection.clone()).await.unwrap();
         assert!(
@@ -783,15 +561,15 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .get("title")
+                .title
                 .is_none()
         );
         collection.title = Some("a title".to_string());
         client.update_collection(collection).await.unwrap();
         assert_eq!(client.collections().await.unwrap().len(), 1);
         assert_eq!(
-            client.collection("an-id").await.unwrap().unwrap()["title"],
-            "a title"
+            client.collection("an-id").await.unwrap().unwrap().title,
+            Some("a title".to_string())
         );
     }
 
@@ -810,7 +588,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn delete_collection(#[future(awt)] client: TestClient) {
+    async fn delete_collection(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("an-id", "a description");
         client.add_collection(collection.clone()).await.unwrap();
         assert!(client.collection("an-id").await.unwrap().is_some());
@@ -826,10 +604,10 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn item(#[future(awt)] client: TestClient) {
+    async fn item(#[future(awt)] mut client: TestClient) {
         assert!(
             client
-                .item("an-id", Some("collection-id"))
+                .item("collection-id", "an-id")
                 .await
                 .unwrap()
                 .is_none()
@@ -844,10 +622,11 @@ pub(crate) mod tests {
             .insert("type".into(), "Feature".into());
         client.add_item(item.clone()).await.unwrap();
         let got = client
-            .item("an-id", Some("collection-id"))
+            .item("collection-id", "an-id")
             .await
             .unwrap()
             .expect("item present");
+        let got = serde_json::to_value(got).unwrap();
         // v0.10 re-renders the item from its columns rather than echoing the stored JSON: the
         // timestamptz `datetime` is microsecond precision (the input nanoseconds are truncated) and an
         // empty `assets` object is dropped, so assert the round-tripped identity + geometry rather than
@@ -871,7 +650,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn update_item(#[future(awt)] client: TestClient) {
+    async fn update_item(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -883,19 +662,20 @@ pub(crate) mod tests {
             .additional_fields
             .insert("foo".into(), "bar".into());
         client.update_item(item).await.unwrap();
-        assert_eq!(
+        let got = serde_json::to_value(
             client
-                .item("an-id", Some("collection-id"))
+                .item("collection-id", "an-id")
                 .await
                 .unwrap()
-                .unwrap()["properties"]["foo"],
-            "bar"
-        );
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(got["properties"]["foo"], "bar");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn delete_item(#[future(awt)] client: TestClient) {
+    async fn delete_item(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -907,14 +687,14 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            client.item("an-id", Some("collection-id")).await.unwrap(),
+            client.item("collection-id", "an-id").await.unwrap(),
             None,
         );
     }
 
     #[rstest]
     #[tokio::test]
-    async fn upsert_item(#[future(awt)] client: TestClient) {
+    async fn upsert_item(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -926,7 +706,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn add_items(#[future(awt)] client: TestClient) {
+    async fn add_items(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -937,14 +717,14 @@ pub(crate) mod tests {
         client.add_items(&[item, other_item]).await.unwrap();
         assert!(
             client
-                .item("an-id", Some("collection-id"))
+                .item("collection-id", "an-id")
                 .await
                 .unwrap()
                 .is_some()
         );
         assert!(
             client
-                .item("other-id", Some("collection-id"))
+                .item("collection-id", "other-id")
                 .await
                 .unwrap()
                 .is_some()
@@ -953,7 +733,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn upsert_items(#[future(awt)] client: TestClient) {
+    async fn upsert_items(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -968,13 +748,13 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_everything(#[future(awt)] client: TestClient) {
+    async fn search_everything(#[future(awt)] mut client: TestClient) {
         assert!(
             client
                 .search(Search::default())
                 .await
                 .unwrap()
-                .features
+                .items
                 .is_empty()
         );
         let collection = Collection::new("collection-id", "a description");
@@ -985,7 +765,7 @@ pub(crate) mod tests {
         client.add_item(item.clone()).await.unwrap();
         // See `item`: v0.10 re-renders from columns, so assert identity + geometry, not byte-equality.
         let page = client.search(Search::default()).await.unwrap();
-        let got = &page.features[0];
+        let got = serde_json::to_value(&page.items[0]).unwrap();
         assert_eq!(got["id"], "an-id");
         assert_eq!(got["collection"], "collection-id");
         assert_eq!(got["geometry"], serde_json::to_value(longmont()).unwrap());
@@ -993,7 +773,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_ids(#[future(awt)] client: TestClient) {
+    async fn search_ids(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1004,17 +784,17 @@ pub(crate) mod tests {
             ids: vec!["an-id".to_string()],
             ..Default::default()
         };
-        assert_eq!(client.search(search).await.unwrap().features.len(), 1);
+        assert_eq!(client.search(search).await.unwrap().items.len(), 1);
         let search = Search {
             ids: vec!["not-an-id".to_string()],
             ..Default::default()
         };
-        assert!(client.search(search).await.unwrap().features.is_empty());
+        assert!(client.search(search).await.unwrap().items.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn search_collections(#[future(awt)] client: TestClient) {
+    async fn search_collections(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1025,17 +805,17 @@ pub(crate) mod tests {
             collections: vec!["collection-id".to_string()],
             ..Default::default()
         };
-        assert_eq!(client.search(search).await.unwrap().features.len(), 1);
+        assert_eq!(client.search(search).await.unwrap().items.len(), 1);
         let search = Search {
             collections: vec!["not-an-id".to_string()],
             ..Default::default()
         };
-        assert!(client.search(search).await.unwrap().features.is_empty());
+        assert!(client.search(search).await.unwrap().items.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn search_limit(#[future(awt)] client: TestClient) {
+    async fn search_limit(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1047,7 +827,7 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.limit = Some(1);
         let page = client.search(search).await.unwrap();
-        assert_eq!(page.features.len(), 1);
+        assert_eq!(page.items.len(), 1);
         if let Some(context) = page.context {
             // v0.8
             assert_eq!(context.limit.unwrap(), 1);
@@ -1059,7 +839,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_bbox(#[future(awt)] client: TestClient) {
+    async fn search_bbox(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1069,16 +849,16 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.bbox = Some(vec![-106., 40., -105., 41.].try_into().unwrap());
         assert_eq!(
-            client.search(search.clone()).await.unwrap().features.len(),
+            client.search(search.clone()).await.unwrap().items.len(),
             1
         );
         search.items.bbox = Some(vec![-106., 41., -105., 42.].try_into().unwrap());
-        assert!(client.search(search).await.unwrap().features.is_empty());
+        assert!(client.search(search).await.unwrap().items.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn search_datetime(#[future(awt)] client: TestClient) {
+    async fn search_datetime(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1089,16 +869,16 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.datetime = Some("2023-01-07T00:00:00Z".to_string());
         assert_eq!(
-            client.search(search.clone()).await.unwrap().features.len(),
+            client.search(search.clone()).await.unwrap().items.len(),
             1
         );
         search.items.datetime = Some("2023-01-08T00:00:00Z".to_string());
-        assert!(client.search(search).await.unwrap().features.is_empty());
+        assert!(client.search(search).await.unwrap().items.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn search_intersects(#[future(awt)] client: TestClient) {
+    async fn search_intersects(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1121,7 +901,7 @@ pub(crate) mod tests {
             ),
             ..Default::default()
         };
-        assert_eq!(client.search(search).await.unwrap().features.len(), 1);
+        assert_eq!(client.search(search).await.unwrap().items.len(), 1);
         let search = Search {
             intersects: Some(
                 serde_json::from_value(
@@ -1138,12 +918,12 @@ pub(crate) mod tests {
             ),
             ..Default::default()
         };
-        assert!(client.search(search).await.unwrap().features.is_empty());
+        assert!(client.search(search).await.unwrap().items.is_empty());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn pagination(#[future(awt)] client: TestClient) {
+    async fn pagination(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1157,26 +937,26 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.limit = Some(1);
         let page = client.search(search.clone()).await.unwrap();
-        assert_eq!(page.features[0]["id"], "an-id");
+        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "an-id");
         // Page with the real keyset token the server minted; the old "collection-id:an-id" offset-style
         // token format no longer exists in v0.10 (keyset_decode rejects it).
-        let next = page.next_token().expect("next token");
+        let next = token(&page.next).expect("next token");
         let _ = search
             .additional_fields
             .insert("token".to_string(), next.into());
         let page = client.search(search.clone()).await.unwrap();
-        assert_eq!(page.features[0]["id"], "another-id");
-        let prev = page.prev_token().expect("prev token");
+        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "another-id");
+        let prev = token(&page.prev).expect("prev token");
         let _ = search
             .additional_fields
             .insert("token".to_string(), prev.into());
         let page = client.search(search).await.unwrap();
-        assert_eq!(page.features[0]["id"], "an-id");
+        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "an-id");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn base_url(#[future(awt)] client: TestClient) {
+    async fn base_url(#[future(awt)] mut client: TestClient) {
         client
             .set_pgstac_setting("base_url", "http://pgstac.test")
             .await
@@ -1201,7 +981,7 @@ pub(crate) mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn fields(#[future(awt)] client: TestClient) {
+    async fn fields(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("an-id");
@@ -1222,14 +1002,14 @@ pub(crate) mod tests {
             exclude: vec!["properties.bar".to_string()],
         });
         let page = client.search(search).await.unwrap();
-        let item = &page.features[0];
+        let item = serde_json::to_value(&page.items[0]).unwrap();
         assert!(item["properties"].as_object().unwrap().get("foo").is_some());
         assert!(item["properties"].as_object().unwrap().get("bar").is_none());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn sortby(#[future(awt)] client: TestClient) {
+    async fn sortby(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("a");
@@ -1241,18 +1021,18 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.sortby = vec![Sortby::asc("id")];
         let page = client.search(search.clone()).await.unwrap();
-        assert_eq!(page.features[0]["id"], "a");
-        assert_eq!(page.features[1]["id"], "b");
+        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "a");
+        assert_eq!(serde_json::to_value(&page.items[1]).unwrap()["id"], "b");
 
         search.items.sortby = vec![Sortby::desc("id")];
         let page = client.search(search).await.unwrap();
-        assert_eq!(page.features[0]["id"], "b");
-        assert_eq!(page.features[1]["id"], "a");
+        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "b");
+        assert_eq!(serde_json::to_value(&page.items[1]).unwrap()["id"], "a");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn filter(#[future(awt)] client: TestClient) {
+    async fn filter(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("a");
@@ -1275,12 +1055,12 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.filter = Some(Filter::Cql2Json(filter));
         let page = client.search(search).await.unwrap();
-        assert_eq!(page.features.len(), 1);
+        assert_eq!(page.items.len(), 1);
     }
 
     #[rstest]
     #[tokio::test]
-    async fn query(#[future(awt)] client: TestClient) {
+    async fn query(#[future(awt)] mut client: TestClient) {
         let collection = Collection::new("collection-id", "a description");
         client.add_collection(collection).await.unwrap();
         let mut item = Item::new("a");
@@ -1302,6 +1082,6 @@ pub(crate) mod tests {
         let mut search = Search::default();
         search.items.query = Some(query);
         let page = client.search(search).await.unwrap();
-        assert_eq!(page.features.len(), 1);
+        assert_eq!(page.items.len(), 1);
     }
 }

@@ -94,6 +94,22 @@ pub async fn collection_search<C: GenericClient>(
     })
 }
 
+/// Fetches every collection, paging [`collection_search`] to completion.
+pub(crate) async fn all<C: GenericClient>(client: &C) -> Result<Vec<Value>> {
+    let mut all = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = collection_search(client, &json!({}), token.as_deref()).await?;
+        let next = page.next_token;
+        all.extend(page.features);
+        match next {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    Ok(all)
+}
+
 /// Fetches a single collection by id (wraps [`collection_search`] with an id filter).
 pub async fn get_collection<C: GenericClient>(
     client: &C,
