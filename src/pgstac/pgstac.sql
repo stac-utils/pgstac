@@ -1748,10 +1748,13 @@ $$ LANGUAGE SQL;
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-    PERFORM maintain_partitions();
+    -- Queryable definitions changed, so every partition's queryable indexes may be stale. Flag them and let
+    -- the async sweep (build_pending_indexes) (re)build off the hot path, instead of rebuilding every
+    -- partition synchronously inside this trigger.
+    UPDATE pgstac.partition_stats SET indexes_pending = true;
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
@@ -5665,6 +5668,38 @@ BEGIN
         LIMIT _limit
     LOOP
         PERFORM pgstac.tighten_partition_stats(_part);
+        _count := _count + 1;
+    END LOOP;
+    RETURN _count;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+-- build_pending_indexes: build the queryable indexes for partitions flagged `indexes_pending` (new
+-- partitions are created index-light for fast ingest; changing a queryable flags every partition via the
+-- queryables trigger), then clear the flag. Builds the DDL directly (not via the queue), so schedule it
+-- off-hours like the tighten sweep. `_limit` caps the batch (NULL = all pending); returns the count built.
+--
+-- pg_cron example (operators install this themselves):
+--   SELECT cron.schedule('pgstac-build-indexes', '*/30 * * * *',
+--                        $$SELECT pgstac.build_pending_indexes(50)$$);
+CREATE OR REPLACE FUNCTION build_pending_indexes(_limit int DEFAULT NULL)
+RETURNS int AS $$
+DECLARE
+    _part text;
+    _q text;
+    _count int := 0;
+BEGIN
+    FOR _part IN
+        SELECT partition FROM pgstac.partition_stats
+        WHERE indexes_pending
+        ORDER BY last_updated NULLS FIRST
+        LIMIT _limit
+    LOOP
+        FOR _q IN SELECT * FROM pgstac.maintain_partition_queries(_part) LOOP
+            EXECUTE _q;
+        END LOOP;
+        UPDATE pgstac.partition_stats SET indexes_pending = false WHERE partition = _part;
         _count := _count + 1;
     END LOOP;
     RETURN _count;
