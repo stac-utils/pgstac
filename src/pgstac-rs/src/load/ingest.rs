@@ -200,6 +200,7 @@ fn is_retryable_db(err: &tokio_postgres::Error) -> bool {
 /// behind as an orphan (a duplicate `(collection, id)` across partitions). Use `Delsert` when updates may
 /// move an item between partitions; it deletes the old row wherever it lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum ConflictPolicy {
     /// Fail the whole load if any item id already exists.
     Error,

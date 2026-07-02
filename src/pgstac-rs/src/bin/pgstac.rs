@@ -91,7 +91,7 @@ struct LoadArgs {
     inputs: Vec<PathBuf>,
 
     /// Items per binary-COPY batch (one loader transaction per batch).
-    #[arg(long, default_value_t = 5_000)]
+    #[arg(long, default_value_t = DEFAULT_BATCH_SIZE)]
     batch_size: usize,
 
     /// Number of batches loaded concurrently (each uses one pooled connection).
@@ -99,8 +99,8 @@ struct LoadArgs {
     concurrency: usize,
 
     /// Conflict policy when an item id already exists.
-    #[arg(long, value_enum, default_value_t = LoadPolicy::Upsert)]
-    policy: LoadPolicy,
+    #[arg(long, value_enum, default_value_t = ConflictPolicy::Upsert)]
+    policy: ConflictPolicy,
 
     /// Pool size. Defaults to max(concurrency, 4).
     #[arg(long)]
@@ -116,14 +116,19 @@ struct LoadArgs {
     skip_unchanged: bool,
 }
 
-/// Default ingest parallelism: CPU count capped at 8 (a safe ceiling for decode/connection fan-out).
-/// Powers both `--concurrency` (parallel load batches) and the ndjson decode-thread default, so the loader
-/// parallelizes out of the box — profiling showed single-threaded decode was the big-item ingest floor.
+/// Items per binary-COPY batch by default.
+const DEFAULT_BATCH_SIZE: usize = 5_000;
+/// Ceiling on auto-detected ingest parallelism (decode threads + concurrent load batches).
+const MAX_INGEST_PARALLELISM: usize = 8;
+
+/// Default ingest parallelism: CPU count capped at `MAX_INGEST_PARALLELISM` (a safe ceiling for
+/// decode/connection fan-out). Powers both `--concurrency` (parallel load batches) and the ndjson
+/// decode-thread default, so the loader parallelizes out of the box.
 fn default_ingest_parallelism() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        .min(8)
+        .min(MAX_INGEST_PARALLELISM)
 }
 
 #[derive(clap::Args, Debug)]
@@ -136,7 +141,7 @@ struct RestoreArgs {
     src: PathBuf,
 
     /// Items per binary-COPY batch.
-    #[arg(long, default_value_t = 5_000)]
+    #[arg(long, default_value_t = DEFAULT_BATCH_SIZE)]
     batch_size: usize,
 
     /// Number of partition files restored concurrently.
@@ -146,26 +151,6 @@ struct RestoreArgs {
     /// Pool size. Defaults to max(concurrency, 4).
     #[arg(long)]
     pool_size: Option<usize>,
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug)]
-enum LoadPolicy {
-    /// Replace an existing item only when its content changed.
-    Upsert,
-    /// Skip items whose id already exists.
-    Ignore,
-    /// Fail the batch if any item id already exists.
-    Error,
-}
-
-impl From<LoadPolicy> for ConflictPolicy {
-    fn from(p: LoadPolicy) -> Self {
-        match p {
-            LoadPolicy::Upsert => ConflictPolicy::Upsert,
-            LoadPolicy::Ignore => ConflictPolicy::Ignore,
-            LoadPolicy::Error => ConflictPolicy::Error,
-        }
-    }
 }
 
 #[derive(clap::Args, Debug)]
@@ -627,7 +612,7 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
-    let policy: ConflictPolicy = args.policy.into();
+    let policy = args.policy;
     if args.skip_unchanged && matches!(policy, ConflictPolicy::Error) {
         return Err(
             "--skip-unchanged is incompatible with --policy error (error must fail on an existing id, \
@@ -711,7 +696,7 @@ async fn run_restore(args: RestoreArgs) -> Result<(), Box<dyn std::error::Error>
         inputs: vec![args.src],
         batch_size: args.batch_size,
         concurrency: args.concurrency,
-        policy: LoadPolicy::Upsert,
+        policy: ConflictPolicy::Upsert,
         pool_size: args.pool_size,
         limit: None,
         skip_unchanged: false,

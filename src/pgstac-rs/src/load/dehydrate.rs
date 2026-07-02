@@ -343,7 +343,8 @@ fn coerce_promoted(
         }
         (PromotedKind::Float, None) => PromotedValue::Float(None),
         (PromotedKind::Int, Some(v)) => PromotedValue::Int(Some(
-            value_to_i64(&v).ok_or_else(|| bad("an integer"))? as i32,
+            i32::try_from(value_to_i64(&v).ok_or_else(|| bad("an integer"))?)
+                .map_err(|_| bad("an integer within int32 range"))?,
         )),
         (PromotedKind::Int, None) => PromotedValue::Int(None),
         (PromotedKind::BigInt, Some(v)) => {
