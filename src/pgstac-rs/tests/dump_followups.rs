@@ -9,6 +9,7 @@
 //! All tests skip if the DB is unreachable, so the suite stays green without
 //! fixtures. Point them at month-partitioned 0.10 clones via the env vars below.
 
+#![cfg(feature = "export")]
 #![allow(unused_crate_dependencies)]
 
 use pgstac::export::manifest::Manifest;

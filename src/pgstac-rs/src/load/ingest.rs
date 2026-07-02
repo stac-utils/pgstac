@@ -9,6 +9,7 @@
 //! EWKB, so the bytes [`dehydrate`](crate::dehydrate) already produced go out untouched.
 
 use crate::Result;
+#[cfg(feature = "pool")]
 use crate::canonical::jsonb_hash;
 use crate::dehydrate::{DehydrateSchema, DehydratedRow, PromotedValue, dehydrate};
 use crate::field_registry::FieldRegistry;
@@ -19,6 +20,7 @@ use futures::pin_mut;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
+#[cfg(feature = "pool")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{IsNull, ToSql, Type, to_sql_checked};
@@ -461,6 +463,7 @@ fn bbox_envelope(bbox: &Option<Value>) -> (f64, f64, f64, f64) {
 }
 
 /// Per-collection `partition_trunc` for the collections referenced in `items`.
+#[cfg(feature = "pool")]
 async fn fetch_partition_truncs(
     client: &tokio_postgres::Client,
     items: &[Value],
@@ -486,6 +489,7 @@ async fn fetch_partition_truncs(
 /// The partition window `[start, end)` a datetime lands in, or `None` for a non-partitioned (single
 /// partition) collection. Mirrors [`window_key`] / the server's UTC `date_trunc`, so the client can prune a
 /// precheck probe to exactly one partition.
+#[cfg(feature = "pool")]
 fn window_bounds(dt: DateTime<Utc>, trunc: Option<&str>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     match trunc {
         Some("month") => {
@@ -512,6 +516,7 @@ fn window_bounds(dt: DateTime<Utc>, trunc: Option<&str>) -> Option<(DateTime<Utc
 }
 
 /// A STAC item's nominal datetime (`properties.datetime`, falling back to `start_datetime`) as UTC.
+#[cfg(feature = "pool")]
 fn item_datetime(item: &Value) -> Result<DateTime<Utc>> {
     let props = item.get("properties");
     let raw = props
@@ -532,6 +537,7 @@ fn item_datetime(item: &Value) -> Result<DateTime<Utc>> {
 /// One partition's worth of precheck input: the original item indices, ids and canonical hashes that landed
 /// in this partition window, a representative datetime (to locate the partition), and the window bounds used
 /// to prune the probe to that one partition.
+#[cfg(feature = "pool")]
 struct PrecheckBucket {
     collection: String,
     repr_dt: DateTime<Utc>,
@@ -541,6 +547,7 @@ struct PrecheckBucket {
     hashes: Vec<Vec<u8>>,
 }
 
+#[cfg(feature = "pool")]
 static PRECHECK_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Loads `items`, loading only those not already present-and-current and skipping the rest, via
@@ -552,6 +559,7 @@ static PRECHECK_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Matching is by id: a datetime change within a partition is caught, but a cross-partition move reads as
 /// new (the old row lives in another partition) — `Upsert` leaves that old row in place, `Delsert` removes
 /// it. Returns `(unchanged_skipped, loaded)`.
+#[cfg(feature = "pool")]
 pub async fn precheck_upsert(
     pool: &crate::PgstacPool,
     items: Vec<Value>,
@@ -633,6 +641,7 @@ pub async fn precheck_upsert(
 /// partition -> all new (no probe); batch bigger than the partition -> pull the partition's ids (+ item_hash
 /// when hashing) and compare in memory; otherwise binary-COPY the (smaller) batch into a TEMP table and JOIN
 /// this one partition (window-pruned). No per-item SQL-function arguments either way.
+#[cfg(feature = "pool")]
 async fn precheck_one_partition(
     pool: &crate::PgstacPool,
     bucket: PrecheckBucket,

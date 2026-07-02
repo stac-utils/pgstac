@@ -5,6 +5,7 @@
 //! counts vs SQL, and that every partition geoparquet is readable and hydrated.
 //! Skips if the DB is unreachable.
 
+#![cfg(feature = "export")]
 #![allow(unused_crate_dependencies)]
 
 use pgstac::export::manifest::Manifest;

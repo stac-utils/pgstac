@@ -219,8 +219,19 @@ jobs:
           scripts/pgstac-rs-test-db
           scripts/pgstac-rs-test-db pgstac_rs_ingest_template
           scripts/pgstac-rs-test-rich-db
-      - name: Compile-check all features
-        run: cargo check --all-features --all-targets --manifest-path src/pgstac-rs/Cargo.toml
+      - name: Compile-check the feature matrix
+        run: |
+          set -euo pipefail
+          for feat in \
+            "--no-default-features" \
+            "--no-default-features --features pool" \
+            "--no-default-features --features export" \
+            "--features cli" \
+            "--all-features"; do
+            echo "::group::cargo check $feat"
+            cargo check $feat --all-targets --manifest-path src/pgstac-rs/Cargo.toml
+            echo "::endgroup::"
+          done
       - name: Test
         env:
           PGSTAC_RS_TEST_DB: postgresql://username:password@localhost:5439/pgstac_rs_test_rich
