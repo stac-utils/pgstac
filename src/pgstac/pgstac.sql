@@ -647,7 +647,8 @@ CREATE OR REPLACE FUNCTION explode_dotpaths_recurse(IN j jsonb) RETURNS SETOF te
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
--- jsonb_canonical: RFC 8785 (JSON Canonicalization Scheme)-aligned serialization.
+-- jsonb_canonical: a custom deterministic canonicalization (NOT RFC 8785 — the key ordering and number
+-- formatting differ; see the rules below), giving a stable, externally reproducible text form for hashing.
 -- Produces a deterministic, key-order-independent text encoding that an external
 -- client can reproduce byte-for-byte. NOTE: do NOT use `jsonb::text` for hashing —
 -- PostgreSQL re-normalizes object key order to length-then-bytewise and inserts
@@ -664,7 +665,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 --   * true / false / null as literals.
 --
 -- External equivalents:
---   Python: an RFC 8785 canonicalizer, or the rule-for-rule reference:
+--   Python: the rule-for-rule reference below (a generic RFC 8785 canonicalizer will NOT match):
 --     def canon(v):
 --       if isinstance(v, bool): return 'true' if v else 'false'
 --       if v is None: return 'null'
@@ -675,7 +676,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 --       if isinstance(v,(int,float)):
 --         f=float(v); return str(int(f)) if f==int(f) and abs(f)<1e16 else repr(f)
 --       return json.dumps(v, ensure_ascii=False)
---   Rust: the `rfc8785` crate (serde_jcs) over serde_json::Value.
+--   Rust: pgstac-rs `canonical::jsonb_canonical` (byte-order keys + float8 numbers — NOT the rfc8785 crate).
 CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
     SELECT CASE jsonb_typeof(j)
         WHEN 'object' THEN COALESCE((
@@ -694,7 +695,7 @@ CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
     END;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 
--- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
+-- jsonb_hash: raw 32-byte sha256 of the canonical (jsonb_canonical) JSON form.
 -- Returns bytea so callers store the compact binary digest directly (32 B vs
 -- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
 -- needed for display or external comparison.
@@ -3025,7 +3026,7 @@ CREATE TABLE items (
     stac_version text,
     stac_extensions jsonb DEFAULT '[]'::jsonb,
     pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
-    -- 32-byte sha256 of the canonical (RFC 8785-aligned) STAC item JSON set at
+    -- 32-byte sha256 of the canonical (jsonb_canonical) STAC item JSON set at
     -- ingest time. Allows external clients to detect unchanged items without a
     -- full fetch. Does NOT include the private column (operator metadata).
     item_hash bytea NOT NULL DEFAULT '\x'::bytea,
@@ -3174,7 +3175,7 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- items_touch_triggerfunc: refresh pgstac_updated_at when a direct UPDATE changes
 -- the stored item content. It deliberately does NOT recompute item_hash:
--- item_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
+-- item_hash is the canonical (jsonb_canonical) hash of the item *as ingested*
 -- through create_item / upsert_item / update_item (set once in content_dehydrate),
 -- so it stays externally reproducible by a client hashing its own copy.
 -- A raw `UPDATE items SET ...` that bypasses the staging path leaves item_hash

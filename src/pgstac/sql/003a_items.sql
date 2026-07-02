@@ -42,7 +42,7 @@ CREATE TABLE items (
     stac_version text,
     stac_extensions jsonb DEFAULT '[]'::jsonb,
     pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
-    -- 32-byte sha256 of the canonical (RFC 8785-aligned) STAC item JSON set at
+    -- 32-byte sha256 of the canonical (jsonb_canonical) STAC item JSON set at
     -- ingest time. Allows external clients to detect unchanged items without a
     -- full fetch. Does NOT include the private column (operator metadata).
     item_hash bytea NOT NULL DEFAULT '\x'::bytea,
@@ -191,7 +191,7 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- items_touch_triggerfunc: refresh pgstac_updated_at when a direct UPDATE changes
 -- the stored item content. It deliberately does NOT recompute item_hash:
--- item_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
+-- item_hash is the canonical (jsonb_canonical) hash of the item *as ingested*
 -- through create_item / upsert_item / update_item (set once in content_dehydrate),
 -- so it stays externally reproducible by a client hashing its own copy.
 -- A raw `UPDATE items SET ...` that bypasses the staging path leaves item_hash
