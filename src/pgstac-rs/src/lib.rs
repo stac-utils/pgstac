@@ -579,6 +579,17 @@ pub(crate) mod tests {
                             template()
                         )
                     });
+                // `CREATE DATABASE ... TEMPLATE` copies the schema but NOT the template's per-database
+                // settings (pg_db_role_setting), so the clone loses the template's
+                // `search_path = pgstac, public`. Re-apply it, or the unqualified refs inside the pgstac
+                // functions resolve against `public` only and every query fails.
+                let _ = client
+                    .execute(
+                        &format!("ALTER DATABASE {dbname} SET search_path TO pgstac, public"),
+                        &[],
+                    )
+                    .await
+                    .unwrap();
             }
             let mut test_config = config.clone();
             let (client, connection) = test_config.dbname(&dbname).connect(NoTls).await.unwrap();
