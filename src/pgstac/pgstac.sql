@@ -2293,7 +2293,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql2 expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
@@ -4327,7 +4327,23 @@ SELECT
     FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
     ORDER BY dtrange ASC
 ;
+CREATE UNIQUE INDEX ON partition_steps (name);
 
+-- CONCURRENTLY avoids the ACCESS EXCLUSIVE lock a blocking refresh takes, which
+-- deadlocks against searches reading partition_steps and, replayed on hot-standby
+-- readers, cancels in-flight queries with "conflict with recovery" (issue #311).
+-- Falls back to a blocking refresh for the cases CONCURRENTLY cannot handle
+-- (e.g. a materialized view that has never been populated).
+CREATE OR REPLACE FUNCTION refresh_partition_matviews() RETURNS VOID AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY partitions;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY partition_steps;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Concurrent refresh of partition materialized views failed (%). Falling back to blocking refresh.', SQLERRM;
+    REFRESH MATERIALIZED VIEW partitions;
+    REFRESH MATERIALIZED VIEW partition_steps;
+END;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
 DECLARE
@@ -4396,8 +4412,7 @@ BEGIN
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
     END IF;
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
+    PERFORM refresh_partition_matviews();
     RAISE NOTICE 'Checking if we need to update collection extents.';
     IF get_setting_bool('update_collection_extent') THEN
         RAISE NOTICE 'updating collection extent for %', collection;
@@ -4686,8 +4701,7 @@ BEGIN
     END;
     PERFORM maintain_partitions(_partition_name);
     PERFORM update_partition_stats_q(_partition_name, true);
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
+    PERFORM refresh_partition_matviews();
     RETURN _partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
@@ -5829,7 +5843,6 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
-
 -- END FRAGMENT: 997_maintenance.sql
 
 -- BEGIN FRAGMENT: 998_idempotent_post.sql

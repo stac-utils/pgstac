@@ -118,6 +118,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `flake8`, `black`, and `mypy` removed from dev dependencies.
 
 ### Fixed
+- Partition materialized views (`partitions`, `partition_steps`) are now refreshed with `REFRESH MATERIALIZED VIEW CONCURRENTLY` (backed by a new unique index on `partition_steps`), so partition maintenance no longer takes `ACCESS EXCLUSIVE` locks that deadlock concurrent searches — or, on hot-standby readers, cancel in-flight queries with `canceling statement due to conflict with recovery`. ([#311](https://github.com/stac-utils/pgstac/issues/311))
 - Explicit search stats refresh now propagates through cached and uncached search paths when `updatestats` is requested, keeping `numberMatched`/context counts current.
 - `scripts/container-scripts/test` now refreshes collation metadata for the
   `postgres` database during setup to avoid noisy warning output.

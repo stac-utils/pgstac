@@ -8,6 +8,10 @@ SELECT is_indexed('pgstac'::name, 'items'::name, 'geometry');
 
 SELECT is_partitioned('pgstac'::name,'items'::name);
 
+SELECT has_function('pgstac'::name, 'refresh_partition_matviews', ARRAY[]::text[]);
+SELECT is_indexed('pgstac'::name, 'partitions'::name, 'partition');
+SELECT is_indexed('pgstac'::name, 'partition_steps'::name, 'name');
+
 
 SELECT has_function('pgstac'::name, 'get_item', ARRAY['text','text']);
 SELECT has_function('pgstac'::name, 'delete_item', ARRAY['text','text']);
