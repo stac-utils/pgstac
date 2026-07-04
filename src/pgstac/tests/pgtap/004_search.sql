@@ -880,3 +880,27 @@ SELECT isnt(
     NULL,
     'Duplicate id pagination: page 2 generates a valid prev token. #392'
 );
+
+-- Reverse pagination: traveling backward via prev token successfully loads 1 item.
+SELECT is(
+    (
+        WITH p1 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb)::jsonb AS j),
+        nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t),
+        p2 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb || jsonb_build_object('token', (SELECT t FROM nt)))::jsonb AS j),
+        pt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p2), '$.links[*] ? (@.rel == "prev").href')->>0, 'token=', 2) AS t)
+        SELECT (search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb || jsonb_build_object('token', (SELECT t FROM pt)))->>'numberReturned')::int
+    ),
+    1,
+    'Duplicate id pagination: traveling backward via prev token successfully loads 1 item. #392'
+);
+
+-- ASC sorting: verify page 2 works when the timeline is inverted.
+SELECT is(
+    (
+        WITH p1 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1, "sortby": [{"field": "datetime", "direction": "asc"}]}'::jsonb)::jsonb AS j),
+        nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t)
+        SELECT (search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1, "sortby": [{"field": "datetime", "direction": "asc"}]}'::jsonb || jsonb_build_object('token', (SELECT t FROM nt)))->>'numberReturned')::int
+    ),
+    1,
+    'Duplicate id pagination: page 2 successfully steps forward when using ASC sort direction. #392'
+);
