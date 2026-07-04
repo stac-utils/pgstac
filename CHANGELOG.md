@@ -55,8 +55,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   toolchain, for production deployments where the Rust build environment is not needed.
 - Dependabot coverage expanded to Docker base images and pip packages (two new
   ecosystems with grouped update policies).
-
-### Changed
 - `pypgstac migrate` now delegates runtime migration planning and apply logic to
   `pgstac-migrate`; `src/pypgstac/src/pypgstac/migrate.py` remains as a
   compatibility wrapper.
@@ -111,6 +109,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `python-runtime` groups).
 - `docker-compose.yml` removes explicit `container_name` entries to avoid conflicts
   between concurrent local instances.
+- Appended `collection` as a secondary sorting tie-breaker before `id` inside `keyset_sortkeys`. This ensures deterministic pagination tokens globally and enables PostgreSQL partition pruning for optimized multi-collection searches.
+- Updated pgTAP test suite expectations and output snapshots to match the new `collection, id` sorting structure.
 
 ### Removed
 - PL/Rust support: `pgstacbase-plrust` and `pgstac-plrust` Docker targets removed; the
@@ -135,6 +135,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `scripts/container-scripts/test` now derives the active database from
   `PGDATABASE`/`POSTGRES_DB` when checking server extensions and refreshing
   collation versions, instead of assuming `postgis`.
+- Fixed an edge-case bug where keyset pagination returned 0 features on Page 2 if items across different collections shared identical IDs and timestamps (#392).
+- Resolved a Python type-checking diagnostic in `pypgstac.load` regarding dynamic file opening modes.
 
 
 ## [v0.9.11]
