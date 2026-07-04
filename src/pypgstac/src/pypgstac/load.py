@@ -17,6 +17,7 @@ from typing import (
     Iterable,
     Iterator,
     TextIO,
+    cast,
 )
 
 import orjson
@@ -109,7 +110,7 @@ def open_std(
         fh = stream.buffer if "b" in mode else stream
         close = False
     else:
-        fh = open(filename, mode, *args, **kwargs)
+        fh = cast("TextIO | BinaryIO", open(filename, mode, *args, **kwargs))
         close = True
 
     try:

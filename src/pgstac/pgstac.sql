@@ -2293,7 +2293,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql2 expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
@@ -2870,9 +2870,10 @@ RETURNS TABLE(ord int, field text, expr text, dir text, notnull boolean) AS $$
         SELECT coalesce(_search->'sortby','[{"field":"datetime","direction":"desc"}]'::jsonb) AS s
     ),
     app AS (
+        -- Append collection first (helps partition pruning), then id to guarantee global uniqueness
         SELECT s
-               || jsonb_build_object('field','id','direction', s->0->>'direction')
-               || jsonb_build_object('field','collection','direction', s->0->>'direction') AS s
+               || jsonb_build_object('field','collection','direction', s->0->>'direction')
+               || jsonb_build_object('field','id','direction', s->0->>'direction') AS s
         FROM base
     ),
     rows AS (
@@ -5829,7 +5830,6 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
-
 -- END FRAGMENT: 997_maintenance.sql
 
 -- BEGIN FRAGMENT: 998_idempotent_post.sql

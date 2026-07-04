@@ -15,7 +15,7 @@ SELECT create_item('{
         "end_datetime": "2026-01-31T23:00:00Z"
     }
 }');
- 
+
 
 -- Verify datetime is stripped from stored properties (promoted temporal field)
 SELECT properties ? 'datetime' FROM items WHERE id='temporal-range-item';
