@@ -41,7 +41,7 @@ SELECT has_function('pgstac'::name, 'keyset_orderby', ARRAY['jsonb','boolean']);
 SELECT results_eq($$
     SELECT keyset_orderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, eo_cloud_cover ASC, id DESC, collection DESC';
+    SELECT 'datetime DESC, eo_cloud_cover ASC, collection DESC, id DESC';
     $$,
     'Test creation of sort sql'
 );
@@ -50,7 +50,7 @@ SELECT results_eq($$
 SELECT results_eq($$
     SELECT keyset_orderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, eo_cloud_cover DESC, id ASC, collection ASC';
+    SELECT 'datetime ASC, eo_cloud_cover DESC, collection ASC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
@@ -832,4 +832,51 @@ SELECT is(
     (SELECT json_array_length(search('{"ids": ["pgstac-test-item-duplicated"], "collections": ["pgstac-test-collection", "pgstac-test-collection2"]}')->'features')),
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, all collections specified. #192'
+);
+
+-- Keyset pagination across a duplicate id in two collections with identical datetime (issue #392).
+-- The collection tie-breaker must let page 2's look-ahead filter step past the shared (datetime, id)
+-- instead of collapsing to zero features.
+SELECT is(
+    (search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb)->>'numberReturned')::int,
+    1,
+    'Duplicate id pagination: page 1 returns exactly one item. #392'
+);
+
+SELECT is(
+    (
+        WITH p1 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb)::jsonb AS j),
+        nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t)
+        SELECT (search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb || jsonb_build_object('token', (SELECT t FROM nt)))->>'numberReturned')::int
+    ),
+    1,
+    'Duplicate id pagination: page 2 steps past the tie-breaker and returns the second item. #392'
+);
+
+-- Page 1 and page 2 must surface the item from two different collections (both duplicates covered).
+SELECT is(
+    (
+        WITH p1 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb)::jsonb AS j),
+        nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t),
+        p2 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb || jsonb_build_object('token', (SELECT t FROM nt)))::jsonb AS j)
+        SELECT count(DISTINCT c)::int FROM (
+            SELECT jsonb_path_query_first((SELECT j FROM p1), '$.features[0].collection')->>0 AS c
+            UNION ALL
+            SELECT jsonb_path_query_first((SELECT j FROM p2), '$.features[0].collection')->>0 AS c
+        ) s
+    ),
+    2,
+    'Duplicate id pagination: the two pages cover both collections. #392'
+);
+
+-- Page 2 must expose a valid prev link back to page 1.
+SELECT isnt(
+    (
+        WITH p1 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb)::jsonb AS j),
+        nt AS (SELECT split_part(jsonb_path_query_first((SELECT j FROM p1), '$.links[*] ? (@.rel == "next").href')->>0, 'token=', 2) AS t),
+        p2 AS (SELECT search('{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb || jsonb_build_object('token', (SELECT t FROM nt)))::jsonb AS j)
+        SELECT jsonb_path_query_first((SELECT j FROM p2), '$.links[*] ? (@.rel == "prev").href')->>0
+    ),
+    NULL,
+    'Duplicate id pagination: page 2 generates a valid prev token. #392'
 );
