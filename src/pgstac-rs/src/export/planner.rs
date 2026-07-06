@@ -365,7 +365,7 @@ impl DumpPlanner {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<JobResult>>();
 
         let budget = self.budget.clone();
-        let mut workers = Vec::with_capacity(concurrency);
+        let mut workers = tokio::task::JoinSet::new();
         for _ in 0..concurrency {
             let queue = queue.clone();
             let sink = sink.clone();
@@ -380,7 +380,7 @@ impl DumpPlanner {
             if let Some(id) = &snap_id {
                 bind_worker_to_snapshot(&client, id).await?;
             }
-            workers.push(tokio::spawn(async move {
+            let _ = workers.spawn(async move {
                 loop {
                     let job = {
                         let mut q = queue.lock().await;
@@ -412,7 +412,7 @@ impl DumpPlanner {
                         break;
                     }
                 }
-            }));
+            });
         }
         drop(tx); // workers hold the remaining senders; rx closes when all finish
 
@@ -458,9 +458,7 @@ impl DumpPlanner {
         }
 
         // Drain/await workers (they stop when the queue empties or rx drops).
-        for w in workers {
-            let _ = w.await;
-        }
+        while workers.join_next().await.is_some() {}
 
         if let Some(e) = first_error {
             // Leave _checkpoint.json in place so a resume can pick up.

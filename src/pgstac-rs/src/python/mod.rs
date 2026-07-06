@@ -351,7 +351,45 @@ impl Pgstac {
             pool.tighten_dirty_stats(limit).await.map_err(pyerr)
         })
     }
+
+    #[pyo3(signature = (_file, _collection_ids=None, _delete_missing=None, _index_fields=None))]
+    fn load_queryables<'py>(
+        &self,
+        py: Python<'py>,
+        _file: String,
+        _collection_ids: Option<Vec<String>>,
+        _delete_missing: Option<bool>,
+        _index_fields: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            Err::<(), _>(pyo3::exceptions::PyNotImplementedError::new_err("load_queryables is stubbed in rust"))
+        })
+    }
+
+    #[pyo3(signature = (_toversion=None))]
+    fn migrate<'py>(
+        &self,
+        py: Python<'py>,
+        _toversion: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            Err::<String, _>(pyo3::exceptions::PyNotImplementedError::new_err("migrate is stubbed in rust"))
+        })
+    }
+
+    fn runqueue<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            Err::<String, _>(pyo3::exceptions::PyNotImplementedError::new_err("runqueue is stubbed in rust"))
+        })
+    }
+
+    fn pgready<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            Err::<(), _>(pyo3::exceptions::PyNotImplementedError::new_err("pgready is stubbed in rust"))
+        })
+    }
 }
+
 
 /// The `pypgstac_rs` extension module.
 #[pymodule]

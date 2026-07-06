@@ -654,10 +654,12 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
         load_source_streaming(
             &pool,
             src,
-            args.batch_size,
-            args.concurrency,
-            policy,
-            args.skip_unchanged,
+            &StreamingOptions {
+                batch_size: args.batch_size,
+                concurrency: args.concurrency,
+                policy,
+                skip_unchanged: args.skip_unchanged,
+            },
             &mut remaining,
             &mut total,
         )
@@ -989,18 +991,24 @@ fn spawn_ndjson_range_decoders(
 /// `concurrency` COPY batches in flight (each on its own pooled connection). So CPU decode overlaps with
 /// the DB loads, and the bounded channel + bounded in-flight set keep memory flat regardless of file
 /// size (decode blocks when the loaders fall behind). Stops after `remaining` items; adds rows to `total`.
-async fn load_source_streaming(
-    pool: &PgstacPool,
-    src: &Path,
+struct StreamingOptions {
     batch_size: usize,
     concurrency: usize,
     policy: ConflictPolicy,
     skip_unchanged: bool,
+}
+
+async fn load_source_streaming(
+    pool: &PgstacPool,
+    src: &Path,
+    opts: &StreamingOptions,
     remaining: &mut usize,
     total: &mut u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let batch_size = batch_size.max(1);
-    let concurrency = concurrency.max(1);
+    let batch_size = opts.batch_size.max(1);
+    let concurrency = opts.concurrency.max(1);
+    let policy = opts.policy;
+    let skip_unchanged = opts.skip_unchanged;
     // Cap the decoded-item bytes held per in-flight load task. Large STAC items (e.g. landsat with many asset
     // bands) cost ~6x their text size once parsed + dehydrated + COPY-encoded, so item-count batching alone
     // (batch_size * concurrency) can balloon to tens of GB and OOM a multi-GB ndjson load. Tunable via

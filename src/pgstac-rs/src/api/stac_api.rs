@@ -1,6 +1,6 @@
 //! Native [`stac::api`] client-trait impls for [`PgstacPool`], so a pgstac database is a first-class
 //! rustac backend (search / collections / transaction). Every method routes through the same engine
-//! the rest of the crate uses — the keyset search in [`crate::search`] and the Rust loader for writes —
+//! the rest of the crate uses — the keyset search in [`crate::search()`] and the Rust loader for writes —
 //! so these traits are the rustac-native API surface over that engine, not a second implementation.
 
 use crate::{Error, PgstacPool};

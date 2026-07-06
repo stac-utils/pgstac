@@ -19,6 +19,7 @@ default = []
 # A Python extension module (built with maturin) exposing the read + geoparquet-export API over a
 # connection pool.
 python = ["pool", "export", "dep:pyo3", "dep:pyo3-async-runtimes"]
+migrations = []
 # A `deadpool`-backed connection pool ([`PgstacPool`]) with rustls TLS.
 pool = [
     "dep:deadpool-postgres",

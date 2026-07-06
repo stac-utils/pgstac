@@ -128,7 +128,7 @@ fn write_pg_float8(out: &mut String, n: &Number) {
     write_float8(out, f);
 }
 
-/// [`format_float8`] writing directly into `out` (the hot path; no result-String allocation).
+/// `format_float8` writing directly into `out` (the hot path; no result-String allocation).
 fn write_float8(out: &mut String, f: f64) {
     if f == 0.0 {
         // jsonb numbers pass through `numeric`, which has no signed zero, so -0.0 becomes "0".

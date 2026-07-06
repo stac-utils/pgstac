@@ -1,3 +1,4 @@
+#![deny(rustdoc::broken_intra_doc_links)]
 //! Rust interface for [pgstac](https://github.com/stac-utils/pgstac).
 //!
 //! # Examples

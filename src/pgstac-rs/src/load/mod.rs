@@ -8,3 +8,4 @@ pub mod ingest;
 pub mod parquet_decode;
 #[cfg(feature = "pool")]
 pub(crate) mod pool_ingest;
+pub(crate) mod queryables;

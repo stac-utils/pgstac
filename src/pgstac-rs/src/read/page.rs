@@ -69,7 +69,7 @@ impl Page {
     }
 }
 
-/// Adapts a [`Page`] into the rustac-native [`stac::api::ItemCollection`]: the features map directly
+/// Adapts a `Page` into the rustac-native [`stac::api::ItemCollection`]: the features map directly
 /// (both are `Vec<stac::api::Item>`), the keyset `next`/`prev` tokens become `{"token": ...}` pagination
 /// maps, and the match count surfaces as `number_matched`. This is the one canonical conversion the
 /// `stac::api` client-trait impls route through, so there is a single page-to-ItemCollection path.
@@ -100,7 +100,7 @@ impl TryFrom<Page> for ItemCollection {
 impl TryFrom<SearchPage> for Page {
     type Error = Error;
 
-    /// Adapts the Rust engine's [`SearchPage`] into the rustac [`Page`] shape: deserialize the hydrated
+    /// Adapts the Rust engine's [`SearchPage`] into the rustac `Page` shape: deserialize the hydrated
     /// feature values into [`Item`]s, carry the keyset tokens (the engine prefixes them `next:`/`prev:`,
     /// which [`Page::next_token`]/[`Page::prev_token`] re-add), and surface the match count as a
     /// [`Context`] when the search counted one.
