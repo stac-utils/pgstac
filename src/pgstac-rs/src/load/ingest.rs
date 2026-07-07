@@ -10,7 +10,7 @@
 
 use crate::Result;
 #[cfg(feature = "pool")]
-use crate::canonical::jsonb_hash;
+use crate::canonical::jsonb_canonical_hash;
 use crate::dehydrate::{DehydrateSchema, DehydratedRow, PromotedValue, dehydrate};
 use crate::field_registry::FieldRegistry;
 use crate::fragment::{FragmentConfig, build_fragment_payload, strip_fragment_col};
@@ -604,7 +604,7 @@ pub async fn precheck_upsert(
             .push(i32::try_from(i).expect("batch index fits i32"));
         bucket.ids.push(id.to_string());
         if use_hash {
-            bucket.hashes.push(jsonb_hash(item).to_vec());
+            bucket.hashes.push(jsonb_canonical_hash(item)?.to_vec());
         }
     }
 

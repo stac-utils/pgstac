@@ -1,6 +1,6 @@
-//! Parity gate: Rust `canonical::jsonb_canonical` / `jsonb_hash` must equal the SQL
-//! `pgstac.jsonb_canonical` / `pgstac.jsonb_hash` byte-for-byte, so an item dehydrated in Rust gets the
-//! same `item_hash` as one ingested through the SQL path.
+//! Parity gate: Rust `canonical::jsonb_canonical_hash` must equal SQL `pgstac.jsonb_canonical_hash`
+//! byte-for-byte, so an item dehydrated in Rust gets the same `item_hash` as one ingested through the SQL
+//! path.
 //!
 //! Connects read-only to a pgstac database (`PGSTAC_RS_TEST_DB`, default the local dev `postgis` db).
 
@@ -33,6 +33,22 @@ fn cases() -> Vec<Value> {
         json!([3, 1, 2, [4, 5], {"k": 6}]),
         json!("hello \"world\"\n\t/path\\x"),
         json!({"café": "naïve", "emoji": "🚀", "Δ": "δ"}),
+        // Datetime normalization (UTC, fixed 6-digit microseconds) — same instant, many spellings.
+        json!({"datetime": "2023-01-07T00:00:00Z"}),
+        json!({"datetime": "2023-01-07T00:00:00.000000Z"}),
+        json!({"datetime": "2023-01-07T12:34:56.789Z"}),
+        json!({"datetime": "2023-01-07T12:34:56.789000Z"}),
+        json!({"datetime": "2023-01-07T05:00:00+05:00"}),
+        json!({"datetime": "2023-01-07T00:00:00-00:00"}),
+        // Forgiving forms pgstac's to_tstz accepts (date-only, space, offset-less->UTC, lowercase, ±HHMM).
+        json!({"datetime": "2023-01-07"}),
+        json!({"datetime": "2023-01-07 00:00:00"}),
+        json!({"datetime": "2023-01-07T00:00:00"}),
+        json!({"datetime": "2023-01-07t00:00:00z"}),
+        json!({"datetime": "2023-01-07T05:00:00+0500"}),
+        json!({"start_datetime": "2019-12-31T19:00:00-05:00", "end_datetime": "2023-06-15T12:34:56.789Z"}),
+        // Datetime-shaped-but-not-a-datetime strings that must stay raw on BOTH sides (equal either way).
+        json!({"suffix": "2023-01-07T00:00:00Z-suffix", "bare": "2020", "compact": "20200101", "kw": "now"}),
         json!({"nested": {"y": [1, {"x": true, "w": null}], "datetime": "2023-01-07T00:00:00Z"}}),
         json!(42),
         json!(42.0),
@@ -75,26 +91,15 @@ fn cases() -> Vec<Value> {
 async fn canonical_and_hash_match_sql() {
     let client = connect().await;
     for v in cases() {
-        let sql_canonical: String = client
-            .query_one("SELECT pgstac.jsonb_canonical($1::jsonb)", &[&v])
-            .await
-            .unwrap()
-            .get(0);
-        assert_eq!(
-            canonical::jsonb_canonical(&v),
-            sql_canonical,
-            "jsonb_canonical mismatch for {v}"
-        );
-
         let sql_hash: Vec<u8> = client
-            .query_one("SELECT pgstac.jsonb_hash($1::jsonb)", &[&v])
+            .query_one("SELECT pgstac.jsonb_canonical_hash($1::jsonb)", &[&v])
             .await
             .unwrap()
             .get(0);
         assert_eq!(
-            canonical::jsonb_hash(&v).to_vec(),
+            canonical::jsonb_canonical_hash(&v).unwrap().to_vec(),
             sql_hash,
-            "jsonb_hash mismatch for {v}"
+            "jsonb_canonical_hash mismatch for {v}"
         );
     }
 }

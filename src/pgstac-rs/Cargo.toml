@@ -66,7 +66,7 @@ geozero = { version = "0.14", default-features = false, features = ["with-wkb", 
 rustls = { version = "0.23", optional = true }
 rustls-pemfile = { version = "2.2", optional = true }
 serde = "1.0"
-serde_json = { version = "1.0", features = ["raw_value"] }
+serde_json = { version = "1.0", features = ["raw_value", "float_roundtrip"] }
 sha2 = "0.10"
 stac = { version = "0.17.0", features = ["async"] }
 thiserror = "2.0"

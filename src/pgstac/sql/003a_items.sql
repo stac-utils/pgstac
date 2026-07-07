@@ -404,7 +404,7 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
         content->>'stac_version' AS stac_version,
         COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
         now() AS pgstac_updated_at,
-        pgstac.jsonb_hash(content) AS item_hash,
+        pgstac.jsonb_canonical_hash(content) AS item_hash,
         NULL::bigint AS fragment_id,
         content->'bbox' AS bbox,
         CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,

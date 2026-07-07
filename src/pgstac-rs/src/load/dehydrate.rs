@@ -14,7 +14,7 @@
 //! map (`Map::remove`); per-collection context (the promoted-column [`DehydrateSchema`]) is shared by
 //! reference / `Arc`, never deep-cloned per item.
 
-use crate::canonical::jsonb_hash;
+use crate::canonical::jsonb_canonical_hash;
 use crate::geom::geojson_to_ewkb;
 use crate::{Error, Result};
 use chrono::{DateTime, Utc};
@@ -201,7 +201,7 @@ pub struct DehydratedRow {
 /// queryable columns out of `properties`, and routes the remaining top-level keys to `extra`.
 pub fn dehydrate(item: Value, schema: &DehydrateSchema) -> Result<DehydratedRow> {
     // The hash is over the full item, so compute it before deconstructing (borrow, no clone).
-    let item_hash = jsonb_hash(&item);
+    let item_hash = jsonb_canonical_hash(&item)?;
 
     let mut map = match item {
         Value::Object(map) => map,
