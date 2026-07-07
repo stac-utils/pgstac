@@ -43,25 +43,6 @@ DO $$
   END
 $$;
 
--- pgstac_load: the explicit up-privilege role used to direct-write the wall-protected tables (items /
--- partition_stats / item_fragments) from the Rust loader via SET ROLE. NOLOGIN, and granted WITH INHERIT
--- FALSE so nobody writes those tables implicitly — only a deliberate, auditable SET ROLE does.
-DO $$
-  BEGIN
-    CREATE ROLE pgstac_load NOLOGIN;
-  EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
--- Role MEMBERSHIP grants live here (idempotent_pre), where the installing superuser still holds the role
--- context — pgstac.sql later does SET ROLE pgstac_admin, and pgstac_admin lacks ADMIN OPTION on a pgstac_load
--- the superuser created, so a membership grant in 998 (as pgstac_admin) would fail. INHERIT FALSE keeps the
--- privileges dormant (the wall holds); SET (default) lets the member `SET ROLE pgstac_load`. pgstac_admin also
--- gets ADMIN OPTION so an incremental migration running AS pgstac_admin can re-assert these. (998 grants the
--- table/usage privileges once the tables exist.)
-GRANT pgstac_load TO pgstac_admin  WITH ADMIN OPTION, INHERIT FALSE;
-GRANT pgstac_load TO pgstac_ingest WITH INHERIT FALSE;
 
 
 GRANT pgstac_admin TO current_user;
@@ -214,6 +195,11 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+-- Drop objects superseded by the current partition_stats model.
+DROP MATERIALIZED VIEW IF EXISTS partitions CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS partition_steps;
+DROP VIEW IF EXISTS partition_steps;
 
 -- Drop function signatures whose argument lists changed (CREATE OR REPLACE cannot alter them)
 DROP FUNCTION IF EXISTS chunker(pred_envelope);
@@ -661,63 +647,51 @@ CREATE OR REPLACE FUNCTION explode_dotpaths_recurse(IN j jsonb) RETURNS SETOF te
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
--- jsonb_canonical: RFC 8785 (JSON Canonicalization Scheme)-aligned serialization.
--- Produces a deterministic, key-order-independent text encoding that an external
--- client can reproduce byte-for-byte. NOTE: do NOT use `jsonb::text` for hashing —
--- PostgreSQL re-normalizes object key order to length-then-bytewise and inserts
--- ": " / ", " separators, so `jsonb::text` is neither alphabetical nor compact.
+-- jsonb_canonical_hash: a deterministic 32-byte SHA-256 identity digest of a JSONB document, reproducible
+-- outside PostgreSQL (pgstac-rs `canonical::jsonb_canonical_hash` produces identical bytes).
 --
--- Canonical rules (must match the external recipe below):
---   * object keys sorted by Unicode code point (== UTF-8 byte order, COLLATE "C"),
---   * compact separators: ',' between members, ':' between key and value,
---   * strings: standard JSON escaping, NON-ASCII left as UTF-8 (no \uXXXX),
---   * numbers: IEEE-754 double, shortest round-trip form (Ryu) — matches
---     PostgreSQL float8 output and ECMAScript Number::toString for in-range
---     values. (STAC numbers are physical quantities; integers beyond 2^53 are
---     out of contract, as in RFC 8785.)
---   * true / false / null as literals.
---
--- External equivalents:
---   Python: an RFC 8785 canonicalizer, or the rule-for-rule reference:
---     def canon(v):
---       if isinstance(v, bool): return 'true' if v else 'false'
---       if v is None: return 'null'
---       if isinstance(v, dict):
---         return '{'+','.join(json.dumps(k,ensure_ascii=False)+':'+canon(v[k])
---                             for k in sorted(v))+'}'
---       if isinstance(v, list): return '['+','.join(canon(x) for x in v)+']'
---       if isinstance(v,(int,float)):
---         f=float(v); return str(int(f)) if f==int(f) and abs(f)<1e16 else repr(f)
---       return json.dumps(v, ensure_ascii=False)
---   Rust: the `rfc8785` crate (serde_jcs) over serde_json::Value.
-CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
-    SELECT CASE jsonb_typeof(j)
-        WHEN 'object' THEN COALESCE((
-            SELECT '{' || string_agg(
-                to_json(kv.key)::text || ':' || jsonb_canonical(kv.value),
-                ',' ORDER BY kv.key COLLATE "C"
-            ) || '}'
-            FROM jsonb_each(j) kv
-        ), '{}')
-        WHEN 'array' THEN COALESCE((
-            SELECT '[' || string_agg(jsonb_canonical(e.value), ',' ORDER BY e.ord) || ']'
-            FROM jsonb_array_elements(j) WITH ORDINALITY e(value, ord)
-        ), '[]')
-        WHEN 'number' THEN (j #>> '{}')::float8::text
-        ELSE j::text  -- string (JSON-escaped, UTF-8 preserved), 'true' / 'false' / 'null'
-    END;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
-
--- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
--- Returns bytea so callers store the compact binary digest directly (32 B vs
--- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
--- needed for display or external comparison.
--- Externally reproducible: sha256(utf8_bytes(jsonb_canonical(j))).
--- The private jsonb column on items/collections is intentionally excluded — it
--- stores operator metadata outside the STAC item identity contract.
-CREATE OR REPLACE FUNCTION jsonb_hash(j jsonb) RETURNS bytea AS $$
-    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+-- The document is flattened to leaf (path, value) rows, each rendered as `path <FS> value`, sorted by path
+-- (byte order), joined by <RS>, and hashed. Separators are C0 control chars US/RS/FS (0x1F/0x1E/0x1D),
+-- which do not occur in STAC JSON keys or strings.
+--   * path    — per step, <US> then 'k'||key (object) or 'i'||idx (0-based array). The 'k'/'i' tags keep an
+--               object key "0" distinct from array index 0; <US> keeps nesting distinct from a key with '/'.
+--   * number  — 'n' || (v)::float8::text, so the digest matches a value stored in a float8 (promoted) column
+--               and read back.
+--   * string  — datetime-shaped (YYYY-MM-DD, optional T/space time, optional offset): 't' || the instant
+--               normalized to UTC / 6-digit microseconds / 'Z'. Offset-less is assumed UTC (the SET TIMEZONE
+--               below pins the cast), matching pgstac's to_tstz ingest; the cast raises on a shaped-but-
+--               invalid timestamp. Other strings: 's' || the raw string.
+--   * boolean — 'b'||'true'/'false';  null — 'z';  empty {} — 'e', empty [] — 'a'.
+CREATE OR REPLACE FUNCTION jsonb_canonical_hash(j jsonb) RETURNS bytea AS $$
+    WITH RECURSIVE t(path, value) AS (
+        SELECT ''::text, j
+      UNION ALL
+        SELECT t.path || E'\x1F' || e.seg, e.value
+        FROM t CROSS JOIN LATERAL (
+            SELECT 'k' || key AS seg, value
+                FROM jsonb_each(t.value) WHERE jsonb_typeof(t.value) = 'object'
+            UNION ALL
+            SELECT 'i' || (ord - 1)::text AS seg, value
+                FROM jsonb_array_elements(t.value) WITH ORDINALITY x(value, ord)
+                WHERE jsonb_typeof(t.value) = 'array'
+        ) e
+    )
+    SELECT sha256(convert_to(COALESCE(string_agg(
+        t.path || E'\x1E' || CASE jsonb_typeof(t.value)
+            WHEN 'number'  THEN 'n' || (t.value #>> '{}')::float8::text
+            WHEN 'boolean' THEN 'b' || (t.value #>> '{}')
+            WHEN 'null'    THEN 'z'
+            WHEN 'string'  THEN CASE
+                WHEN (t.value #>> '{}') ~ '^\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?)?$'
+                THEN 't' || to_char((t.value #>> '{}')::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'
+                ELSE 's' || (t.value #>> '{}') END
+            WHEN 'object'  THEN 'e'
+            WHEN 'array'   THEN 'a'
+            ELSE 'c' END,
+        E'\x1D' ORDER BY t.path COLLATE "C"), ''), 'UTF8'))
+    FROM t
+    WHERE jsonb_typeof(t.value) NOT IN ('object', 'array') OR t.value = '{}'::jsonb OR t.value = '[]'::jsonb;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT SET TIMEZONE = 'UTC';
 
 -- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
 -- max_depth guards against runaway recursion on pathologically nested documents.
@@ -1761,10 +1735,13 @@ $$ LANGUAGE SQL;
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-    PERFORM maintain_partitions();
+    -- Queryable definitions changed, so every partition's queryable indexes may be stale. Flag them and let
+    -- the async sweep (build_pending_indexes) (re)build off the hot path, instead of rebuilding every
+    -- partition synchronously inside this trigger.
+    UPDATE pgstac.partition_stats SET indexes_pending = true;
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();
@@ -2314,7 +2291,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
@@ -2813,8 +2790,7 @@ $$;
 -- index range [band_start_idx, band_end_idx] is always low..high regardless of
 -- direction; only the walk order differs. For a descending search (_descending)
 -- the cursor starts at the most recent month and walks toward older months, so
--- the most recent items are collected first (the bug fix: a descending walk must
--- not start at the oldest band).
+-- the most recent items are collected first.
 CREATE OR REPLACE FUNCTION next_band(
     _counts bigint[],
     _cursor_idx int,
@@ -3040,7 +3016,7 @@ CREATE TABLE items (
     stac_version text,
     stac_extensions jsonb DEFAULT '[]'::jsonb,
     pgstac_updated_at timestamptz NOT NULL DEFAULT now(),
-    -- 32-byte sha256 of the canonical (RFC 8785-aligned) STAC item JSON set at
+    -- 32-byte sha256 of the canonical (jsonb_canonical) STAC item JSON set at
     -- ingest time. Allows external clients to detect unchanged items without a
     -- full fetch. Does NOT include the private column (operator metadata).
     item_hash bytea NOT NULL DEFAULT '\x'::bytea,
@@ -3189,7 +3165,7 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
 -- items_touch_triggerfunc: refresh pgstac_updated_at when a direct UPDATE changes
 -- the stored item content. It deliberately does NOT recompute item_hash:
--- item_hash is the canonical (RFC 8785-aligned) hash of the item *as ingested*
+-- item_hash is the canonical (jsonb_canonical) hash of the item *as ingested*
 -- through create_item / upsert_item / update_item (set once in content_dehydrate),
 -- so it stays externally reproducible by a client hashing its own copy.
 -- A raw `UPDATE items SET ...` that bypasses the staging path leaves item_hash
@@ -3402,7 +3378,7 @@ CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
         content->>'stac_version' AS stac_version,
         COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
         now() AS pgstac_updated_at,
-        pgstac.jsonb_hash(content) AS item_hash,
+        pgstac.jsonb_canonical_hash(content) AS item_hash,
         NULL::bigint AS fragment_id,
         content->'bbox' AS bbox,
         CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,
@@ -3497,10 +3473,8 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
 
--- content_hydrate: Reassemble a full STAC item JSON from the split columns
--- and the shared fragment content. This is the single hydrate function;
--- the old content_nonhydrated wrapper and 3-arg _collection parameter have
--- been removed.
+-- content_hydrate: reassemble a full STAC item JSON from the split columns and the shared fragment
+-- content. The single hydrate function.
 CREATE OR REPLACE FUNCTION content_hydrate(
     _item items,
     fields jsonb DEFAULT '{}'::jsonb,
@@ -3742,6 +3716,22 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
+    -- Fail loudly on items whose collection does not exist instead of silently dropping them
+    -- in the collections JOINs below (matches the Rust loader, which also errors on this).
+    IF EXISTS (
+        SELECT 1 FROM newdata n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+        )
+    ) THEN
+        RAISE EXCEPTION 'cannot load item(s) into nonexistent collection(s): %',
+            (SELECT string_agg(DISTINCT coalesce(n.content->>'collection', '<null>'), ', ')
+             FROM newdata n
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+             ));
+    END IF;
+
     FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
@@ -3903,156 +3893,10 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
-CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections
-    SET content = jsonb_set_lax(
-        content,
-        '{extent}'::text[],
-        collection_extent(id, FALSE),
-        true,
-        'use_json_null'
-    )
-;
-$$ LANGUAGE SQL;
 
--- ---------------------------------------------------------------------------
--- Field Registry: walks JSONB item content to track which paths exist in each
--- collection.  Used to auto-populate queryables and support schema inference.
--- jsonb_field_rows is defined in 001a_jsonutils.sql (loaded first).
--- ---------------------------------------------------------------------------
 
--- update_field_registry_from_sample: UPSERT registry rows from a pre-selected array of
--- raw item content JSONBs.  Callers supply the sample to decouple sampling strategy
--- from the registry write; merge value_kinds to accumulate observed types over time.
-CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
-    _collection text,
-    item_contents jsonb[]
-) RETURNS void AS $$
-    INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-    SELECT
-        _collection,
-        r.path,
-        bool_and(r.is_leaf)                                                       AS is_leaf,
-        array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-        now(),
-        now()
-    FROM unnest(item_contents) AS item(content)
-    CROSS JOIN LATERAL jsonb_field_rows(item.content) AS r(path, is_leaf, value_kind)
-    GROUP BY r.path
-    ON CONFLICT (collection, path) DO UPDATE SET
-        is_leaf     = EXCLUDED.is_leaf,
-        value_kinds = (
-            SELECT array_agg(DISTINCT v)
-            FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-        ),
-        last_seen   = now()
-    ;
-$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
 
--- update_field_registry_from_items: Sample a live collection and UPSERT registry rows.
--- Uses TABLESAMPLE BERNOULLI(5) for large collections (>10k rows by pg_class estimate)
--- and LIMIT 1000 for smaller ones to avoid a full seq-scan for tiny collections.
--- pg_class.reltuples is an estimate (may be stale); its only role is threshold selection.
--- Returns (registered_paths, rows_processed) for observability.
-CREATE OR REPLACE FUNCTION update_field_registry_from_items(
-    _collection text
-) RETURNS TABLE (registered_paths int, rows_processed int) AS $$
-DECLARE
-    est_rows bigint;
-    nrows    int;
-    npaths   int;
-BEGIN
-    -- Sum reltuples across the registered item partitions for this collection.
-    -- reltuples can be -1 (never analyzed); treat negative values as zero.
-    SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
-    FROM partitions_view p
-    JOIN pg_class c ON c.relname = p.partition
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE p.collection = _collection
-      AND n.nspname = 'pgstac'
-      AND c.relkind = 'r';
 
-    IF est_rows > 10000 THEN
-        -- Large collection: use statistical sampling to avoid full seq-scan.
-        WITH sampled AS (
-            SELECT content_hydrate(i) AS content FROM items i TABLESAMPLE BERNOULLI(5) WHERE i.collection = _collection
-        ),
-        upserted AS (
-            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-            SELECT
-                _collection,
-                r.path,
-                bool_and(r.is_leaf)                                                       AS is_leaf,
-                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-                now(), now()
-            FROM sampled
-            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
-            GROUP BY r.path
-            ON CONFLICT (collection, path) DO UPDATE SET
-                is_leaf     = EXCLUDED.is_leaf,
-                value_kinds = (
-                    SELECT array_agg(DISTINCT v)
-                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-                ),
-                last_seen   = now()
-            RETURNING 1
-        )
-        SELECT
-            (SELECT count(*)::int FROM upserted),
-            (SELECT count(*)::int FROM sampled)
-        INTO npaths, nrows;
-    ELSE
-        -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
-        WITH sampled AS (
-            SELECT content_hydrate(i) AS content FROM items i WHERE i.collection = _collection LIMIT 1000
-        ),
-        upserted AS (
-            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
-            SELECT
-                _collection,
-                r.path,
-                bool_and(r.is_leaf)                                                       AS is_leaf,
-                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
-                now(), now()
-            FROM sampled
-            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
-            GROUP BY r.path
-            ON CONFLICT (collection, path) DO UPDATE SET
-                is_leaf     = EXCLUDED.is_leaf,
-                value_kinds = (
-                    SELECT array_agg(DISTINCT v)
-                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
-                ),
-                last_seen   = now()
-            RETURNING 1
-        )
-        SELECT
-            (SELECT count(*)::int FROM upserted),
-            (SELECT count(*)::int FROM sampled)
-        INTO npaths, nrows;
-    END IF;
-
-    RETURN QUERY SELECT npaths, nrows;
-END;
-$$ LANGUAGE PLPGSQL VOLATILE SECURITY DEFINER;
-
--- refresh_field_registry: Expire stale registry entries that haven't been seen recently.
--- Intended for scheduled maintenance (e.g. pg_cron daily job).
--- Returns (collection, expired_paths) for each collection affected.
-CREATE OR REPLACE FUNCTION refresh_field_registry(
-    _collection text DEFAULT NULL,
-    retention_interval interval DEFAULT '90 days'
-) RETURNS TABLE (collection_id text, expired_paths int) AS $$
-    WITH deleted AS (
-        DELETE FROM item_field_registry
-        WHERE (_collection IS NULL OR collection = _collection)
-          AND last_seen < now() - retention_interval
-        RETURNING collection
-    )
-    SELECT collection, count(*)::int
-    FROM deleted
-    GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
 
 -- Item Fragment Management functions
 
@@ -4109,37 +3953,6 @@ CREATE OR REPLACE FUNCTION pgstac_hash_fragment(fragment jsonb) RETURNS bytea AS
 SELECT sha256(convert_to(fragment::text, 'UTF8'));
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
--- gc_fragments: Garbage collect orphaned fragments using a single set-based DELETE so the
--- planner can choose the optimal join/anti-join strategy across all collections.
--- The NOT EXISTS sub-select is evaluated per fragment; with an index on items.fragment_id
--- this is an efficient anti-join rather than a full seq-scan.
---
--- Operational note: because items.fragment_id is intentionally unmanaged by an FK
--- (partitioned-items incremental NOT VALID FKs are not supported), gc_fragments has a
--- small race window with concurrent inserts. A fragment that is unreferenced at the time
--- the DELETE snapshot is taken but becomes referenced by a later insert could be removed.
--- The retention_interval guard makes this unlikely for normal ingest, but operators should
--- still run gc_fragments during low-ingest periods or with a sufficiently conservative
--- retention interval. This is a documented operational tradeoff, not a silent invariant.
-CREATE OR REPLACE FUNCTION gc_fragments(
-    _collection text DEFAULT NULL,
-    retention_interval interval DEFAULT '90 days'
-) RETURNS TABLE (
-    collection_id text,
-    fragments_removed int
-) AS $$
-    WITH deleted AS (
-        DELETE FROM item_fragments f
-        WHERE
-            (_collection IS NULL OR f.collection = _collection)
-            AND f.created_at < now() - retention_interval
-            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id)
-        RETURNING f.collection
-    )
-    SELECT collection, count(*)::int
-    FROM deleted
-    GROUP BY collection;
-$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
 
 -- strip_fragment_col: Remove fragment-owned sub-keys from a split column value.
 -- col_name is the top-level STAC key that this column represents (e.g. 'assets' or 'properties').
@@ -4190,16 +4003,15 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
     collection text,
-    -- dtrange/edtrange are the DATA bounds used for search pruning + stepping; they are seeded NULL and
-    -- filled generously on ingest (widen) then narrowed to exact by the async tightener. The partition's
-    -- STRUCTURAL range is not duplicated here — it lives in the partition's own constraint and is read
-    -- live from partitions_view.constraint_dtrange when needed.
+    -- dtrange/edtrange are the data bounds used for search pruning. widen_partition_stats fills them
+    -- (generously) on ingest; tighten_partition_stats narrows them to the exact extent. The partition's
+    -- structural range lives in its own constraint, read via partitions_view.constraint_dtrange.
     dtrange tstzrange,
     edtrange tstzrange,
     spatial geometry,
     last_updated timestamptz,
     n bigint,
-    -- Deferred-maintenance flags driven by the widen-now / tighten-async ingest model.
+    -- Deferred-maintenance flags:
     --   dirty:           the stored envelope may be WIDER than the actual data; an async tightener
     --                    should recompute exact min/max/extent and clear the flag. Search correctness
     --                    never depends on this (a wide envelope only over-includes a partition).
@@ -4363,75 +4175,6 @@ FROM
 WHERE isleaf
 ;
 
--- The `partitions` MATERIALIZED VIEW is intentionally gone: the widen-now / tighten-async model never
--- refreshes matviews on the hot path, so a materialized snapshot would always be stale. `partitions_view`
--- is the always-current equivalent — read it directly.
-DROP MATERIALIZED VIEW IF EXISTS partitions CASCADE;
-
--- partition_steps is gone: the v0.10 search plans bands from partition_bounds over partition_stats data
--- ranges, so the per-partition month-step view has no consumers.
-DROP MATERIALIZED VIEW IF EXISTS partition_steps;
-DROP VIEW IF EXISTS partition_steps;
-
-
--- tighten_partition_stats: async maintenance task. Recompute the EXACT envelope (min/max datetime +
--- end_datetime, real spatial extent) and exact row count for one partition, then clear `dirty`. This is
--- the ONLY thing that narrows a partition_stats envelope; it never runs on the ingest hot path (the
--- maintenance sweeps drive it over `partition_stats WHERE dirty`). An empty partition tightens to an
--- 'empty' range so search prunes it out entirely. No constraints, no matview refresh, no ANALYZE (the
--- off-hours analyze sweep owns reltuples), no collection-extent side effects.
-CREATE OR REPLACE FUNCTION tighten_partition_stats(_partition text) RETURNS void AS $$
-DECLARE
-    _n bigint;
-    _dtmin timestamptz; _dtmax timestamptz;
-    _edtmin timestamptz; _edtmax timestamptz;
-    _spatial geometry;
-    _dtrange tstzrange;
-    _edtrange tstzrange;
-    _collection text;
-BEGIN
-    -- Hold the partition's advisory lock across BOTH the scan and the write: tighten narrows dtrange to
-    -- the scanned exact extent and clears dirty, so a concurrent ingest committing a row outside that
-    -- extent mid-tighten would otherwise be left uncovered (search would prune + miss it). The same lock
-    -- check_partition/flush use, so tighten serializes with ingest into this partition (different
-    -- partitions don't contend). tighten is the async/off-hours path, so the hold is acceptable.
-    PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
-
-    EXECUTE format(
-        $q$
-            SELECT count(*), min(datetime), max(datetime), min(end_datetime), max(end_datetime),
-                   st_setsrid(st_extent(geometry)::geometry, 4326)
-            FROM %I
-        $q$,
-        _partition
-    ) INTO _n, _dtmin, _dtmax, _edtmin, _edtmax, _spatial;
-
-    IF _n = 0 THEN
-        _dtrange := 'empty'::tstzrange;
-        _edtrange := 'empty'::tstzrange;
-        _spatial := NULL;
-    ELSE
-        _dtrange := tstzrange(_dtmin, _dtmax, '[]');
-        _edtrange := tstzrange(_edtmin, _edtmax, '[]');
-    END IF;
-
-    SELECT pv.collection
-        INTO _collection
-    FROM partitions_view pv WHERE partition = _partition;
-
-    INSERT INTO partition_stats
-        (partition, collection, dtrange, edtrange, spatial, n, dirty, last_updated)
-        VALUES (_partition, _collection, _dtrange, _edtrange, _spatial, _n, false, now())
-        ON CONFLICT (partition) DO UPDATE SET
-            collection = EXCLUDED.collection,
-            dtrange = EXCLUDED.dtrange,
-            edtrange = EXCLUDED.edtrange,
-            spatial = EXCLUDED.spatial,
-            n = EXCLUDED.n,
-            dirty = false,
-            last_updated = now();
-END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -4466,24 +4209,19 @@ END;
 $$ LANGUAGE PLPGSQL STABLE;
 
 
--- (drop_table_constraints / create_table_constraints removed: under INV-5 partitions carry no extra
---  _dt CHECK constraints. Pruning is partition_stats-driven; get_tstz_constraint/constraint_tstzrange
---  remain only so the views' constraint_* columns resolve to inf_range when no constraint exists.)
+-- Partitions carry no _dt CHECK constraints; pruning is partition_stats-driven. get_tstz_constraint /
+-- constraint_tstzrange remain so the views' constraint_* columns resolve to inf_range when a partition
+-- has no datetime constraint.
 
 
--- widen_partition_stats: the covered?-guard. The ONLY hot-path writer of a partition_stats envelope.
---
--- If the stored envelope already covers (_dtrange, _edtrange, _spatial) it is a no-op (a plain snapshot
--- read, no row write, no lock) — this is what keeps steady-state high-concurrency ingest contention-free.
--- On a miss it widens GENEROUSLY (INV-6/INV-7) and sets dirty=true so an async tightener can later
--- recompute exact bounds:
---   * datetime  : sub-partitioned collections use the partition's datetime bound (covers everything that
---                 can legally land there, so dtrange never misses); a NULL-partition_trunc partition has
---                 no finite bound, so it uses the batch range padded by `partition_stats_widen_buffer`
---                 (default 1 month) each side and extends by that buffer on a miss.
+-- widen_partition_stats: widen a partition's stored envelope to cover a batch. A no-op (snapshot read, no
+-- write, no lock) when the envelope already covers the batch; otherwise widens and sets dirty=true:
+--   * datetime    : sub-partitioned collections widen to the partition's datetime bound (covers anything
+--                   that can land there); a NULL-partition_trunc partition pads the batch range by
+--                   partition_stats_widen_buffer (default 1 month) each side.
 --   * end_datetime: the datetime target extended by the batch's max (end_datetime - datetime) tail.
---   * spatial   : NULL means "always a search candidate"; a spatial miss RESETS spatial to NULL (rather
---                 than nudging it) so it cannot miss again until the tightener computes the real extent.
+--   * spatial     : NULL means "always a search candidate"; a spatial miss resets spatial to NULL until
+--                   the tightener computes the real extent.
 -- Requires the partition_stats row to exist (check_partition seeds it); raises if it does not.
 CREATE OR REPLACE FUNCTION widen_partition_stats(
     _partition text,
@@ -4520,13 +4258,10 @@ BEGIN
         RETURN; -- already covered: no write, no lock
     END IF;
 
-    -- Clamp the widen to the partition's STRUCTURAL bound (_constraint_dtrange, read live from the
-    -- partition's datetime constraint by the caller). A sub-partitioned (month/year) collection's bound is
-    -- finite: cover the whole partition (everything that can legally land there) so dtrange never misses
-    -- AND never dilutes past the partition into a neighbour. A NULL-partition_trunc partition (or a NULL
-    -- bound) is unbounded: there is nothing to clamp to, so pad the batch range by the widen buffer each
-    -- side (INV-7: one widen now spares a write per nearby item later). The async tightener narrows either
-    -- kind to the exact data extent off the hot path.
+    -- Clamp the widen to the partition's structural bound (_constraint_dtrange). A sub-partitioned
+    -- (month/year) partition's bound is finite: cover the whole partition so dtrange never misses and
+    -- never spills into a neighbour. An unbounded partition (NULL-partition_trunc or NULL bound) has
+    -- nothing to clamp to, so pad the batch range by the widen buffer each side.
     is_unbounded := _constraint_dtrange IS NULL
                  OR (lower(_constraint_dtrange) = '-infinity'::timestamptz
                      AND upper(_constraint_dtrange) = 'infinity'::timestamptz);
@@ -4594,14 +4329,12 @@ BEGIN
         _partition_name := _parent_name;
     END IF;
 
-    -- Create the collection-level PARENT partition (_items_<key>) FIRST, for sub-partitioned collections.
-    -- It is shared across every child window of the collection, so concurrent setup of DIFFERENT children
-    -- (which take different child locks below) would otherwise race on its CREATE TABLE — the loser's error
-    -- was previously swallowed, leaving the child uncreated and a later write hitting "no partition found".
-    -- Guard it with a parent-scoped advisory lock taken BEFORE any child lock, and only when the parent is
-    -- actually missing. Acquiring parent-before-child gives one global lock order (parent < child) so it
-    -- cannot deadlock with ensure_partitions' sorted child-lock acquisition; skipping it once the parent
-    -- exists means steady-state ingest never serializes on the parent.
+    -- Create the collection-level PARENT partition (_items_<key>) first, for sub-partitioned collections.
+    -- It is shared across every child window, so concurrent setup of different children would race on its
+    -- CREATE TABLE. Guard it with a parent-scoped advisory lock, taken before any child lock and only when
+    -- the parent is missing: parent-before-child is one lock order (parent < child) that can't deadlock
+    -- with ensure_partitions' sorted child locks, and skipping it once the parent exists keeps steady-state
+    -- ingest off the parent lock.
     IF c.partition_trunc IS NOT NULL AND to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
         PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_parent_name));
         IF to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
@@ -4618,12 +4351,12 @@ BEGIN
     -- releases at commit (setup is fast + idempotent).
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition_name));
 
-    -- Create the leaf partition if missing (the parent is guaranteed to exist by the block above). Parent-
-    -- inherited indexes ONLY (id PK here; datetime/geometry are inherited from the items parent). NO CHECK
-    -- constraints (INV-5); queryable indexes are deferred via indexes_pending (INV-4); NO matview refresh
-    -- (INV-3). A SELECT grant lets read/ingest query it; writes reach it only through pgstac_load / the SD
-    -- flush. Skip the DDL when it already exists (steady-state hot path): re-running CREATE/GRANT takes a
-    -- relation lock that deadlocks with concurrent INSERTs. The check is race-safe under the advisory lock.
+    -- Create the leaf partition if missing. Parent-inherited indexes only (id PK here; datetime/geometry
+    -- come from the items parent); no CHECK constraints; queryable indexes are deferred via
+    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through the
+    -- SECURITY DEFINER write functions (the privilege wall in 998_idempotent_post).
+    -- Skip the DDL when it already exists: re-running CREATE/GRANT takes a relation lock that deadlocks
+    -- with concurrent INSERTs. The existence check is race-safe under the advisory lock.
     IF to_regclass(format('pgstac.%I', _partition_name)) IS NULL THEN
         BEGIN
             IF c.partition_trunc IS NULL THEN
@@ -5901,14 +5634,10 @@ $$ LANGUAGE SQL;
 
 -- BEGIN FRAGMENT: 997_maintenance.sql
 
--- tighten_dirty_partition_stats: the async "tighten" sweep of the widen-now / tighten-async model. Ingest
--- leaves partition_stats GENEROUS + dirty (cheap covered-guard widen + n bump); this recomputes the EXACT
--- envelope + row count for dirty partitions (oldest first), clearing dirty. Run it off-hours via pg_cron
--- or the maintenance CLI. Optional + safe: a generous envelope only over-includes a partition in search,
--- so skipping it never loses rows — tightening just restores tight pruning + honest counts. Each
--- tighten_partition_stats serializes with concurrent ingest into the same partition via the shared
--- advisory lock; different partitions never contend. `_limit` caps the batch (NULL = all dirty). Returns
--- the number of partitions tightened.
+-- tighten_dirty_partition_stats: recompute the exact envelope + row count for dirty partitions (oldest
+-- first), clearing dirty. Run off-hours (pg_cron or the maintenance CLI). Optional: a wide envelope only
+-- over-includes a partition in search, so skipping it never loses rows. `_limit` caps the batch (NULL =
+-- all dirty); returns the number of partitions tightened.
 --
 -- pg_cron example (operators install this themselves):
 --   SELECT cron.schedule('pgstac-tighten', '*/15 * * * *',
@@ -5926,6 +5655,38 @@ BEGIN
         LIMIT _limit
     LOOP
         PERFORM pgstac.tighten_partition_stats(_part);
+        _count := _count + 1;
+    END LOOP;
+    RETURN _count;
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+
+
+-- build_pending_indexes: build the queryable indexes for partitions flagged `indexes_pending` (new
+-- partitions are created index-light for fast ingest; changing a queryable flags every partition via the
+-- queryables trigger), then clear the flag. Builds the DDL directly (not via the queue), so schedule it
+-- off-hours like the tighten sweep. `_limit` caps the batch (NULL = all pending); returns the count built.
+--
+-- pg_cron example (operators install this themselves):
+--   SELECT cron.schedule('pgstac-build-indexes', '*/30 * * * *',
+--                        $$SELECT pgstac.build_pending_indexes(50)$$);
+CREATE OR REPLACE FUNCTION build_pending_indexes(_limit int DEFAULT NULL)
+RETURNS int AS $$
+DECLARE
+    _part text;
+    _q text;
+    _count int := 0;
+BEGIN
+    FOR _part IN
+        SELECT partition FROM pgstac.partition_stats
+        WHERE indexes_pending
+        ORDER BY last_updated NULLS FIRST
+        LIMIT _limit
+    LOOP
+        FOR _q IN SELECT * FROM pgstac.maintain_partition_queries(_part) LOOP
+            EXECUTE _q;
+        END LOOP;
+        UPDATE pgstac.partition_stats SET indexes_pending = false WHERE partition = _part;
         _count := _count + 1;
     END LOOP;
     RETURN _count;
@@ -6082,6 +5843,241 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE PLPGSQL;
+
+
+-- update_collection_extents: recompute every collection's extent from partitions_view.
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections
+    SET content = jsonb_set_lax(
+        content,
+        '{extent}'::text[],
+        collection_extent(id, FALSE),
+        true,
+        'use_json_null'
+    )
+;
+$$ LANGUAGE SQL;
+
+
+-- ---------------------------------------------------------------------------
+-- Field registry maintenance: track which paths (and value types) exist per
+-- collection. Used for schema inference (e.g. the geoparquet export schema).
+-- jsonb_field_rows is in 001a_jsonutils.sql.
+-- ---------------------------------------------------------------------------
+
+-- update_field_registry_from_sample: UPSERT registry rows from an array of raw item content JSONBs (the
+-- caller picks the sample); value_kinds accumulate observed types over time.
+CREATE OR REPLACE FUNCTION update_field_registry_from_sample(
+    _collection text,
+    item_contents jsonb[]
+) RETURNS void AS $$
+    INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+    SELECT
+        _collection,
+        r.path,
+        bool_and(r.is_leaf)                                                       AS is_leaf,
+        array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+        now(),
+        now()
+    FROM unnest(item_contents) AS item(content)
+    CROSS JOIN LATERAL jsonb_field_rows(item.content) AS r(path, is_leaf, value_kind)
+    GROUP BY r.path
+    ON CONFLICT (collection, path) DO UPDATE SET
+        is_leaf     = EXCLUDED.is_leaf,
+        value_kinds = (
+            SELECT array_agg(DISTINCT v)
+            FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+        ),
+        last_seen   = now()
+    ;
+$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
+
+
+-- update_field_registry_from_items: sample a live collection and UPSERT registry rows (TABLESAMPLE
+-- BERNOULLI(5) above ~10k rows by pg_class estimate, else LIMIT 1000). Returns (registered_paths,
+-- rows_processed).
+CREATE OR REPLACE FUNCTION update_field_registry_from_items(
+    _collection text
+) RETURNS TABLE (registered_paths int, rows_processed int) AS $$
+DECLARE
+    est_rows bigint;
+    nrows    int;
+    npaths   int;
+BEGIN
+    -- Sum reltuples across the registered item partitions for this collection.
+    -- reltuples can be -1 (never analyzed); treat negative values as zero.
+    SELECT COALESCE(sum(GREATEST(c.reltuples::bigint, 0)), 0) INTO est_rows
+    FROM partitions_view p
+    JOIN pg_class c ON c.relname = p.partition
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.collection = _collection
+      AND n.nspname = 'pgstac'
+      AND c.relkind = 'r';
+
+    IF est_rows > 10000 THEN
+        -- Large collection: use statistical sampling to avoid full seq-scan.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i TABLESAMPLE BERNOULLI(5) WHERE i.collection = _collection
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    ELSE
+        -- Small collection: process up to 1000 rows to avoid BERNOULLI returning 0 rows.
+        WITH sampled AS (
+            SELECT content_hydrate(i) AS content FROM items i WHERE i.collection = _collection LIMIT 1000
+        ),
+        upserted AS (
+            INSERT INTO item_field_registry (collection, path, is_leaf, value_kinds, first_seen, last_seen)
+            SELECT
+                _collection,
+                r.path,
+                bool_and(r.is_leaf)                                                       AS is_leaf,
+                array_agg(DISTINCT r.value_kind) FILTER (WHERE r.value_kind IS NOT NULL)  AS value_kinds,
+                now(), now()
+            FROM sampled
+            CROSS JOIN LATERAL jsonb_field_rows(content) AS r(path, is_leaf, value_kind)
+            GROUP BY r.path
+            ON CONFLICT (collection, path) DO UPDATE SET
+                is_leaf     = EXCLUDED.is_leaf,
+                value_kinds = (
+                    SELECT array_agg(DISTINCT v)
+                    FROM unnest(item_field_registry.value_kinds || EXCLUDED.value_kinds) t(v)
+                ),
+                last_seen   = now()
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*)::int FROM upserted),
+            (SELECT count(*)::int FROM sampled)
+        INTO npaths, nrows;
+    END IF;
+
+    RETURN QUERY SELECT npaths, nrows;
+END;
+$$ LANGUAGE PLPGSQL VOLATILE SECURITY DEFINER;
+
+
+-- refresh_field_registry: expire registry entries not seen within retention_interval (scheduled
+-- maintenance). Returns (collection, expired_paths) per affected collection.
+CREATE OR REPLACE FUNCTION refresh_field_registry(
+    _collection text DEFAULT NULL,
+    retention_interval interval DEFAULT '90 days'
+) RETURNS TABLE (collection_id text, expired_paths int) AS $$
+    WITH deleted AS (
+        DELETE FROM item_field_registry
+        WHERE (_collection IS NULL OR collection = _collection)
+          AND last_seen < now() - retention_interval
+        RETURNING collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
+$$ LANGUAGE SQL VOLATILE SECURITY DEFINER;
+
+
+-- gc_fragments: garbage-collect orphaned item_fragments with a single set-based DELETE (NOT EXISTS
+-- anti-join against items.fragment_id). items.fragment_id has no FK (partitioned-items incremental
+-- NOT VALID FKs aren't supported), so a fragment unreferenced at the DELETE snapshot but referenced by a
+-- concurrent insert can be removed; the retention_interval guard makes this unlikely. Run during
+-- low-ingest periods.
+CREATE OR REPLACE FUNCTION gc_fragments(
+    _collection text DEFAULT NULL,
+    retention_interval interval DEFAULT '90 days'
+) RETURNS TABLE (
+    collection_id text,
+    fragments_removed int
+) AS $$
+    WITH deleted AS (
+        DELETE FROM item_fragments f
+        WHERE
+            (_collection IS NULL OR f.collection = _collection)
+            AND f.created_at < now() - retention_interval
+            AND NOT EXISTS (SELECT 1 FROM items i WHERE i.fragment_id = f.id)
+        RETURNING f.collection
+    )
+    SELECT collection, count(*)::int
+    FROM deleted
+    GROUP BY collection;
+$$ LANGUAGE SQL VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
+
+
+-- tighten_partition_stats: recompute the exact envelope (datetime/end_datetime min-max + spatial extent)
+-- and row count for one partition, then clear `dirty`. The only function that narrows a partition_stats
+-- envelope; the maintenance sweeps drive it over partition_stats WHERE dirty. An empty partition tightens
+-- to an 'empty' range so search prunes it out.
+CREATE OR REPLACE FUNCTION tighten_partition_stats(_partition text) RETURNS void AS $$
+DECLARE
+    _n bigint;
+    _dtmin timestamptz; _dtmax timestamptz;
+    _edtmin timestamptz; _edtmax timestamptz;
+    _spatial geometry;
+    _dtrange tstzrange;
+    _edtrange tstzrange;
+    _collection text;
+BEGIN
+    -- Hold the partition's advisory lock across the scan + write: tighten narrows dtrange to the scanned
+    -- extent and clears dirty, so without the lock a concurrent ingest committing a row outside that
+    -- extent would be left uncovered (search would prune + miss it). Same lock check_partition uses, so
+    -- tighten serializes with ingest into this partition only.
+    PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
+
+    EXECUTE format(
+        $q$
+            SELECT count(*), min(datetime), max(datetime), min(end_datetime), max(end_datetime),
+                   st_setsrid(st_extent(geometry)::geometry, 4326)
+            FROM %I
+        $q$,
+        _partition
+    ) INTO _n, _dtmin, _dtmax, _edtmin, _edtmax, _spatial;
+
+    IF _n = 0 THEN
+        _dtrange := 'empty'::tstzrange;
+        _edtrange := 'empty'::tstzrange;
+        _spatial := NULL;
+    ELSE
+        _dtrange := tstzrange(_dtmin, _dtmax, '[]');
+        _edtrange := tstzrange(_edtmin, _edtmax, '[]');
+    END IF;
+
+    SELECT pv.collection
+        INTO _collection
+    FROM partitions_view pv WHERE partition = _partition;
+
+    INSERT INTO partition_stats
+        (partition, collection, dtrange, edtrange, spatial, n, dirty, last_updated)
+        VALUES (_partition, _collection, _dtrange, _edtrange, _spatial, _n, false, now())
+        ON CONFLICT (partition) DO UPDATE SET
+            collection = EXCLUDED.collection,
+            dtrange = EXCLUDED.dtrange,
+            edtrange = EXCLUDED.edtrange,
+            spatial = EXCLUDED.spatial,
+            n = EXCLUDED.n,
+            dirty = false,
+            last_updated = now();
+END;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 -- END FRAGMENT: 997_maintenance.sql
 
 -- BEGIN FRAGMENT: 998_idempotent_post.sql
@@ -6251,13 +6247,6 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragment
 -- holds structurally against narrowing, while the cheap widen stays on the hot load path.
 REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
 
--- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
--- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
--- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
--- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
--- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
-GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
-GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
 
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;

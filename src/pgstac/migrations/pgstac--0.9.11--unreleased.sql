@@ -44,25 +44,6 @@ DO $$
   END
 $$;
 
--- pgstac_load: the explicit up-privilege role used to direct-write the wall-protected tables (items /
--- partition_stats / item_fragments) from the Rust loader via SET ROLE. NOLOGIN, and granted WITH INHERIT
--- FALSE so nobody writes those tables implicitly — only a deliberate, auditable SET ROLE does.
-DO $$
-  BEGIN
-    CREATE ROLE pgstac_load NOLOGIN;
-  EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
-  END
-$$;
-
--- Role MEMBERSHIP grants live here (idempotent_pre), where the installing superuser still holds the role
--- context — pgstac.sql later does SET ROLE pgstac_admin, and pgstac_admin lacks ADMIN OPTION on a pgstac_load
--- the superuser created, so a membership grant in 998 (as pgstac_admin) would fail. INHERIT FALSE keeps the
--- privileges dormant (the wall holds); SET (default) lets the member `SET ROLE pgstac_load`. pgstac_admin also
--- gets ADMIN OPTION so an incremental migration running AS pgstac_admin can re-assert these. (998 grants the
--- table/usage privileges once the tables exist.)
-GRANT pgstac_load TO pgstac_admin  WITH ADMIN OPTION, INHERIT FALSE;
-GRANT pgstac_load TO pgstac_ingest WITH INHERIT FALSE;
 
 
 GRANT pgstac_admin TO current_user;
@@ -216,6 +197,11 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+-- Drop objects superseded by the current partition_stats model.
+DROP MATERIALIZED VIEW IF EXISTS partitions CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS partition_steps;
+DROP VIEW IF EXISTS partition_steps;
+
 -- Drop function signatures whose argument lists changed (CREATE OR REPLACE cannot alter them)
 DROP FUNCTION IF EXISTS chunker(pred_envelope);
 DROP FUNCTION IF EXISTS search_bands(pred_envelope, boolean, integer, integer);
@@ -292,6 +278,33 @@ create type "pgstac"."pred_envelope" as (
 
 set check_function_bodies = off;
 
+CREATE OR REPLACE FUNCTION pgstac.build_pending_indexes(_limit integer DEFAULT NULL::integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    _part text;
+    _q text;
+    _count int := 0;
+BEGIN
+    FOR _part IN
+        SELECT partition FROM pgstac.partition_stats
+        WHERE indexes_pending
+        ORDER BY last_updated NULLS FIRST
+        LIMIT _limit
+    LOOP
+        FOR _q IN SELECT * FROM pgstac.maintain_partition_queries(_part) LOOP
+            EXECUTE _q;
+        END LOOP;
+        UPDATE pgstac.partition_stats SET indexes_pending = false WHERE partition = _part;
+        _count := _count + 1;
+    END LOOP;
+    RETURN _count;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.check_partition(_collection text, _dtrange tstzrange, _edtrange tstzrange, _spatial geometry DEFAULT NULL::geometry)
  RETURNS text
  LANGUAGE plpgsql
@@ -331,14 +344,12 @@ BEGIN
         _partition_name := _parent_name;
     END IF;
 
-    -- Create the collection-level PARENT partition (_items_<key>) FIRST, for sub-partitioned collections.
-    -- It is shared across every child window of the collection, so concurrent setup of DIFFERENT children
-    -- (which take different child locks below) would otherwise race on its CREATE TABLE — the loser's error
-    -- was previously swallowed, leaving the child uncreated and a later write hitting "no partition found".
-    -- Guard it with a parent-scoped advisory lock taken BEFORE any child lock, and only when the parent is
-    -- actually missing. Acquiring parent-before-child gives one global lock order (parent < child) so it
-    -- cannot deadlock with ensure_partitions' sorted child-lock acquisition; skipping it once the parent
-    -- exists means steady-state ingest never serializes on the parent.
+    -- Create the collection-level PARENT partition (_items_<key>) first, for sub-partitioned collections.
+    -- It is shared across every child window, so concurrent setup of different children would race on its
+    -- CREATE TABLE. Guard it with a parent-scoped advisory lock, taken before any child lock and only when
+    -- the parent is missing: parent-before-child is one lock order (parent < child) that can't deadlock
+    -- with ensure_partitions' sorted child locks, and skipping it once the parent exists keeps steady-state
+    -- ingest off the parent lock.
     IF c.partition_trunc IS NOT NULL AND to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
         PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_parent_name));
         IF to_regclass(format('pgstac.%I', _parent_name)) IS NULL THEN
@@ -355,12 +366,12 @@ BEGIN
     -- releases at commit (setup is fast + idempotent).
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition_name));
 
-    -- Create the leaf partition if missing (the parent is guaranteed to exist by the block above). Parent-
-    -- inherited indexes ONLY (id PK here; datetime/geometry are inherited from the items parent). NO CHECK
-    -- constraints (INV-5); queryable indexes are deferred via indexes_pending (INV-4); NO matview refresh
-    -- (INV-3). A SELECT grant lets read/ingest query it; writes reach it only through pgstac_load / the SD
-    -- flush. Skip the DDL when it already exists (steady-state hot path): re-running CREATE/GRANT takes a
-    -- relation lock that deadlocks with concurrent INSERTs. The check is race-safe under the advisory lock.
+    -- Create the leaf partition if missing. Parent-inherited indexes only (id PK here; datetime/geometry
+    -- come from the items parent); no CHECK constraints; queryable indexes are deferred via
+    -- indexes_pending. A SELECT grant lets read/ingest query it; writes reach it only through the
+    -- SECURITY DEFINER write functions (the privilege wall in 998_idempotent_post).
+    -- Skip the DDL when it already exists: re-running CREATE/GRANT takes a relation lock that deadlocks
+    -- with concurrent INSERTs. The existence check is race-safe under the advisory lock.
     IF to_regclass(format('pgstac.%I', _partition_name)) IS NULL THEN
         BEGIN
             IF c.partition_trunc IS NULL THEN
@@ -1265,26 +1276,40 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION pgstac.jsonb_canonical(j jsonb)
- RETURNS text
+CREATE OR REPLACE FUNCTION pgstac.jsonb_canonical_hash(j jsonb)
+ RETURNS bytea
  LANGUAGE sql
  IMMUTABLE PARALLEL SAFE STRICT
+ SET "TimeZone" TO 'UTC'
 AS $function$
-    SELECT CASE jsonb_typeof(j)
-        WHEN 'object' THEN COALESCE((
-            SELECT '{' || string_agg(
-                to_json(kv.key)::text || ':' || jsonb_canonical(kv.value),
-                ',' ORDER BY kv.key COLLATE "C"
-            ) || '}'
-            FROM jsonb_each(j) kv
-        ), '{}')
-        WHEN 'array' THEN COALESCE((
-            SELECT '[' || string_agg(jsonb_canonical(e.value), ',' ORDER BY e.ord) || ']'
-            FROM jsonb_array_elements(j) WITH ORDINALITY e(value, ord)
-        ), '[]')
-        WHEN 'number' THEN (j #>> '{}')::float8::text
-        ELSE j::text  -- string (JSON-escaped, UTF-8 preserved), 'true' / 'false' / 'null'
-    END;
+    WITH RECURSIVE t(path, value) AS (
+        SELECT ''::text, j
+      UNION ALL
+        SELECT t.path || E'\x1F' || e.seg, e.value
+        FROM t CROSS JOIN LATERAL (
+            SELECT 'k' || key AS seg, value
+                FROM jsonb_each(t.value) WHERE jsonb_typeof(t.value) = 'object'
+            UNION ALL
+            SELECT 'i' || (ord - 1)::text AS seg, value
+                FROM jsonb_array_elements(t.value) WITH ORDINALITY x(value, ord)
+                WHERE jsonb_typeof(t.value) = 'array'
+        ) e
+    )
+    SELECT sha256(convert_to(COALESCE(string_agg(
+        t.path || E'\x1E' || CASE jsonb_typeof(t.value)
+            WHEN 'number'  THEN 'n' || (t.value #>> '{}')::float8::text
+            WHEN 'boolean' THEN 'b' || (t.value #>> '{}')
+            WHEN 'null'    THEN 'z'
+            WHEN 'string'  THEN CASE
+                WHEN (t.value #>> '{}') ~ '^\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?)?$'
+                THEN 't' || to_char((t.value #>> '{}')::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'
+                ELSE 's' || (t.value #>> '{}') END
+            WHEN 'object'  THEN 'e'
+            WHEN 'array'   THEN 'a'
+            ELSE 'c' END,
+        E'\x1D' ORDER BY t.path COLLATE "C"), ''), 'UTF8'))
+    FROM t
+    WHERE jsonb_typeof(t.value) NOT IN ('object', 'array') OR t.value = '{}'::jsonb OR t.value = '[]'::jsonb;
 $function$
 ;
 
@@ -1403,15 +1428,6 @@ BEGIN
         END LOOP;
     END IF;
 END;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION pgstac.jsonb_hash(j jsonb)
- RETURNS bytea
- LANGUAGE sql
- IMMUTABLE PARALLEL SAFE STRICT
-AS $function$
-    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
 $function$
 ;
 
@@ -2556,11 +2572,10 @@ DECLARE
     _edtrange tstzrange;
     _collection text;
 BEGIN
-    -- Hold the partition's advisory lock across BOTH the scan and the write: tighten narrows dtrange to
-    -- the scanned exact extent and clears dirty, so a concurrent ingest committing a row outside that
-    -- extent mid-tighten would otherwise be left uncovered (search would prune + miss it). The same lock
-    -- check_partition/flush use, so tighten serializes with ingest into this partition (different
-    -- partitions don't contend). tighten is the async/off-hours path, so the hold is acceptable.
+    -- Hold the partition's advisory lock across the scan + write: tighten narrows dtrange to the scanned
+    -- extent and clears dirty, so without the lock a concurrent ingest committing a row outside that
+    -- extent would be left uncovered (search would prune + miss it). Same lock check_partition uses, so
+    -- tighten serializes with ingest into this partition only.
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
 
     EXECUTE format(
@@ -2857,13 +2872,10 @@ BEGIN
         RETURN; -- already covered: no write, no lock
     END IF;
 
-    -- Clamp the widen to the partition's STRUCTURAL bound (_constraint_dtrange, read live from the
-    -- partition's datetime constraint by the caller). A sub-partitioned (month/year) collection's bound is
-    -- finite: cover the whole partition (everything that can legally land there) so dtrange never misses
-    -- AND never dilutes past the partition into a neighbour. A NULL-partition_trunc partition (or a NULL
-    -- bound) is unbounded: there is nothing to clamp to, so pad the batch range by the widen buffer each
-    -- side (INV-7: one widen now spares a write per nearby item later). The async tightener narrows either
-    -- kind to the exact data extent off the hot path.
+    -- Clamp the widen to the partition's structural bound (_constraint_dtrange). A sub-partitioned
+    -- (month/year) partition's bound is finite: cover the whole partition so dtrange never misses and
+    -- never spills into a neighbour. An unbounded partition (NULL-partition_trunc or NULL bound) has
+    -- nothing to clamp to, so pad the batch range by the widen buffer each side.
     is_unbounded := _constraint_dtrange IS NULL
                  OR (lower(_constraint_dtrange) = '-infinity'::timestamptz
                      AND upper(_constraint_dtrange) = 'infinity'::timestamptz);
@@ -3395,7 +3407,7 @@ AS $function$
         content->>'stac_version' AS stac_version,
         COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
         now() AS pgstac_updated_at,
-        pgstac.jsonb_hash(content) AS item_hash,
+        pgstac.jsonb_canonical_hash(content) AS item_hash,
         NULL::bigint AS fragment_id,
         content->'bbox' AS bbox,
         CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,
@@ -3511,7 +3523,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
@@ -4325,6 +4337,22 @@ DECLARE
     batch jsonb[];
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+
+    -- Fail loudly on items whose collection does not exist instead of silently dropping them
+    -- in the collections JOINs below (matches the Rust loader, which also errors on this).
+    IF EXISTS (
+        SELECT 1 FROM newdata n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+        )
+    ) THEN
+        RAISE EXCEPTION 'cannot load item(s) into nonexistent collection(s): %',
+            (SELECT string_agg(DISTINCT coalesce(n.content->>'collection', '<null>'), ', ')
+             FROM newdata n
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+             ));
+    END IF;
 
     FOR part IN WITH t AS (
         SELECT
@@ -5189,10 +5217,14 @@ $function$
 CREATE OR REPLACE FUNCTION pgstac.queryables_trigger_func()
  RETURNS trigger
  LANGUAGE plpgsql
+ SECURITY DEFINER
 AS $function$
 DECLARE
 BEGIN
-    PERFORM maintain_partitions();
+    -- Queryable definitions changed, so every partition's queryable indexes may be stale. Flag them and let
+    -- the async sweep (build_pending_indexes) (re)build off the hot path, instead of rebuilding every
+    -- partition synchronously inside this trigger.
+    UPDATE pgstac.partition_stats SET indexes_pending = true;
     RETURN NULL;
 END;
 $function$
@@ -6098,7 +6130,7 @@ drop function if exists "pgstac"."upsert_collection"(data jsonb);
 
 drop function if exists "pgstac"."where_stats"(inwhere text, updatestats boolean, conf jsonb);
 
-drop function if exists "pgstac"."parse_dtrange"(_indate jsonb, relative_base timestamp with time zone);
+drop function if exists "pgstac"."parse_dtrange"(_indate text, relative_base timestamp with time zone);
 
 create or replace view "pgstac"."collections_asitems" as  SELECT id,
     geometry,
@@ -6209,12 +6241,6 @@ CREATE TRIGGER items_before_update_trigger BEFORE UPDATE ON pgstac.items FOR EAC
 
 CREATE TRIGGER items_delete_log_after_delete_trigger AFTER DELETE ON pgstac.items REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION items_delete_log_trigger();
 
-alter table "pgstac"."item_field_registry" add constraint "item_field_registry_pkey" PRIMARY KEY using index "item_field_registry_pkey";
-
-alter table "pgstac"."item_fragments" add constraint "item_fragments_pkey" PRIMARY KEY using index "item_fragments_pkey";
-
-alter table "pgstac"."items_deleted_log" add constraint "items_deleted_log_pkey" PRIMARY KEY using index "items_deleted_log_pkey";
-
 CREATE INDEX item_field_registry_path_idx ON pgstac.item_field_registry USING btree (path);
 
 CREATE UNIQUE INDEX item_field_registry_pkey ON pgstac.item_field_registry USING btree (collection, path);
@@ -6240,6 +6266,12 @@ CREATE INDEX partition_stats_indexes_pending_idx ON pgstac.partition_stats USING
 CREATE INDEX partition_stats_spatial_idx ON pgstac.partition_stats USING gist (spatial) WHERE (spatial IS NOT NULL);
 
 CREATE INDEX searches_lastused_anon_idx ON pgstac.searches USING btree (lastused) WHERE (metadata IS NOT NULL);
+
+alter table "pgstac"."item_field_registry" add constraint "item_field_registry_pkey" PRIMARY KEY using index "item_field_registry_pkey";
+
+alter table "pgstac"."item_fragments" add constraint "item_fragments_pkey" PRIMARY KEY using index "item_fragments_pkey";
+
+alter table "pgstac"."items_deleted_log" add constraint "items_deleted_log_pkey" PRIMARY KEY using index "items_deleted_log_pkey";
 
 alter table "pgstac"."item_field_registry" add constraint "item_field_registry_collection_fkey" FOREIGN KEY ("collection") REFERENCES "pgstac"."collections"("id") ON DELETE CASCADE NOT VALID;
 
@@ -6381,7 +6413,7 @@ AS $function$
         content->>'stac_version' AS stac_version,
         COALESCE(content->'stac_extensions', '[]'::jsonb) AS stac_extensions,
         now() AS pgstac_updated_at,
-        pgstac.jsonb_hash(content) AS item_hash,
+        pgstac.jsonb_canonical_hash(content) AS item_hash,
         NULL::bigint AS fragment_id,
         content->'bbox' AS bbox,
         CASE WHEN content->'links' IS NOT NULL AND content->'links' <> '[]'::jsonb THEN content->'links' END AS links,
@@ -6465,7 +6497,7 @@ BEGIN
     END IF;
 
     IF jsonb_typeof(j) = 'object' THEN
-        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql1 expressions;
+        -- GeoJSON geometry args (Point/Polygon/.../GeometryCollection) are not cql expressions;
         -- pass them through unchanged so spatial ops keep their geometry intact.
         IF j ? 'type' AND (j ? 'coordinates' OR j ? 'geometries') THEN
             RETURN j;
@@ -6903,6 +6935,22 @@ DECLARE
 BEGIN
     RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
 
+    -- Fail loudly on items whose collection does not exist instead of silently dropping them
+    -- in the collections JOINs below (matches the Rust loader, which also errors on this).
+    IF EXISTS (
+        SELECT 1 FROM newdata n
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+        )
+    ) THEN
+        RAISE EXCEPTION 'cannot load item(s) into nonexistent collection(s): %',
+            (SELECT string_agg(DISTINCT coalesce(n.content->>'collection', '<null>'), ', ')
+             FROM newdata n
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM collections c WHERE c.id = n.content->>'collection'
+             ));
+    END IF;
+
     FOR part IN WITH t AS (
         SELECT
             n.content->>'collection' as collection,
@@ -7271,6 +7319,22 @@ WITH p AS (
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.queryables_trigger_func()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+BEGIN
+    -- Queryable definitions changed, so every partition's queryable indexes may be stale. Flag them and let
+    -- the async sweep (build_pending_indexes) (re)build off the hot path, instead of rebuilding every
+    -- partition synchronously inside this trigger.
+    UPDATE pgstac.partition_stats SET indexes_pending = true;
+    RETURN NULL;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.search(_search jsonb DEFAULT '{}'::jsonb)
  RETURNS json
  LANGUAGE plpgsql
@@ -7524,13 +7588,6 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragment
 -- holds structurally against narrowing, while the cheap widen stays on the hot load path.
 REVOKE DELETE, TRUNCATE ON item_field_registry FROM pgstac_ingest;
 
--- pgstac_load is the explicit up-privilege hole in the wall above: the Rust loader does `SET ROLE pgstac_load`
--- to binary-COPY into items and write partition_stats + item_fragments. These are the table/schema PRIVILEGE
--- grants on the role (the role MEMBERSHIP grants — who may SET ROLE pgstac_load — live in 000_idempotent_pre,
--- where the install's superuser context can make them; pgstac_admin here cannot grant a role it lacks ADMIN
--- on). SELECT is included so the binary-COPY column describe (SELECT * FROM items WHERE false) works.
-GRANT USAGE ON SCHEMA pgstac TO pgstac_load;
-GRANT SELECT, INSERT, UPDATE, DELETE ON items, partition_stats, item_fragments TO pgstac_load;
 
 REVOKE ALL PRIVILEGES ON PROCEDURE run_queued_queries FROM public;
 GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
