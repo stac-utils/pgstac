@@ -2,9 +2,9 @@ use crate::dehydrate::DehydrateSchema;
 use crate::ingest::{ConflictPolicy, load_items};
 use crate::db::call;
 use crate::read::collections;
-use crate::search::search_page_with;
+use crate::search::{SearchPage, search_page_with};
 use crate::source::CachedHydration;
-use crate::{Error, Page};
+use crate::Error;
 use serde::Serialize;
 use serde_json::Value;
 use stac::api::{CollectionsClient, ItemCollection, ItemsClient, Search, TransactionClient};
@@ -185,7 +185,7 @@ impl<C: PgConn + Send + Sync> ItemsClient for Client<C> {
             .and_then(Value::as_str)
             .map(str::to_string);
         let limit = body.get("limit").and_then(Value::as_i64).unwrap_or(10);
-        let page: Page = match search_page_with(
+        let page: SearchPage = match search_page_with(
             self.client.pg(),
             hydration.model,
             hydration.schema.as_deref(),
@@ -195,7 +195,7 @@ impl<C: PgConn + Send + Sync> ItemsClient for Client<C> {
         )
         .await
         {
-            Ok(page) => page.try_into()?,
+            Ok(page) => page,
             // A malformed token surfaces as a `keyset_decode` error in SQL; map it to a clear
             // InvalidToken rather than a raw DB error (and never an offset-style fallback).
             Err(Error::TokioPostgres(e)) => {

@@ -2,19 +2,96 @@
 //! byte-for-byte, so an item dehydrated in Rust gets the same `item_hash` as one ingested through the SQL
 //! path.
 //!
-//! Connects read-only to a pgstac database (`PGSTAC_RS_TEST_DB`, default the local dev `postgis` db).
+//! Stands up its own throwaway database from `src/pgstac/pgstac.sql` (dropped on `Drop`), so
+//! `jsonb_canonical_hash` is guaranteed present regardless of any ambient test database. Override the
+//! maintenance connection base (no database) via `PGSTAC_RS_TEST_BASE`.
 
 use pgstac::canonical;
 use serde_json::{Value, json};
-use tokio_postgres::NoTls;
+use std::sync::atomic::{AtomicU32, Ordering};
+use tokio_postgres::{Client, NoTls};
 
-fn dsn() -> String {
-    std::env::var("PGSTAC_RS_TEST_DB")
-        .unwrap_or_else(|_| "postgresql://username:password@localhost:5439/postgis".to_string())
+/// The maintenance connection base (no database), used to create + drop the throwaway database.
+fn base() -> String {
+    std::env::var("PGSTAC_RS_TEST_BASE")
+        .unwrap_or_else(|_| "postgresql://username:password@localhost:5439".to_string())
 }
 
-async fn connect() -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(&dsn(), NoTls).await.unwrap();
+/// The assembled pgstac schema, loaded into the fresh database.
+const PGSTAC_SQL: &str = include_str!("../../pgstac/pgstac.sql");
+
+/// A throwaway database built from `pgstac.sql`, dropped on `Drop`.
+struct FreshDb {
+    name: String,
+}
+
+impl FreshDb {
+    async fn create() -> FreshDb {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let name = format!(
+            "pgstac_rs_canonical_test_{}_{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let (client, connection) = tokio_postgres::connect(&format!("{}/postgres", base()), NoTls)
+            .await
+            .unwrap();
+        let handle = tokio::spawn(connection);
+        // CREATE DATABASE cannot run inside a transaction, so issue each statement on its own.
+        let _ = client
+            .execute(&format!("CREATE DATABASE {name}"), &[])
+            .await
+            .unwrap();
+        let _ = client
+            .execute(
+                &format!("ALTER DATABASE {name} SET search_path TO pgstac, public"),
+                &[],
+            )
+            .await
+            .unwrap();
+        handle.abort();
+        FreshDb { name }
+    }
+
+    fn dsn(&self) -> String {
+        format!("{}/{}", base(), self.name)
+    }
+}
+
+impl Drop for FreshDb {
+    fn drop(&mut self) {
+        let name = self.name.clone();
+        std::thread::scope(|scope| {
+            let _ = scope.spawn(|| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let (client, connection) =
+                        tokio_postgres::connect(&format!("{}/postgres", base()), NoTls)
+                            .await
+                            .unwrap();
+                    let handle = tokio::spawn(connection);
+                    let _ = client
+                        .execute(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1",
+                            &[&name],
+                        )
+                        .await;
+                    let _ = client
+                        .execute(&format!("DROP DATABASE IF EXISTS {name}"), &[])
+                        .await;
+                    handle.abort();
+                });
+            });
+        });
+    }
+}
+
+/// Connects to the fresh database and loads the assembled `pgstac.sql` into it.
+async fn connect_and_install(db: &FreshDb) -> Client {
+    let (client, connection) = tokio_postgres::connect(&db.dsn(), NoTls).await.unwrap();
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -22,6 +99,7 @@ async fn connect() -> tokio_postgres::Client {
         .batch_execute("SET search_path TO pgstac, public;")
         .await
         .unwrap();
+    client.batch_execute(PGSTAC_SQL).await.unwrap();
     client
 }
 
@@ -89,7 +167,8 @@ fn cases() -> Vec<Value> {
 
 #[tokio::test]
 async fn canonical_and_hash_match_sql() {
-    let client = connect().await;
+    let db = FreshDb::create().await;
+    let client = connect_and_install(&db).await;
     for v in cases() {
         let sql_hash: Vec<u8> = client
             .query_one("SELECT pgstac.jsonb_canonical_hash($1::jsonb)", &[&v])

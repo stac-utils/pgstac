@@ -34,6 +34,7 @@ pool = [
 # loader decode drives directly (same versions stac/geoparquet resolves transitively).
 export = [
     "stac/geoparquet",
+    "dep:async-trait",
     "dep:tempfile",
     "dep:arrow-array",
     "dep:parquet",
@@ -41,13 +42,21 @@ export = [
     "tokio/sync",
     "tokio/macros",
 ]
-# The `pgstac` binary (CLI). Implies `export` (dump/search) + `pool` (load/restore via the Rust loader).
+# The `object_store`-backed remote dump sink (local fs + S3/GCS/Azure), usable without the whole CLI.
+store = [
+    "export",
+    "dep:object_store",
+    "dep:url",
+    "tokio/fs",
+    "tokio/io-util",
+]
+# The `pgstac` binary (CLI). Implies `export` + `store` (dump/search) + `pool` (load/restore via the Rust loader).
 cli = [
     "export",
     "pool",
+    "store",
     "dep:clap",
-    "dep:object_store",
-    "dep:url",
+    "dep:stac-io",
     "dep:tar",
     "dep:zstd",
     "tokio/macros",
@@ -77,6 +86,7 @@ tracing = "0.1.40"
 webpki-roots = { version = "0.26", optional = true }
 
 # export feature (sha2 is a non-optional dep above — canonical.rs always needs it)
+async-trait = { version = "0.1", optional = true }
 tempfile = { version = "3", optional = true }
 # export feature: parallel stac-geoparquet decode reads row groups directly. Versions match what
 # stac's `geoparquet` feature pulls in transitively (parquet 58, geoparquet 0.8, arrow-array 58).
@@ -84,10 +94,14 @@ arrow-array = { version = "58", optional = true }
 parquet = { version = "58", optional = true }
 geoparquet = { version = "0.8", optional = true }
 
-# cli feature
-clap = { version = "4", optional = true, features = ["derive", "env"] }
+# store feature
 object_store = { version = "0.11", optional = true, features = ["aws"] }
 url = { version = "2", optional = true }
+
+# cli feature
+clap = { version = "4", optional = true, features = ["derive", "env"] }
+# rustac's format enum (also folds in geoparquet compression) for the CLI's --format.
+stac-io = { version = "0.3", optional = true, features = ["geoparquet"] }
 tar = { version = "0.4", optional = true }
 zstd = { version = "0.13", optional = true }
 

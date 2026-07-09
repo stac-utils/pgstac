@@ -105,7 +105,6 @@ pub(crate) use db::tls;
 
 pub use db::client::Client;
 pub use db::connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
-pub(crate) use read::page::Page;
 #[cfg(feature = "pool")]
 pub use db::pool::{DEFAULT_POOL_SIZE, PgstacPool, PoolOptions, PoolerMode};
 use stac::api::{ItemCollection, ItemsClient, Search};
@@ -173,20 +172,22 @@ pub enum Error {
     Export(String),
 
     /// [object_store::Error]
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "store")]
     #[error(transparent)]
     ObjectStore(#[from] object_store::Error),
 
     /// [url::ParseError]
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "store")]
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
 }
 
-// `clap` is used only by the `pgstac` binary (a separate crate target), so the library would otherwise
-// flag it as an unused dependency.
+// `clap` and `stac-io` are used only by the `pgstac` binary (a separate crate target), so the library
+// would otherwise flag them as unused dependencies.
 #[cfg(feature = "cli")]
 use clap as _;
+#[cfg(feature = "cli")]
+use stac_io as _;
 
 /// Crate-specific result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -213,7 +214,13 @@ pub async fn search(
     mut search: Search,
     max_items: Option<usize>,
 ) -> Result<ItemCollection> {
-    let (client, connection) = tokio_postgres::connect(connection_string, NoTls).await?;
+    // Route through ConnectConfig so the pgstac startup search_path (and any PG* env gap-fill) applies,
+    // the same as the pool and CLI paths.
+    let config = ConnectConfig {
+        dsn: Some(connection_string.to_string()),
+        ..Default::default()
+    };
+    let (client, connection) = config.to_pg_config()?.connect(NoTls).await?;
     let task = tokio::spawn(async move {
         if let Err(e) = connection.await {
             tracing::error!("pgstac connection error: {}", e);

@@ -8,7 +8,8 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "$SCRIPT_DIR/pgstacenv"   # cd to repo root, ensure .env
 
-[[ -f .env ]] && set -a && source .env && set +a
+# An explicitly-set PGHOST (e.g. from the container test runner) wins over .env.
+[[ -z "${PGHOST:-}" && -f .env ]] && set -a && source .env && set +a
 PGHOST=${PGHOST:-localhost}
 PGPORT=${PGPORT:-5439}
 PGUSER=${PGUSER:-username}

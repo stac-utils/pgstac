@@ -3,14 +3,14 @@
 //!
 //! Columns are read **raw/binary** and converted in Rust: `geometry` arrives as
 //! EWKB (the column is selected unwrapped) and is turned into GeoJSON via
-//! [`RawGeometry`](crate::geom::RawGeometry); `timestamptz` columns are rendered
+//! [`Ewkb`](crate::geom::Ewkb); `timestamptz` columns are rendered
 //! to STAC text with [`tstz_to_stac_text`](crate::temporal::tstz_to_stac_text).
 //! Nothing is pre-formatted server-side.
 //!
 //! [`Hydrator`]: crate::hydrate::Hydrator
 
 use crate::Result;
-use crate::geom::RawGeometry;
+use crate::geom::Ewkb;
 use crate::hydrate::HydrationModel;
 use crate::hydrate::{
     CollectionContext, DehydratedItem, FragmentContext, Hydrator, PromotedProperties,
@@ -26,7 +26,7 @@ use tokio_postgres::types::ToSql;
 
 /// Reads the raw `geometry` column (EWKB) into a GeoJSON [`Value`], or `None` when null.
 fn read_geometry(row: &tokio_postgres::Row, col: &str) -> Result<Option<Value>> {
-    row.try_get::<_, Option<RawGeometry>>(col)?
+    row.try_get::<_, Option<Ewkb>>(col)?
         .map(|g| g.to_geojson())
         .transpose()
 }
@@ -76,8 +76,7 @@ struct PromotedColumn {
 ///
 /// Deriving this at runtime — rather than hardcoding — keeps the source portable
 /// across pgstac schema revisions, which differ in their promoted-column set
-/// (e.g. `eo:bands` vs `bands`, `proj:epsg` vs `proj:code`). See
-/// `findings/EXPORT-hydrate-schema-versions.md`.
+/// (e.g. `eo:bands` vs `bands`, `proj:epsg` vs `proj:code`).
 #[derive(Debug, Clone)]
 pub struct PromotedSchema {
     columns: Vec<PromotedColumn>,

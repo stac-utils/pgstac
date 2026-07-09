@@ -5,8 +5,8 @@
 //! `flush_items_staging_binary` to move them into `items` (the only path that writes `items` — direct writes
 //! are revoked from `pgstac_ingest`). This module owns the client-side binary encoding of a row.
 //!
-//! Geometry is sent as raw EWKB through [`WkbGeometry`]: the PostGIS `geometry` binary wire format *is*
-//! EWKB, so the bytes [`dehydrate`](crate::dehydrate) already produced go out untouched.
+//! Geometry is sent as raw EWKB through [`Ewkb`](crate::geom::Ewkb): the PostGIS `geometry` binary
+//! wire format *is* EWKB, so the bytes [`dehydrate`](crate::dehydrate) already produced go out untouched.
 
 use crate::Result;
 #[cfg(feature = "pool")]
@@ -14,39 +14,15 @@ use crate::canonical::jsonb_canonical_hash;
 use crate::dehydrate::{DehydrateSchema, DehydratedRow, PromotedValue, dehydrate};
 use crate::field_registry::FieldRegistry;
 use crate::fragment::{FragmentConfig, build_fragment_payload, strip_fragment_col};
-use bytes::BytesMut;
+use crate::geom::Ewkb;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use futures::pin_mut;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::error::Error as StdError;
 #[cfg(feature = "pool")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
-use tokio_postgres::types::{IsNull, ToSql, Type, to_sql_checked};
-
-/// EWKB bytes wrapped so they encode as a PostGIS `geometry` on a binary COPY.
-///
-/// The geometry binary wire format is EWKB, so the bytes are written verbatim.
-#[derive(Debug, Clone)]
-pub struct WkbGeometry(pub Vec<u8>);
-
-impl ToSql for WkbGeometry {
-    fn to_sql(
-        &self,
-        _ty: &Type,
-        out: &mut BytesMut,
-    ) -> std::result::Result<IsNull, Box<dyn StdError + Sync + Send>> {
-        out.extend_from_slice(&self.0);
-        Ok(IsNull::No)
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        ty.name() == "geometry"
-    }
-
-    to_sql_checked!();
-}
+use tokio_postgres::types::{ToSql, Type};
 
 impl PromotedValue {
     /// Boxes the inner value as a trait object for the binary COPY writer. `Send` so the loader's futures
@@ -95,7 +71,7 @@ fn row_boxes(row: DehydratedRow, n_promoted: usize) -> Vec<Box<dyn ToSql + Sync 
     let mut v: Vec<Box<dyn ToSql + Sync + Send>> =
         Vec::with_capacity(FIXED_COLUMNS.len() + n_promoted + 1);
     v.push(Box::new(row.id));
-    v.push(Box::new(WkbGeometry(row.geometry)));
+    v.push(Box::new(Ewkb(row.geometry)));
     v.push(Box::new(row.collection));
     v.push(Box::new(row.datetime));
     v.push(Box::new(row.end_datetime));
@@ -401,7 +377,7 @@ pub async fn load_items(
     // items COPY references fragment_id; the fragments must already exist).
     stamp_fragment_ids(client, &mut rows, &payloads).await?;
 
-    // P5: staging + COPY + flush in one transaction (the staging table is ON COMMIT DROP).
+    // Staging + COPY + flush in one transaction (the staging table is ON COMMIT DROP).
     let tx = client.transaction().await?;
     let staging: String = tx
         .query_one("SELECT make_binary_staging()", &[])

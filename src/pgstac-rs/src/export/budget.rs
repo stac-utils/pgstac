@@ -3,7 +3,7 @@
 //!
 //! Only the buffered-widening path consumes the budget; the 0.10 stream-write
 //! path does not buffer. The budget defaults to ~25% of the available memory,
-//! read **cgroup-aware** so it behaves in containers (A7). A partition that would
+//! read **cgroup-aware** so it behaves in containers. A partition that would
 //! exceed its share spills its buffered items to a temp file before final encode.
 
 use std::sync::Arc;
@@ -101,7 +101,7 @@ impl Drop for BudgetGuard {
 }
 
 /// Detects available memory in bytes, preferring cgroup v2/v1 limits over the
-/// raw machine total so the budget stays correct inside containers (A7).
+/// raw machine total so the budget stays correct inside containers.
 ///
 /// Falls back to a conservative 2 GiB if nothing can be read.
 pub fn detect_available_memory_bytes() -> u64 {
@@ -118,6 +118,10 @@ pub fn detect_available_memory_bytes() -> u64 {
 
 /// cgroup v2 `memory.max`, then v1 `memory.limit_in_bytes`. A "max" / very large
 /// value (unlimited) is treated as no cgroup limit.
+///
+/// Linux only; other platforms have no cgroup files, so [`detect_available_memory_bytes`] falls back to
+/// the RAM-fraction default.
+#[cfg(target_os = "linux")]
 fn cgroup_memory_limit() -> Option<u64> {
     // cgroup v2
     if let Ok(s) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
@@ -139,8 +143,15 @@ fn cgroup_memory_limit() -> Option<u64> {
     None
 }
 
+/// Non-Linux fallback: no cgroup files, so detection uses the RAM-fraction default.
+#[cfg(not(target_os = "linux"))]
+fn cgroup_memory_limit() -> Option<u64> {
+    None
+}
+
 /// A cgroup limit at/near the unsigned max (or page-aligned PAGE_COUNTER_MAX)
 /// means "unlimited"; ignore it.
+#[cfg(target_os = "linux")]
 fn is_real_limit(v: u64) -> bool {
     // Common "unlimited" sentinels are within a small factor of u64::MAX.
     v < (u64::MAX / 2)

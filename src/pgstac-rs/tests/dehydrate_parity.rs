@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use pgstac::dehydrate::{DehydrateSchema, PromotedColumn, PromotedKind, PromotedValue, dehydrate};
-use pgstac::geom::RawGeometry;
+use pgstac::geom::Ewkb;
 use serde_json::{Value, json};
 use tokio_postgres::{Client, NoTls, Row};
 
@@ -172,7 +172,7 @@ async fn dehydrate_matches_content_dehydrate() {
         );
         assert_eq!(
             rust.geometry,
-            row.get::<_, RawGeometry>("geometry").0,
+            row.get::<_, Ewkb>("geometry").0,
             "geometry ({id_for_msg})"
         );
 

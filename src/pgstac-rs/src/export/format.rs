@@ -1,5 +1,5 @@
 //! Output formats for a dump unit: NDJSON, ItemCollection JSON, and
-//! stac-geoparquet (both write modes, A8).
+//! stac-geoparquet (both write modes).
 //!
 //! A [`Format`] is paired with a [`crate::export::sink::Sink`] (format ⟂ sink).
 //! The format owns *encoding* hydrated items into bytes; the sink owns *where*
@@ -19,36 +19,26 @@
 use crate::{Error, Result};
 use serde_json::Value;
 use stac::Item;
-use stac::geoparquet::{Compression, WriterBuilder, WriterOptions};
+use stac::geoparquet::{Compression, WriterBuilder, WriterOptions, ZstdLevel};
 
-/// Parquet compression codec selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ParquetCompression {
-    /// zstd (default).
-    #[default]
-    Zstd,
-    /// snappy.
-    Snappy,
-    /// uncompressed.
-    Uncompressed,
+/// The default (fast) parquet compression codec: zstd at parquet's default level.
+pub fn default_compression() -> Compression {
+    Compression::ZSTD(ZstdLevel::default())
 }
 
-impl ParquetCompression {
-    /// Manifest text form.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ParquetCompression::Zstd => "zstd",
-            ParquetCompression::Snappy => "snappy",
-            ParquetCompression::Uncompressed => "uncompressed",
-        }
-    }
-
-    fn to_stac(self) -> Option<Compression> {
-        match self {
-            ParquetCompression::Zstd => Some(Compression::ZSTD(Default::default())),
-            ParquetCompression::Snappy => Some(Compression::SNAPPY),
-            ParquetCompression::Uncompressed => Some(Compression::UNCOMPRESSED),
-        }
+/// A short lowercase codec label for the dump manifest. parquet's clean codec name
+/// (`Compression::codec_to_string`) is `pub(crate)`, and its public `Display` is the Debug repr (e.g.
+/// `ZSTD(ZstdLevel(1))`), so there is no public upstream way to get the plain "zstd" — map the label here.
+pub fn compression_label(compression: Compression) -> &'static str {
+    match compression {
+        Compression::UNCOMPRESSED => "uncompressed",
+        Compression::SNAPPY => "snappy",
+        Compression::GZIP(_) => "gzip",
+        Compression::LZO => "lzo",
+        Compression::BROTLI(_) => "brotli",
+        Compression::LZ4 => "lz4",
+        Compression::ZSTD(_) => "zstd",
+        Compression::LZ4_RAW => "lz4_raw",
     }
 }
 
@@ -72,7 +62,7 @@ pub enum Format {
     /// stac-geoparquet.
     Geoparquet {
         /// Compression codec.
-        compression: ParquetCompression,
+        compression: Compression,
         /// Write mode.
         mode: GeoparquetMode,
         /// Max rows per parquet row-group (`None` = the stac/parquet default). Smaller values bound the
@@ -90,7 +80,7 @@ impl Format {
             crate::hydrate::HydrationModel::Fragment => GeoparquetMode::Stream,
         };
         Format::Geoparquet {
-            compression: ParquetCompression::default(),
+            compression: default_compression(),
             mode,
             max_row_group_row_count: None,
         }
@@ -140,21 +130,19 @@ fn encode_item_collection(items: Vec<Value>) -> Result<Vec<u8>> {
 
 fn encode_geoparquet(
     mut items: Vec<Value>,
-    compression: ParquetCompression,
+    compression: Compression,
     max_row_group_row_count: Option<usize>,
 ) -> Result<Vec<u8>> {
-    // Buffered-widening completeness guarantee (USER_STORIES §9): the whole
-    // partition is in hand, so resolve any property whose scalar JSON type
-    // conflicts across items into a single Arrow-representable type before
-    // encoding. Without this, a column that is e.g. a string in 99 items and an
-    // integer in 1 makes the Arrow encoder fail and the dump would lose the
-    // partition. See `findings/EXPORT-geoparquet-type-conflicts.md`.
+    // Buffered-widening completeness guarantee: the whole partition is in hand, so resolve any
+    // property whose scalar JSON type conflicts across items into a single Arrow-representable type
+    // before encoding. Without this, a column that is e.g. a string in 99 items and an integer in 1
+    // makes the Arrow encoder fail and the dump would lose the partition.
     coerce_conflicting_properties(&mut items);
 
     let items: Result<Vec<Item>> = items.into_iter().map(value_to_item).collect();
     let items = items?;
     let mut buf = Vec::new();
-    let mut options = WriterOptions::new().with_compression(compression.to_stac());
+    let mut options = WriterOptions::new().with_compression(compression);
     if let Some(n) = max_row_group_row_count {
         options = options.with_max_row_group_row_count(n);
     }
@@ -247,11 +235,11 @@ fn coerce_conflicting_properties(items: &mut [Value]) {
 ///
 /// The caller owns the sink `W` (a file, a `&mut Vec<u8>`, etc.) and reads/streams
 /// the bytes after [`finish`](Self::finish). This keeps the encoded-file bytes off
-/// the memory budget when `W` is file-backed (A6).
+/// the memory budget when `W` is file-backed.
 #[allow(missing_debug_implementations)]
 pub struct GeoparquetStreamWriter<W: std::io::Write + Send> {
     inner: WriterState<W>,
-    compression: ParquetCompression,
+    compression: Compression,
     max_row_group_row_count: Option<usize>,
 }
 
@@ -264,7 +252,7 @@ enum WriterState<W: std::io::Write + Send> {
 
 impl<W: std::io::Write + Send> GeoparquetStreamWriter<W> {
     /// Creates a new streaming writer that encodes into `sink`.
-    pub fn new(sink: W, compression: ParquetCompression) -> Self {
+    pub fn new(sink: W, compression: Compression) -> Self {
         GeoparquetStreamWriter {
             inner: WriterState::Pending(Some(sink)),
             compression,
@@ -290,7 +278,7 @@ impl<W: std::io::Write + Send> GeoparquetStreamWriter<W> {
         match &mut self.inner {
             WriterState::Pending(sink) => {
                 let sink = sink.take().expect("sink present until started");
-                let mut options = WriterOptions::new().with_compression(self.compression.to_stac());
+                let mut options = WriterOptions::new().with_compression(self.compression);
                 if let Some(n) = self.max_row_group_row_count {
                     options = options.with_max_row_group_row_count(n);
                 }
@@ -364,9 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn compression_str() {
-        assert_eq!(ParquetCompression::Zstd.as_str(), "zstd");
-        assert_eq!(ParquetCompression::default(), ParquetCompression::Zstd);
+    fn compression_label_is_clean_codec() {
+        assert_eq!(compression_label(default_compression()), "zstd");
+        assert_eq!(compression_label(Compression::SNAPPY), "snappy");
+        assert_eq!(compression_label(Compression::UNCOMPRESSED), "uncompressed");
     }
 
     /// Reads geoparquet bytes back via a temp file and returns the item count.
@@ -383,7 +372,7 @@ mod tests {
         let items = vec![sample_item("a"), sample_item("b")];
         let bytes = encode_all(
             Format::Geoparquet {
-                compression: ParquetCompression::Zstd,
+                compression: default_compression(),
                 mode: GeoparquetMode::Buffered,
                 max_row_group_row_count: None,
             },
@@ -396,7 +385,7 @@ mod tests {
     #[test]
     fn geoparquet_stream_readable() {
         let mut buf: Vec<u8> = Vec::new();
-        let mut writer = GeoparquetStreamWriter::new(&mut buf, ParquetCompression::Zstd);
+        let mut writer = GeoparquetStreamWriter::new(&mut buf, default_compression());
         writer.write_batch(vec![sample_item("a")]).unwrap();
         writer.write_batch(vec![sample_item("b")]).unwrap();
         assert!(writer.has_data());
@@ -419,7 +408,7 @@ mod tests {
         // Now it encodes without error.
         let bytes = encode_all(
             Format::Geoparquet {
-                compression: ParquetCompression::Zstd,
+                compression: default_compression(),
                 mode: GeoparquetMode::Buffered,
                 max_row_group_row_count: None,
             },
@@ -444,7 +433,7 @@ mod tests {
     #[test]
     fn geoparquet_stream_empty_no_file() {
         let mut buf: Vec<u8> = Vec::new();
-        let writer = GeoparquetStreamWriter::new(&mut buf, ParquetCompression::Zstd);
+        let writer = GeoparquetStreamWriter::new(&mut buf, default_compression());
         assert!(!writer.has_data());
         assert!(!writer.finish().unwrap(), "no batches -> no file");
         assert!(buf.is_empty());
@@ -471,7 +460,7 @@ mod tests {
 
         // Cap at 10 rows/group, fed in 10-item batches -> 10 row-groups.
         let mut capped: Vec<u8> = Vec::new();
-        let mut w = GeoparquetStreamWriter::new(&mut capped, ParquetCompression::Zstd)
+        let mut w = GeoparquetStreamWriter::new(&mut capped, default_compression())
             .with_max_row_group_row_count(10);
         for chunk in items.chunks(10) {
             w.write_batch(chunk.to_vec()).unwrap();
@@ -480,7 +469,7 @@ mod tests {
 
         // Default (no cap): the same 100 items land in a single row-group.
         let mut default: Vec<u8> = Vec::new();
-        let mut w2 = GeoparquetStreamWriter::new(&mut default, ParquetCompression::Zstd);
+        let mut w2 = GeoparquetStreamWriter::new(&mut default, default_compression());
         w2.write_batch(items.clone()).unwrap();
         assert!(w2.finish().unwrap());
 

@@ -1,7 +1,8 @@
 //! Byte-assembly output for hydrated 0.10 items.
 //!
-//! [`write_fragment_feature`] writes a fully-hydrated STAC item straight to a writer without ever
-//! materializing the merged `assets` as a [`Value`]: the item's `assets` are read as raw JSON, the
+//! [`DehydratedItem::write_fragment_feature`] writes a fully-hydrated STAC item straight to a writer
+//! without ever materializing the merged `assets` as a [`Value`]: the item's `assets` are read as raw
+//! JSON, the
 //! shared fragment's `assets` are borrowed (by `&`, never cloned per item), and the two are merged
 //! **at serialize time** — descending only where both sides are objects at a key, and emitting arrays,
 //! scalars, and one-sided keys **verbatim** from the raw bytes. `bbox` is likewise emitted from raw
@@ -21,24 +22,26 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::io::Write;
 
-/// Writes one fully-hydrated 0.10 item as JSON to `write`.
-pub fn write_fragment_feature<W: Write>(
-    item: DehydratedItem,
-    fragment: Option<&FragmentContext>,
-    write: &mut W,
-) -> Result<()> {
-    let frag_assets = fragment
-        .and_then(|f| f.content.as_ref())
-        .and_then(|c| c.get("assets"));
-    let (core, assets_raw, bbox_raw) = hydrate_fragment_core(item, fragment);
-    let feature = FeatureWriter {
-        core: &core,
-        bbox: bbox_raw.as_ref().map(|r| r.0.as_ref()),
-        frag_assets,
-        item_assets: assets_raw.as_ref().map(|r| r.0.as_ref()),
-    };
-    serde_json::to_writer(write, &feature)?;
-    Ok(())
+impl DehydratedItem {
+    /// Writes this fully-hydrated 0.10 item as JSON to `write`.
+    pub fn write_fragment_feature<W: Write>(
+        self,
+        fragment: Option<&FragmentContext>,
+        write: &mut W,
+    ) -> Result<()> {
+        let frag_assets = fragment
+            .and_then(|f| f.content.as_ref())
+            .and_then(|c| c.get("assets"));
+        let (core, assets_raw, bbox_raw) = hydrate_fragment_core(self, fragment);
+        let feature = FeatureWriter {
+            core: &core,
+            bbox: bbox_raw.as_ref().map(|r| r.0.as_ref()),
+            frag_assets,
+            item_assets: assets_raw.as_ref().map(|r| r.0.as_ref()),
+        };
+        serde_json::to_writer(write, &feature)?;
+        Ok(())
+    }
 }
 
 /// Parses a raw JSON object one level into `key -> raw value`, or `None` when it is not an object.
@@ -247,7 +250,7 @@ mod tests {
         let value = h.hydrate(make_item(), &CollectionContext::default(), Some(&frag));
 
         let mut buf: Vec<u8> = Vec::new();
-        write_fragment_feature(make_item(), Some(&frag), &mut buf).unwrap();
+        make_item().write_fragment_feature(Some(&frag), &mut buf).unwrap();
         let byte_value: Value = serde_json::from_slice(&buf).unwrap();
 
         assert_eq!(byte_value, value, "byte path != value path");

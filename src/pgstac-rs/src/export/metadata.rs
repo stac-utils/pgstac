@@ -38,8 +38,7 @@ pub async fn queryables_json<C: GenericClient>(client: &C) -> Result<(Value, u64
     Ok((json!({ "queryables": queryables }), count))
 }
 
-/// Builds the `settings.json` body: all `pgstac_settings` rows verbatim. Import
-/// decides what to apply (decision §10).
+/// Builds the `settings.json` body: all `pgstac_settings` rows verbatim. Import decides what to apply.
 pub async fn settings_json<C: GenericClient>(client: &C) -> Result<(Value, u64)> {
     let rows = client
         .query("SELECT name, value FROM pgstac_settings ORDER BY name", &[])

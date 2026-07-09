@@ -1,24 +1,26 @@
-//! Output sinks: where a dump's encoded bytes go (A3, A6). Format ⟂ Sink.
+//! Output sinks: where a dump's encoded bytes go. Format ⟂ Sink.
 //!
 //! A [`Sink`] accepts whole small files ([`Sink::put`], for the JSON metadata)
 //! and finished large files streamed from a local temp file
-//! ([`Sink::put_file`], for geoparquet). Streaming the large file from disk keeps
-//! its bytes off the memory budget (A6) and lets object_store use S3 multipart.
+//! ([`Sink::put_from_path`], for geoparquet). Streaming the large file from disk
+//! keeps its bytes off the memory budget and lets object_store use S3
+//! multipart.
 //!
 //! Each write returns a [`FileWritten`] (SHA-256 + byte count) so the manifest
 //! can record integrity without a second pass.
 //!
 //! Implementations:
-//! * [`ObjectStoreSink`] — local dir + S3/GCS/Azure via `object_store`
-//!   (`parse_url_opts`); large files use multipart.
+//! * [`ObjectStoreSink`] (feature `store`) — local dir + S3/GCS/Azure via
+//!   `object_store` (`parse_url_opts`); large files use multipart.
 //! * [`TarSink`] — a sequential `.tar` (default) or `.tar.zst` archive; the dump
 //!   tree packed into one file. Sequential, so writes to it serialize.
 //! * [`StdoutSink`] — passthrough for single-stream output (search/NDJSON).
 
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "store", feature = "cli"))]
 use crate::Error;
 use crate::Result;
 use crate::export::manifest::{Sha256Writer, sha256_hex};
+use async_trait::async_trait;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "cli")]
@@ -33,28 +35,28 @@ pub struct FileWritten {
     pub bytes: u64,
 }
 
-/// A dump output destination. Object-safe; `async` via `async_trait`-style
-/// boxed futures is avoided by keeping the trait synchronous where possible —
-/// object_store is async, so its sink exposes async methods on the concrete
-/// type and the [`Sink`] trait offers a blocking bridge used by the planner.
+/// A dump output destination.
 ///
 /// The methods take a *relative path within the dump root* (e.g.
-/// `collections/landsat-c2-l2/202401.parquet`).
+/// `collections/landsat-c2-l2/202401.parquet`). The trait is async so the remote
+/// [`ObjectStoreSink`] drives `object_store` directly; the local sinks run their
+/// synchronous file IO inline.
+#[async_trait]
 pub trait Sink: Send + Sync {
     /// Writes a whole small file from an in-memory buffer.
-    fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten>;
+    async fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten>;
 
     /// Writes a finished large file by streaming it from a local path.
-    fn put_file(&self, rel_path: &str, src: &Path) -> Result<FileWritten>;
+    async fn put_from_path(&self, rel_path: &str, src: &Path) -> Result<FileWritten>;
 
     /// Removes a previously written file if the sink supports it (used to drop
     /// `_checkpoint.json` on success). No-op for append-only sinks (tar/stdout).
-    fn remove(&self, _rel_path: &str) -> Result<()> {
+    async fn remove(&self, _rel_path: &str) -> Result<()> {
         Ok(())
     }
 
     /// Flushes/finalizes the sink (e.g. closes a tar archive). Idempotent.
-    fn finalize(&self) -> Result<()> {
+    async fn finalize(&self) -> Result<()> {
         Ok(())
     }
 }
@@ -68,8 +70,9 @@ pub trait Sink: Send + Sync {
 #[derive(Debug, Default)]
 pub struct StdoutSink;
 
+#[async_trait]
 impl Sink for StdoutSink {
-    fn put(&self, _rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
+    async fn put(&self, _rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
         let mut out = std::io::stdout().lock();
         out.write_all(bytes)?;
         out.flush()?;
@@ -79,7 +82,7 @@ impl Sink for StdoutSink {
         })
     }
 
-    fn put_file(&self, _rel_path: &str, src: &Path) -> Result<FileWritten> {
+    async fn put_from_path(&self, _rel_path: &str, src: &Path) -> Result<FileWritten> {
         let mut f = std::fs::File::open(src)?;
         let mut out = std::io::stdout().lock();
         let mut hasher = Sha256Writer::new();
@@ -104,7 +107,7 @@ impl Sink for StdoutSink {
 // object_store sink (local dir + S3/GCS/Azure)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "store")]
 mod object_store_sink {
     use super::*;
     use object_store::{ObjectStore, PutPayload, WriteMultipart, path::Path as ObjPath};
@@ -119,7 +122,6 @@ mod object_store_sink {
     pub struct ObjectStoreSink {
         store: Arc<dyn ObjectStore>,
         base_prefix: ObjPath,
-        runtime: tokio::runtime::Handle,
         /// Multipart chunk size (bytes).
         chunk_size: usize,
     }
@@ -135,11 +137,10 @@ mod object_store_sink {
 
     impl ObjectStoreSink {
         /// Builds a sink from a base URL and `object_store` options
-        /// (region/endpoint/credentials), bound to the current tokio runtime.
+        /// (region/endpoint/credentials).
         pub fn from_url_opts(
             base_url: &str,
             options: impl IntoIterator<Item = (String, String)>,
-            runtime: tokio::runtime::Handle,
         ) -> Result<Self> {
             let url = Url::parse(base_url)
                 .map_err(|e| Error::Export(format!("invalid sink url {base_url}: {e}")))?;
@@ -147,7 +148,6 @@ mod object_store_sink {
             Ok(ObjectStoreSink {
                 store: Arc::from(store),
                 base_prefix,
-                runtime,
                 chunk_size: 8 * 1024 * 1024,
             })
         }
@@ -161,55 +161,44 @@ mod object_store_sink {
         }
     }
 
+    #[async_trait]
     impl Sink for ObjectStoreSink {
-        fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
+        async fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
             let location = self.child(rel_path);
             let payload = PutPayload::from(bytes.to_vec());
-            let store = self.store.clone();
-            let _ = self
-                .runtime
-                .block_on(async move { store.put(&location, payload).await })?;
+            let _ = self.store.put(&location, payload).await?;
             Ok(FileWritten {
                 sha256: sha256_hex(bytes),
                 bytes: bytes.len() as u64,
             })
         }
 
-        fn put_file(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
+        async fn put_from_path(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
+            use tokio::io::AsyncReadExt;
             let location = self.child(rel_path);
-            let store = self.store.clone();
-            let chunk_size = self.chunk_size;
-            let src = src.to_path_buf();
-            self.runtime.block_on(async move {
-                let upload = store.put_multipart(&location).await?;
-                let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
-                let mut f = tokio::fs::File::open(&src).await?;
-                let mut hasher = Sha256Writer::new();
-                let mut buf = vec![0u8; chunk_size];
-                use tokio::io::AsyncReadExt;
-                loop {
-                    let n = f.read(&mut buf).await?;
-                    if n == 0 {
-                        break;
-                    }
-                    hasher.update(&buf[..n]);
-                    writer.write(&buf[..n]);
+            let upload = self.store.put_multipart(&location).await?;
+            let mut writer = WriteMultipart::new_with_chunk_size(upload, self.chunk_size);
+            let mut f = tokio::fs::File::open(src).await?;
+            let mut hasher = Sha256Writer::new();
+            let mut buf = vec![0u8; self.chunk_size];
+            loop {
+                let n = f.read(&mut buf).await?;
+                if n == 0 {
+                    break;
                 }
-                let _ = writer.finish().await?;
-                Ok::<_, Error>(FileWritten {
-                    bytes: hasher.bytes(),
-                    sha256: hasher.finalize_hex(),
-                })
+                hasher.update(&buf[..n]);
+                writer.write(&buf[..n]);
+            }
+            let _ = writer.finish().await?;
+            Ok(FileWritten {
+                bytes: hasher.bytes(),
+                sha256: hasher.finalize_hex(),
             })
         }
 
-        fn remove(&self, rel_path: &str) -> Result<()> {
+        async fn remove(&self, rel_path: &str) -> Result<()> {
             let location = self.child(rel_path);
-            let store = self.store.clone();
-            match self
-                .runtime
-                .block_on(async move { store.delete(&location).await })
-            {
+            match self.store.delete(&location).await {
                 Ok(()) => Ok(()),
                 Err(object_store::Error::NotFound { .. }) => Ok(()),
                 Err(e) => Err(e.into()),
@@ -218,14 +207,14 @@ mod object_store_sink {
     }
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "store")]
 pub use object_store_sink::ObjectStoreSink;
 
 // ---------------------------------------------------------------------------
 // Local directory sink (no object_store dependency; available with `export`)
 // ---------------------------------------------------------------------------
 
-/// Writes the dump tree into a local directory. Available without the `cli`
+/// Writes the dump tree into a local directory. Available without the `store`
 /// feature (no `object_store`); the planner uses this for `--out <dir>`.
 #[derive(Debug)]
 pub struct DirSink {
@@ -249,8 +238,9 @@ impl DirSink {
     }
 }
 
+#[async_trait]
 impl Sink for DirSink {
-    fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
+    async fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
         let target = self.target(rel_path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
@@ -262,7 +252,7 @@ impl Sink for DirSink {
         })
     }
 
-    fn put_file(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
+    async fn put_from_path(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
         let target = self.target(rel_path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
@@ -287,7 +277,7 @@ impl Sink for DirSink {
         })
     }
 
-    fn remove(&self, rel_path: &str) -> Result<()> {
+    async fn remove(&self, rel_path: &str) -> Result<()> {
         let target = self.target(rel_path);
         match std::fs::remove_file(&target) {
             Ok(()) => Ok(()),
@@ -361,8 +351,9 @@ mod tar_sink {
         }
     }
 
+    #[async_trait]
     impl Sink for TarSink {
-        fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
+        async fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<FileWritten> {
             self.append(rel_path, bytes)?;
             Ok(FileWritten {
                 sha256: sha256_hex(bytes),
@@ -370,7 +361,7 @@ mod tar_sink {
             })
         }
 
-        fn put_file(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
+        async fn put_from_path(&self, rel_path: &str, src: &Path) -> Result<FileWritten> {
             // tar needs the size up front; read the (already-finished) file in.
             // Hash as we read so we don't traverse twice.
             let mut f = File::open(src)?;
@@ -384,7 +375,7 @@ mod tar_sink {
             Ok(written)
         }
 
-        fn finalize(&self) -> Result<()> {
+        async fn finalize(&self) -> Result<()> {
             let mut guard = self
                 .inner
                 .lock()
@@ -412,20 +403,20 @@ pub use tar_sink::TarSink;
 mod tests {
     use super::*;
 
-    #[test]
-    fn dir_sink_put_and_put_file() {
+    #[tokio::test]
+    async fn dir_sink_put_and_put_from_path() {
         let dir = tempfile::tempdir().unwrap();
         let sink = DirSink::new(dir.path()).unwrap();
-        let w = sink.put("a/b/meta.json", b"{\"k\":1}").unwrap();
+        let w = sink.put("a/b/meta.json", b"{\"k\":1}").await.unwrap();
         assert_eq!(w.bytes, 7);
         assert_eq!(w.sha256, sha256_hex(b"{\"k\":1}"));
         let written = std::fs::read(dir.path().join("a/b/meta.json")).unwrap();
         assert_eq!(written, b"{\"k\":1}");
 
-        // put_file streams + hashes.
+        // put_from_path streams + hashes.
         let mut tf = tempfile::NamedTempFile::new().unwrap();
         Write::write_all(&mut tf, b"parquet-bytes").unwrap();
-        let w2 = sink.put_file("c/items.parquet", tf.path()).unwrap();
+        let w2 = sink.put_from_path("c/items.parquet", tf.path()).await.unwrap();
         assert_eq!(w2.bytes, 13);
         assert_eq!(w2.sha256, sha256_hex(b"parquet-bytes"));
         let copied = std::fs::read(dir.path().join("c/items.parquet")).unwrap();
@@ -433,19 +424,20 @@ mod tests {
     }
 
     #[cfg(feature = "cli")]
-    #[test]
-    fn tar_sink_roundtrip() {
+    #[tokio::test]
+    async fn tar_sink_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let tar_path = dir.path().join("dump.tar");
         {
             let sink = TarSink::new(&tar_path, false).unwrap();
-            let _ = sink.put("manifest.json", b"{}").unwrap();
+            let _ = sink.put("manifest.json", b"{}").await.unwrap();
             let mut tf = tempfile::NamedTempFile::new().unwrap();
             Write::write_all(&mut tf, b"col").unwrap();
             let _ = sink
-                .put_file("collections/c/items.parquet", tf.path())
+                .put_from_path("collections/c/items.parquet", tf.path())
+                .await
                 .unwrap();
-            sink.finalize().unwrap();
+            sink.finalize().await.unwrap();
         }
         // Read back the tar entries.
         let f = std::fs::File::open(&tar_path).unwrap();

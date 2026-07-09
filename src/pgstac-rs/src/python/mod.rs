@@ -50,17 +50,6 @@ fn parse_policy(policy: Option<&str>) -> PyResult<ConflictPolicy> {
     })
 }
 
-/// Map the parquet compression string ("zstd" default / "snappy" / "uncompressed").
-fn parse_compression(compression: &str) -> PyResult<crate::export::format::ParquetCompression> {
-    use crate::export::format::ParquetCompression;
-    Ok(match compression.to_ascii_lowercase().as_str() {
-        "zstd" => ParquetCompression::Zstd,
-        "snappy" => ParquetCompression::Snappy,
-        "uncompressed" | "none" => ParquetCompression::Uncompressed,
-        other => return Err(pyerr(format!("unknown compression: {other}"))),
-    })
-}
-
 /// A pooled pgstac client exposing the read API to Python.
 #[pyclass]
 struct Pgstac {
@@ -157,19 +146,25 @@ impl Pgstac {
     /// Streams every matching item (up to `max_items`) into stac-geoparquet, returning the file bytes.
     ///
     /// `row_group_size` caps rows per parquet row-group (smaller = lower peak memory while encoding;
-    /// `None` = the parquet default). `compression` is "zstd" (default), "snappy", or "uncompressed".
-    #[pyo3(signature = (search, max_items=None, row_group_size=None, compression="zstd"))]
+    /// `None` = the parquet default). `compression` is a parquet codec in parquet's spelling (e.g.
+    /// `snappy`, `uncompressed`, `zstd(15)`); `None` (default) uses the fast default codec.
+    #[pyo3(signature = (search, max_items=None, row_group_size=None, compression=None))]
     fn search_to_geoparquet<'py>(
         &self,
         py: Python<'py>,
         search: &str,
         max_items: Option<i64>,
         row_group_size: Option<usize>,
-        compression: &str,
+        compression: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let pool = self.pool.clone();
         let search = parse_search(search)?;
-        let compression = parse_compression(compression)?;
+        let compression = match compression {
+            Some(name) => name
+                .parse::<stac::geoparquet::Compression>()
+                .map_err(pyerr)?,
+            None => crate::export::format::default_compression(),
+        };
         future_into_py(py, async move {
             let mut buf: Vec<u8> = Vec::new();
             let _ = pool

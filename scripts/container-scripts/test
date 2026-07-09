@@ -35,6 +35,7 @@ Options:
     --pypgstac            Run Python tests.
     --migrations          Run migration-path validation.
     --pgdump              Run pg_dump / pg_restore validation.
+    --rust                Run the pgstac-rs Rust tests (cargo test --features cli).
     --nomigrations        Run everything except migration and pg_dump tests.
     --v                   Raise client_min_messages to notice.
     --vv                  Raise client_min_messages to debug1.
@@ -368,6 +369,30 @@ EOSQL
     export PGDATABASE="${_prev_pgdatabase}"
 }
 
+function test_rust(){
+    # The Rust tests clone per-test databases from three templates (pgstac_rs_test_template /
+    # _ingest_template / _rich) built by the builder scripts. Passing an explicit PGHOST makes those
+    # builders target the dev database (pgstac:5432 in-container) rather than .env's host.
+    local host="${PGHOST:-pgstac}" port="${PGPORT:-5432}" user="${PGUSER:-username}" pass="${PGPASSWORD:-password}"
+    local scripts_dir base
+    scripts_dir="$(cd "$SRCDIR/../scripts" && pwd)"
+    base="postgresql://${user}:${pass}@${host}:${port}"
+
+    echo "=== Building pgstac-rs test templates on ${host}:${port} ==="
+    PGHOST="$host" PGPORT="$port" PGUSER="$user" PGPASSWORD="$pass" "$scripts_dir/pgstac-rs-test-db"
+    PGHOST="$host" PGPORT="$port" PGUSER="$user" PGPASSWORD="$pass" "$scripts_dir/pgstac-rs-test-db" pgstac_rs_ingest_template
+    PGHOST="$host" PGPORT="$port" PGUSER="$user" PGPASSWORD="$pass" "$scripts_dir/pgstac-rs-test-rich-db"
+
+    echo "=== Running pgstac-rs cargo tests ==="
+    (
+        cd "$SRCDIR/pgstac-rs"
+        PGSTAC_RS_TEST_BASE="$base" \
+        PGSTAC_RS_TEST_DB="${base}/pgstac_rs_test_rich" \
+            cargo test --features cli
+    )
+    echo "pgstac-rs Rust tests passed!"
+}
+
 FORMATTING=0
 SETUPDB=0
 PGTAP=0
@@ -378,6 +403,7 @@ PGDUMP=0
 MESSAGENOTICE=0
 MESSAGELOG=0
 CREATEBASICSQLOUT=0
+RUST=0
 
 while [[ $# -gt 0 ]]
     do
@@ -450,6 +476,11 @@ while [[ $# -gt 0 ]]
             shift
             ;;
 
+            --rust)
+            RUST=1
+            shift
+            ;;
+
             *)    # unknown option
             usage
             exit 1;
@@ -463,7 +494,7 @@ CLIENTMESSAGES='warning'
 [[ $MESSAGEDEBUG -eq 1 ]] && CLIENTMESSAGES='debug1'
 echo $CLIENTMESSAGES
 
-if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) && ($PGDUMP -eq 0) ]]
+if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) && ($PGDUMP -eq 0) && ($RUST -eq 0) ]]
 then
     FORMATTING=1
     SETUPDB=1
@@ -473,6 +504,7 @@ then
     # run-all block while Python loader updates are pending on this branch.
     # Use --pypgstac or --migrations flags to run them explicitly.
     PGDUMP=1
+    RUST=1
 fi
 
 [ $FORMATTING -eq 1 ] && test_formatting
@@ -486,5 +518,6 @@ fi
 [ $PYPGSTAC -eq 1 ] && test_pypgstac
 [ $MIGRATIONS -eq 1 ] && test_migrations
 [ $PGDUMP -eq 1 ] && test_pgdump
+[ $RUST -eq 1 ] && test_rust
 
 exit 0

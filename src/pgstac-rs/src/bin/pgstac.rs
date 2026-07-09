@@ -6,14 +6,16 @@
 //! ([`PgstacPool::create_items`] → `load_items`), so dehydration + fragment
 //! splitting + the binary COPY all happen in Rust.
 
-use clap::{Parser, Subcommand, ValueEnum};
-use pgstac::export::format::ParquetCompression;
+use clap::{Parser, Subcommand};
+use pgstac::export::format::default_compression;
 use pgstac::export::plan::Prefilter;
 use pgstac::export::sink::{DirSink, StdoutSink, TarSink};
 use pgstac::export::{DumpConfig, DumpPlanner};
 use pgstac::ingest::ConflictPolicy;
 use pgstac::{ConnectConfig, PgstacPool, PoolOptions};
 use serde_json::Value;
+use stac::geoparquet::Compression;
+use stac_io::Format;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -26,6 +28,11 @@ use tokio_postgres::NoTls;
     about = "pgstac tooling: dump, search, load, restore"
 )]
 struct Cli {
+    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN. Shared by every
+    /// subcommand.
+    #[arg(long, env = "PGSTAC_DSN", global = true)]
+    dsn: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -53,10 +60,6 @@ enum Command {
 
 #[derive(clap::Args, Debug)]
 struct DeleteArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// Collection id (required).
     #[arg(long, short)]
     collection: String,
@@ -64,14 +67,14 @@ struct DeleteArgs {
     /// Item id. Given, deletes that item; omitted, deletes the whole collection (and its items).
     #[arg(long)]
     item: Option<String>,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
 struct MaintainArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// Cap the number of dirty partitions tightened this run (oldest first).
     /// Omit to tighten all dirty partitions.
     #[arg(long)]
@@ -80,10 +83,6 @@ struct MaintainArgs {
 
 #[derive(clap::Args, Debug)]
 struct LoadArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// Inputs to load: stac-geoparquet (`.parquet`/`.geoparquet`), NDJSON
     /// (`.ndjson`), JSON (item or ItemCollection), or collection JSON. Directories
     /// are scanned recursively. Collection files are loaded before items.
@@ -133,10 +132,6 @@ fn default_ingest_parallelism() -> usize {
 
 #[derive(clap::Args, Debug)]
 struct RestoreArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// A `pgstac dump` directory (collections.ndjson + per-partition geoparquet).
     src: PathBuf,
 
@@ -155,17 +150,15 @@ struct RestoreArgs {
 
 #[derive(clap::Args, Debug)]
 struct SearchArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// Output destination: a file path or `-` for stdout (default).
     #[arg(long, short, default_value = "-")]
     out: String,
 
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = SearchFormat::Ndjson)]
-    format: SearchFormat,
+    /// Output format: `json` (one ItemCollection page), `ndjson` (default, stream all), or
+    /// `geoparquet[<compression>]` — rustac's format spelling, which also carries the geoparquet
+    /// compression codec.
+    #[arg(long, default_value = "ndjson", value_parser = str::parse::<Format>)]
+    format: Format,
 
     /// Restrict to these collection ids (repeatable).
     #[arg(long = "collection", short = 'c')]
@@ -210,28 +203,10 @@ struct SearchArgs {
     /// Cap the total items streamed (NDJSON / geoparquet).
     #[arg(long)]
     max_items: Option<usize>,
-
-    /// Parquet compression codec (geoparquet only).
-    #[arg(long, value_enum, default_value_t = CompressionArg::Zstd)]
-    compression: CompressionArg,
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-enum SearchFormat {
-    /// Newline-delimited JSON, one item per line (streams all pages).
-    Ndjson,
-    /// A single STAC FeatureCollection page (SQL-faithful next/prev + context).
-    Itemcollection,
-    /// stac-geoparquet of the (bounded) result.
-    Geoparquet,
 }
 
 #[derive(clap::Args, Debug)]
 struct DumpArgs {
-    /// Postgres connection string. Defaults to $PGSTAC_DSN or a local dev DSN.
-    #[arg(long, env = "PGSTAC_DSN")]
-    dsn: Option<String>,
-
     /// Output destination: a directory path, `s3://bucket/prefix` (or other
     /// object-store URL), a `*.tar` / `*.tar.zst` file, or `-` for stdout.
     #[arg(long, short)]
@@ -253,9 +228,10 @@ struct DumpArgs {
     #[arg(long, value_delimiter = ',', num_args = 4, allow_hyphen_values = true)]
     bbox: Option<Vec<f64>>,
 
-    /// Parquet compression codec.
-    #[arg(long, value_enum, default_value_t = CompressionArg::Zstd)]
-    compression: CompressionArg,
+    /// Parquet compression codec in parquet's spelling (e.g. `snappy`, `uncompressed`, `zstd(15)`).
+    /// Omit for the fast default (zstd).
+    #[arg(long, value_parser = str::parse::<Compression>)]
+    compression: Option<Compression>,
 
     /// Continue past per-item errors, recording skips in the report.
     #[arg(long)]
@@ -284,24 +260,40 @@ struct DumpArgs {
     dry_run: bool,
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug)]
-enum CompressionArg {
-    Zstd,
-    Snappy,
-    Uncompressed,
-}
-
-impl From<CompressionArg> for ParquetCompression {
-    fn from(c: CompressionArg) -> Self {
-        match c {
-            CompressionArg::Zstd => ParquetCompression::Zstd,
-            CompressionArg::Snappy => ParquetCompression::Snappy,
-            CompressionArg::Uncompressed => ParquetCompression::Uncompressed,
-        }
-    }
-}
-
 const DEFAULT_DSN: &str = "postgresql://username:password@localhost:5432/postgis";
+
+/// Builds a [`ConnectConfig`] from the environment, with an explicit `--dsn` (or `$PGSTAC_DSN`) taking
+/// precedence over ambient `PG*` / `DATABASE_URL` values.
+fn connect_config(dsn: Option<&str>) -> ConnectConfig {
+    let mut config = ConnectConfig::from_env();
+    if let Some(dsn) = dsn {
+        config.dsn = Some(dsn.to_string());
+    }
+    config
+}
+
+/// Confirms a destructive delete. `--yes` proceeds without asking; on a TTY it prompts (a `y`/`yes`
+/// answer proceeds, anything else aborts). When stdin is not a TTY and `--yes` was not given it errors
+/// rather than hang waiting for input that will never arrive.
+fn confirm_delete(target: &str, yes: bool) -> Result<bool, Box<dyn std::error::Error>> {
+    use std::io::{IsTerminal, Write};
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "refusing to delete without confirmation: stdin is not a TTY; pass --yes to confirm".into(),
+        );
+    }
+    eprint!("delete {target}? this cannot be undone [y/N]: ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    let _ = std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -315,14 +307,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let handle = runtime.handle().clone();
-    let result = match cli.command {
-        Command::Dump(args) => runtime.block_on(run_dump(args, handle)),
-        Command::Search(args) => runtime.block_on(run_search(args)),
-        Command::Load(args) => runtime.block_on(run_load(args)),
-        Command::Restore(args) => runtime.block_on(run_restore(args)),
-        Command::Maintain(args) => runtime.block_on(run_maintain(args)),
-        Command::Delete(args) => runtime.block_on(run_delete(args)),
+    let Cli { dsn, command } = cli;
+    let result = match command {
+        Command::Dump(args) => runtime.block_on(run_dump(args, dsn)),
+        Command::Search(args) => runtime.block_on(run_search(args, dsn)),
+        Command::Load(args) => runtime.block_on(run_load(args, dsn)),
+        Command::Restore(args) => runtime.block_on(run_restore(args, dsn)),
+        Command::Maintain(args) => runtime.block_on(run_maintain(args, dsn)),
+        Command::Delete(args) => runtime.block_on(run_delete(args, dsn)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -352,11 +344,8 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run_dump(
-    args: DumpArgs,
-    runtime: tokio::runtime::Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let dsn = args.dsn.clone().unwrap_or_else(|| DEFAULT_DSN.to_string());
+async fn run_dump(args: DumpArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let dsn = dsn.unwrap_or_else(|| DEFAULT_DSN.to_string());
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -393,7 +382,7 @@ async fn run_dump(
             Some(args.collections.clone())
         },
         prefilter,
-        compression: args.compression.into(),
+        compression: args.compression.unwrap_or_else(default_compression),
         skip_errors: args.skip_errors,
         resume_completed,
         memory_budget: args.memory_budget,
@@ -431,7 +420,6 @@ async fn run_dump(
             let sink = Arc::new(pgstac::export::sink::ObjectStoreSink::from_url_opts(
                 &url,
                 std::iter::empty(),
-                runtime,
             )?);
             planner.run_parallel(&client, sink, &factory).await?
         } else {
@@ -445,11 +433,7 @@ async fn run_dump(
         let sink = TarSink::new(&args.out, zstd)?;
         planner.run(&client, &sink).await?
     } else if let Some(url) = object_store_url(&args.out) {
-        let sink = pgstac::export::sink::ObjectStoreSink::from_url_opts(
-            &url,
-            std::iter::empty(),
-            runtime,
-        )?;
+        let sink = pgstac::export::sink::ObjectStoreSink::from_url_opts(&url, std::iter::empty())?;
         planner.run(&client, &sink).await?
     } else {
         let sink = DirSink::new(&args.out)?;
@@ -482,12 +466,11 @@ fn make_sink(out: &str) -> Result<Box<dyn std::io::Write>, Box<dyn std::error::E
 /// Search-driven export (0.10 only): stream a search / CQL2 result as NDJSON, a single ItemCollection
 /// page, or stac-geoparquet. Every page is built in Rust from `search_plan` (Rust band-stepping +
 /// keyset minting); the SQL `search()` function is never called.
-async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_search(args: SearchArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use stac::api::{ItemsClient, Search};
     use std::io::Write as _;
 
-    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
-    let pool = PgstacPool::connect(config).await?;
+    let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
 
     // Build the Search from CLI args.
     let mut search = Search {
@@ -519,7 +502,7 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
 
     let max_items = args.max_items.map(|m| m as i64);
     match args.format {
-        SearchFormat::Ndjson => {
+        Format::NdJson => {
             // Flat-memory streaming: rows arrive from a server-side portal and are written one at a
             // time with the shared fragment merged at serialize time — never a buffered page.
             let mut out = make_sink(&args.out)?;
@@ -530,7 +513,7 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
             out.flush()?;
             eprintln!("search: streamed {n} item(s) as NDJSON");
         }
-        SearchFormat::Itemcollection => {
+        Format::Json(_) => {
             // A single keyset page assembled in Rust via ItemsClient::search (search_plan + Rust
             // band-stepping): features, next/prev tokens, links, and context all minted client-side.
             let mut out = make_sink(&args.out)?;
@@ -558,11 +541,12 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
                 .unwrap_or(item_collection.items.len() as u64);
             eprintln!("search: wrote 1 ItemCollection page ({n} item(s))");
         }
-        SearchFormat::Geoparquet => {
+        Format::Geoparquet(writer_options) => {
             // Flat-memory streaming: items stream from the search portal into row-group batches, so the
             // item working set is one batch (0.10 registry schema), not the whole result.
             let body = serde_json::to_value(&search)?;
-            let compression = args.compression.into();
+            // --format geoparquet[<codec>] carries the compression; --row-group-size stays a flag.
+            let compression = writer_options.compression.unwrap_or_else(default_compression);
             let row_group_size = args.row_group_size;
             let n = if args.out == "-" {
                 // The geoparquet writer needs a Send sink and stdout's lock is not Send: encode into a
@@ -590,13 +574,13 @@ async fn run_search(args: SearchArgs) -> Result<(), Box<dyn std::error::Error>> 
 /// [`PgstacPool::create_items`] (`load_items`) — so dehydration, fragment
 /// splitting, and the binary COPY all run in Rust. `concurrency` batches run in
 /// parallel, each on its own pooled connection.
-async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_load(args: LoadArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let (collection_files, item_sources) = classify_inputs(&args.inputs)?;
     if collection_files.is_empty() && item_sources.is_empty() {
         return Err("no loadable inputs found (.parquet/.geoparquet/.ndjson/.json)".into());
     }
 
-    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
+    let config = connect_config(dsn.as_deref());
     let pool_size = args.pool_size.unwrap_or_else(|| args.concurrency.max(4));
     let pool = PgstacPool::connect_with(
         config,
@@ -679,7 +663,7 @@ async fn run_load(args: LoadArgs) -> Result<(), Box<dyn std::error::Error>> {
 /// (per-collection `collection.json` + partition geoparquet) is exactly what
 /// [`run_load`] consumes, so this is `load` over the dump directory with an
 /// upsert policy.
-async fn run_restore(args: RestoreArgs) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_restore(args: RestoreArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     if !args.src.is_dir() {
         return Err(format!(
             "restore source must be a dump directory: {} (extract a .tar dump first)",
@@ -687,16 +671,18 @@ async fn run_restore(args: RestoreArgs) -> Result<(), Box<dyn std::error::Error>
         )
         .into());
     }
-    run_load(LoadArgs {
-        dsn: args.dsn,
-        inputs: vec![args.src],
-        batch_size: args.batch_size,
-        concurrency: args.concurrency,
-        policy: ConflictPolicy::Upsert,
-        pool_size: args.pool_size,
-        limit: None,
-        skip_unchanged: false,
-    })
+    run_load(
+        LoadArgs {
+            inputs: vec![args.src],
+            batch_size: args.batch_size,
+            concurrency: args.concurrency,
+            policy: ConflictPolicy::Upsert,
+            pool_size: args.pool_size,
+            limit: None,
+            skip_unchanged: false,
+        },
+        dsn,
+    )
     .await
 }
 
@@ -705,8 +691,11 @@ async fn run_restore(args: RestoreArgs) -> Result<(), Box<dyn std::error::Error>
 /// optional — a generous (un-tightened) envelope only over-includes a partition
 /// in search, never loses rows; tightening restores tight pruning + honest
 /// counts. Operators usually schedule this off-hours (pg_cron).
-async fn run_maintain(args: MaintainArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let dsn = args.dsn.clone().unwrap_or_else(|| DEFAULT_DSN.to_string());
+async fn run_maintain(
+    args: MaintainArgs,
+    dsn: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dsn = dsn.unwrap_or_else(|| DEFAULT_DSN.to_string());
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -729,9 +718,16 @@ async fn run_maintain(args: MaintainArgs) -> Result<(), Box<dyn std::error::Erro
 
 /// Delete an item (with `--item`) or a whole collection (without). Both go through the pool's
 /// SECURITY DEFINER delete functions.
-async fn run_delete(args: DeleteArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let config = ConnectConfig::from_env().with_dsn(args.dsn.clone());
-    let pool = PgstacPool::connect(config).await?;
+async fn run_delete(args: DeleteArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let target = match &args.item {
+        Some(item) => format!("item {}/{}", args.collection, item),
+        None => format!("collection {} and all its items", args.collection),
+    };
+    if !confirm_delete(&target, args.yes)? {
+        eprintln!("aborted");
+        return Ok(());
+    }
+    let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
     match &args.item {
         Some(item) => {
             pool.delete_item(&args.collection, item).await?;

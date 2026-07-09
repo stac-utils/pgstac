@@ -149,6 +149,7 @@ async fn cli_load_maintain_delete() {
         "clitest",
         "--item",
         "i1",
+        "--yes",
     ]);
     assert!(
         out.status.success(),
@@ -157,7 +158,7 @@ async fn cli_load_maintain_delete() {
     );
     assert_eq!(db.count_items().await, 1, "one item left after deleting i1");
 
-    let out = pgstac(&["delete", "--dsn", &dsn, "--collection", "clitest"]);
+    let out = pgstac(&["delete", "--dsn", &dsn, "--collection", "clitest", "--yes"]);
     assert!(
         out.status.success(),
         "delete collection failed: {}",

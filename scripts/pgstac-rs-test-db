@@ -9,8 +9,9 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "$SCRIPT_DIR/pgstacenv"   # cd to repo root, ensure .env
 
-# Connection defaults (overridable via env / .env)
-[[ -f .env ]] && set -a && source .env && set +a
+# Connection defaults (overridable via env / .env). An explicitly-set PGHOST (e.g. from the container
+# test runner) wins over .env, so .env is only sourced when no host was provided.
+[[ -z "${PGHOST:-}" && -f .env ]] && set -a && source .env && set +a
 PGHOST=${PGHOST:-localhost}
 PGPORT=${PGPORT:-5439}
 PGUSER=${PGUSER:-username}

@@ -451,8 +451,7 @@ mod tests {
     async fn pool_connects_with_sslmode_disable() {
         // sslmode=disable skips the TLS handshake entirely; the connector is still built but unused.
         let config = ConnectConfig {
-            dsn: Some(test_dsn()),
-            sslmode: Some("disable".to_string()),
+            dsn: Some(format!("{}?sslmode=disable", test_dsn())),
             ..Default::default()
         };
         let pool = PgstacPool::connect(config).await.unwrap();

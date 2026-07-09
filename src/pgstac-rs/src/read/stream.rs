@@ -7,10 +7,9 @@
 //! stays at ~one row plus the small fragment cache, independent of result size.
 
 #[cfg(feature = "export")]
-use crate::export::format::{
-    Format, GeoparquetMode, GeoparquetStreamWriter, ParquetCompression, encode_all,
-};
-use crate::feature::write_fragment_feature;
+use crate::export::format::{Format, GeoparquetMode, GeoparquetStreamWriter, encode_all};
+#[cfg(feature = "export")]
+use stac::geoparquet::Compression;
 use crate::hydrate::{CollectionContext, FragmentContext, HydrationModel, Hydrator};
 use crate::search::{band_ranges, fetch_plan};
 use crate::source::{
@@ -176,7 +175,7 @@ impl PgstacPool {
         &self,
         search: Value,
         max_items: Option<i64>,
-        compression: ParquetCompression,
+        compression: Compression,
         row_group_size: Option<usize>,
         sink: W,
     ) -> Result<usize> {
@@ -229,7 +228,8 @@ impl PgstacPool {
     /// of items written.
     ///
     /// For the 0.10 fragment model this uses the byte path
-    /// ([`write_fragment_feature`](crate::feature::write_fragment_feature)): each item is serialized
+    /// ([`DehydratedItem::write_fragment_feature`](crate::hydrate::DehydratedItem::write_fragment_feature)):
+    /// each item is serialized
     /// straight to `write` with the shared fragment merged at serialize time and `bbox` emitted from raw
     /// bytes — no per-item [`Value`] is ever materialized. A `fields` projection runs on the value
     /// path instead (it needs the structured feature).
@@ -301,7 +301,7 @@ impl PgstacPool {
                     // Byte path (no per-item Value materialized) — only when no field projection is
                     // requested; `fields` needs the structured feature, so fall back to the value path.
                     HydrationModel::Fragment if fields.is_none() => {
-                        write_fragment_feature(item, fragment.as_deref(), &mut *write)?;
+                        item.write_fragment_feature(fragment.as_deref(), &mut *write)?;
                     }
                     _ => {
                         let ctx = &contexts[&item.collection];

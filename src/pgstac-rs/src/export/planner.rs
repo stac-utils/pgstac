@@ -6,12 +6,15 @@
 //! after each completed partition, writes the root metadata files, and writes
 //! `manifest.json` **last** (its presence = a complete dump).
 //!
-//! Failure policy (A5): default fail-fast; [`DumpConfig::skip_errors`] records a
+//! Failure policy: default fail-fast; [`DumpConfig::skip_errors`] records a
 //! per-item skip and continues. Resume: a partition whose checkpointed
 //! file verifies by SHA-256 is skipped; a missing/partial one is redone whole.
 
 use crate::export::budget::MemoryBudget;
-use crate::export::format::{Format, GeoparquetMode, GeoparquetStreamWriter, ParquetCompression};
+use crate::export::format::{
+    Format, GeoparquetMode, GeoparquetStreamWriter, compression_label, default_compression,
+};
+use stac::geoparquet::Compression;
 use crate::export::manifest::{
     Checkpoint, CheckpointEntry, CollectionEntry, DatetimeRange, FileEntry, Filter, Manifest,
     Options, PartitionEntry, Source, Tool, sha256_hex,
@@ -34,8 +37,8 @@ pub struct DumpConfig {
     /// Datetime/bbox prefilter (partial dump).
     pub prefilter: Prefilter,
     /// Parquet compression.
-    pub compression: ParquetCompression,
-    /// Continue past per-item errors, recording them (A5). Default false.
+    pub compression: Compression,
+    /// Continue past per-item errors, recording them. Default false.
     pub skip_errors: bool,
     /// Resume from a prior run: partition files already completed (and
     /// verified by SHA-256), keyed by relative path. The caller loads + verifies
@@ -68,7 +71,7 @@ impl Default for DumpConfig {
         DumpConfig {
             collection_ids: None,
             prefilter: Prefilter::default(),
-            compression: ParquetCompression::default(),
+            compression: default_compression(),
             skip_errors: false,
             resume_completed: std::collections::HashMap::new(),
             memory_budget: None,
@@ -156,7 +159,7 @@ impl DumpPlanner {
             // collection.json
             let coll_json = collection_json(plan);
             let coll_bytes = serde_json::to_vec_pretty(&coll_json)?;
-            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes)?;
+            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes).await?;
 
             let mut partition_entries: Vec<PartitionEntry> = Vec::new();
             let mut coll_item_count: u64 = 0;
@@ -175,7 +178,7 @@ impl DumpPlanner {
                     total_partition_files += 1;
                     checkpoint.completed.push(prior.clone());
                     let cp_bytes = serde_json::to_vec_pretty(&checkpoint)?;
-                    let _ = sink.put("_checkpoint.json", &cp_bytes)?;
+                    let _ = sink.put("_checkpoint.json", &cp_bytes).await?;
                     partition_entries.push(entry);
                     continue;
                 }
@@ -212,7 +215,7 @@ impl DumpPlanner {
                     });
                     // Persist checkpoint after each completed partition.
                     let cp_bytes = serde_json::to_vec_pretty(&checkpoint)?;
-                    let _ = sink.put("_checkpoint.json", &cp_bytes)?;
+                    let _ = sink.put("_checkpoint.json", &cp_bytes).await?;
                     partition_entries.push(entry);
                 }
             }
@@ -315,7 +318,7 @@ impl DumpPlanner {
             let coll_dir = format!("collections/{}", encode_collection_dir(&plan.id));
             let coll_json = collection_json(plan);
             let coll_bytes = serde_json::to_vec_pretty(&coll_json)?;
-            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes)?;
+            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes).await?;
             collection_meta.push(CollectionMeta {
                 id: plan.id.clone(),
                 coll_dir: coll_dir.clone(),
@@ -442,7 +445,7 @@ impl DumpPlanner {
                             entry: entry.clone(),
                         });
                         let cp_bytes = serde_json::to_vec_pretty(&checkpoint)?;
-                        let _ = sink.put("_checkpoint.json", &cp_bytes)?;
+                        let _ = sink.put("_checkpoint.json", &cp_bytes).await?;
                         meta.item_count += entry.item_count;
                         meta.partitions.push(entry);
                     }
@@ -519,11 +522,11 @@ impl DumpPlanner {
         // Root metadata files.
         let (q_json, q_count) = queryables_json(client).await?;
         let q_bytes = serde_json::to_vec_pretty(&q_json)?;
-        let q_file = sink.put("queryables.json", &q_bytes)?;
+        let q_file = sink.put("queryables.json", &q_bytes).await?;
 
         let (s_json, s_count) = settings_json(client).await?;
         let s_bytes = serde_json::to_vec_pretty(&s_json)?;
-        let s_file = sink.put("settings.json", &s_bytes)?;
+        let s_file = sink.put("settings.json", &s_bytes).await?;
 
         let mut metadata_files = BTreeMap::new();
         let _ = metadata_files.insert(
@@ -569,24 +572,26 @@ impl DumpPlanner {
             snapshot,
             options: Options {
                 hydrated: true,
-                compression: self.config.compression.as_str().to_string(),
+                compression: compression_label(self.config.compression).to_string(),
                 ordering: vec!["datetime".to_string(), "id".to_string()],
             },
             metadata_files,
             collections: collection_entries,
         };
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-        let _ = sink.put("manifest.json", &manifest_bytes)?;
+        let _ = sink.put("manifest.json", &manifest_bytes).await?;
         // Sibling integrity for the manifest itself.
-        let _ = sink.put(
-            "manifest.json.sha256",
-            format!("{}\n", sha256_hex(&manifest_bytes)).as_bytes(),
-        )?;
+        let _ = sink
+            .put(
+                "manifest.json.sha256",
+                format!("{}\n", sha256_hex(&manifest_bytes)).as_bytes(),
+            )
+            .await?;
 
         // Manifest is the completion marker; drop the in-progress checkpoint.
-        sink.remove("_checkpoint.json")?;
+        sink.remove("_checkpoint.json").await?;
 
-        sink.finalize()?;
+        sink.finalize().await?;
         Ok(())
     }
 
@@ -733,7 +738,7 @@ impl<'b> BufferedItems<'b> {
 
     /// Encodes all buffered items (spilled + in-memory) to a geoparquet file at
     /// `out`. Returns `false` if there were no items (no file should be written).
-    fn encode_to(mut self, out: &std::path::Path, compression: ParquetCompression) -> Result<bool> {
+    fn encode_to(mut self, out: &std::path::Path, compression: Compression) -> Result<bool> {
         if !self.nonempty {
             return Ok(false);
         }
@@ -790,7 +795,7 @@ async fn dump_one_partition<C: GenericClient, S: Sink>(
     rel_file: &str,
     ctx: &crate::hydrate::CollectionContext,
     scan_filter: &ScanFilter,
-    compression: ParquetCompression,
+    compression: Compression,
     skip_errors: bool,
     budget: &MemoryBudget,
 ) -> Result<PartitionOutcome> {
@@ -799,7 +804,7 @@ async fn dump_one_partition<C: GenericClient, S: Sink>(
     let mut item_count: u64 = 0;
     let mut skipped: u64 = 0;
 
-    // Temp file for the encoded geoparquet -> streamed to sink (A6). The
+    // Temp file for the encoded geoparquet -> streamed to sink. The
     // NamedTempFile owns the path + cleanup; we read/write via fresh handles
     // on its path so no borrow outlives the encode (the stream writer needs
     // exclusive ownership of its File for the whole scan).
@@ -882,7 +887,7 @@ async fn dump_one_partition<C: GenericClient, S: Sink>(
 
     // Stream the finished temp file to the sink (also yields sha256). `spill`
     // still owns the path until it drops at end of scope.
-    let written = sink.put_file(rel_file, &spill_path)?;
+    let written = sink.put_from_path(rel_file, &spill_path).await?;
     drop(spill);
 
     Ok(PartitionOutcome {
@@ -1052,7 +1057,7 @@ fn scan_filter_for(prefilter: &Prefilter) -> ScanFilter {
 }
 
 /// Percent-encodes path-unsafe characters in a collection id for use as a
-/// directory name (MANIFEST.md §1). The authoritative id is always the JSON
+/// directory name. The authoritative id is always the JSON
 /// `id`, never parsed from the dir name.
 fn encode_collection_dir(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
@@ -1151,7 +1156,7 @@ mod tests {
         // Budget fully released after spilling (no reservation held).
         assert_eq!(budget.used(), 0, "spill must release the reservation");
         let out = crate::export::budget::spill_file().unwrap();
-        let produced = buf.encode_to(out.path(), ParquetCompression::Zstd).unwrap();
+        let produced = buf.encode_to(out.path(), default_compression()).unwrap();
         assert!(produced, "non-empty buffer must produce a file");
         let mut got = read_geoparquet_ids(out.path());
         got.sort();
@@ -1168,7 +1173,7 @@ mod tests {
         buf.extend(vec![feat("a"), feat("b")]).unwrap();
         assert!(budget.used() > 0, "in-memory buffer holds a reservation");
         let out = crate::export::budget::spill_file().unwrap();
-        assert!(buf.encode_to(out.path(), ParquetCompression::Zstd).unwrap());
+        assert!(buf.encode_to(out.path(), default_compression()).unwrap());
         let mut got = read_geoparquet_ids(out.path());
         got.sort();
         assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
@@ -1179,7 +1184,7 @@ mod tests {
         let budget = MemoryBudget::with_bytes(1024);
         let buf = BufferedItems::new(&budget);
         let out = crate::export::budget::spill_file().unwrap();
-        assert!(!buf.encode_to(out.path(), ParquetCompression::Zstd).unwrap());
+        assert!(!buf.encode_to(out.path(), default_compression()).unwrap());
     }
 
     #[test]
