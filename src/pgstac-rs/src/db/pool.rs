@@ -320,10 +320,16 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use tokio_postgres::NoTls;
 
-    const LOCAL_BASE: &str = "postgresql://username:password@localhost:5439";
+    /// The base connection (no dbname). Honors `PGSTAC_RS_TEST_BASE` so these tests connect to whatever the
+    /// harness/CI points at (e.g. the in-container `postgres:5432` that `scripts/.../test` builds against),
+    /// not only the local dev database. Falls back to the local dev default.
+    fn base() -> String {
+        std::env::var("PGSTAC_RS_TEST_BASE")
+            .unwrap_or_else(|_| "postgresql://username:password@localhost:5439".to_string())
+    }
 
     fn test_dsn() -> String {
-        std::env::var("PGSTAC_RS_TEST_DB").unwrap_or_else(|_| format!("{LOCAL_BASE}/postgis"))
+        std::env::var("PGSTAC_RS_TEST_DB").unwrap_or_else(|_| format!("{}/postgis", base()))
     }
 
     /// A disposable database cloned from the clean test template, dropped on `Drop`.
@@ -346,7 +352,7 @@ mod tests {
             let template = std::env::var("PGSTAC_RS_TEST_TEMPLATE")
                 .unwrap_or_else(|_| "pgstac_rs_test_template".to_string());
             let (client, connection) =
-                tokio_postgres::connect(&format!("{LOCAL_BASE}/postgres"), NoTls)
+                tokio_postgres::connect(&format!("{}/postgres", base()), NoTls)
                     .await
                     .unwrap();
             let handle = tokio::spawn(connection);
@@ -359,7 +365,7 @@ mod tests {
         }
 
         fn dsn(&self) -> String {
-            format!("{LOCAL_BASE}/{}", self.name)
+            format!("{}/{}", base(), self.name)
         }
     }
 
@@ -374,7 +380,7 @@ mod tests {
                         .unwrap();
                     runtime.block_on(async move {
                         let (client, connection) =
-                            tokio_postgres::connect(&format!("{LOCAL_BASE}/postgres"), NoTls)
+                            tokio_postgres::connect(&format!("{}/postgres", base()), NoTls)
                                 .await
                                 .unwrap();
                         let handle = tokio::spawn(connection);

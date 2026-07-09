@@ -384,10 +384,14 @@ function test_rust(){
     PGHOST="$host" PGPORT="$port" PGUSER="$user" PGPASSWORD="$pass" "$scripts_dir/pgstac-rs-test-rich-db"
 
     echo "=== Running pgstac-rs cargo tests ==="
+    # Point every test-connection env var the suite reads at the container database, so no test falls back
+    # to the localhost:5439 dev default (which only exists outside the container).
     (
         cd "$SRCDIR/pgstac-rs"
         PGSTAC_RS_TEST_BASE="$base" \
         PGSTAC_RS_TEST_DB="${base}/pgstac_rs_test_rich" \
+        PGSTAC_RS_TEST_RICH_DB="${base}/pgstac_rs_test_rich" \
+        PGSTAC_RS_INGEST_TEMPLATE="pgstac_rs_ingest_template" \
             cargo test --features cli
     )
     echo "pgstac-rs Rust tests passed!"
