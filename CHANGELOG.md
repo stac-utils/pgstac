@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - New [Rust client & CLI](https://stac-utils.github.io/pgstac/pgstac-rs/) reference documenting the crate features, the full read/pool API, every `pgstac dump` / `pgstac search` option, and all connection + test environment variables.
 - `src/pgstac-rs`: a `store` cargo feature that gates the `object_store`-backed remote dump sink (local fs + S3/GCS/Azure), so the remote sink can be built without the full `cli` feature.
 
+### Removed
+
+- Removed the legacy `pypgstac` Python package (`src/pypgstac`). Every capability moved to a replacement: `pgstac-migrate` (migrations), the `pgstac` Rust CLI (`src/pgstac-rs`, `cli` feature — loading, search, queryables, extensions, run-queue, maintenance), and the `pypgstac-rs` Python extension (`pypgstac_rs` module — the read/write pool API). Previously published `pypgstac` releases remain on PyPI; no new versions are published. Migration reference:
+    - `pypgstac migrate --toversion X` → `pgstac-migrate migrate --to X`
+    - `pypgstac version` → `pgstac-migrate current`
+    - `pypgstac load items f --method upsert` → `pgstac load f --policy upsert` (default policy changed from `insert` to `upsert`; `--method`→`--policy`, `--chunksize`→`--batch-size`; table is auto-detected)
+    - `pypgstac search` → `pgstac search` (Rust keyset engine; adds NDJSON / ItemCollection / geoparquet output)
+    - `pypgstac load_queryables f.json` → `pgstac load-queryables f.json`
+    - `pypgstac loadextensions` → `pgstac load-extensions`
+    - `pypgstac runqueue` → `pgstac runqueue`
+    - `pypgstac pgready` → `pg_isready`
+    - `pypgstac.hydration.{hydrate,dehydrate}` → `hydraters` / the `pypgstac_rs` read API (hydration and dehydration run in Rust)
+    - `pypgstac.migrate.MigrationPath` → `pgstac_migrate.compat.MigrationPath`
+    - `pypgstac.__version__` → `pgstac_migrate.__version__`
+- Removed the `pypgstac` PyPI publish job and the `-pypgstac` / `-pypgstac-runtime` Docker image build jobs from the release workflow; added a `pypgstac-rs` (maturin) PyPI publish job. The `pgstac-migrate` and crates.io publish jobs are unchanged.
+
 ### Changed
 
 - `search_plan`: bake the collection clamp as a literal so the datetime-band query is parameterized only by `$1`/`$2`/`$3` (band low/high, limit) and can be prepared once by a streaming client; fix the non-datetime branch's datetime clamp to be exclusive of the next month (`< months[last] + 1 month`) so items dated after the start of the final month are not dropped.

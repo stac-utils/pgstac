@@ -14,5 +14,5 @@ See CLAUDE.md "Development Workflow" for usage. All scripts require the Docker c
 - `stageversion` regenerates `*unreleased*` migrations each run; if you hand-edit incremental SQL, rebuild the baked artifact with `uv run --directory src/pgstac-migrate pgstac-migrate build-artifact` and avoid rerunning `stageversion` unless you intend to overwrite edits
 - `scripts/container-scripts/stageversion` and `scripts/container-scripts/makemigration` now shell through `pgpkg` inside the container rather than assembling/diffing SQL directly
 - Set `PGPKG_LOCAL_REPO_DIR` on the host when you need to force a local pgpkg checkout for `stageversion`, `makemigration`, or related container-script testing
-- Tagged releases run `.github/workflows/release.yml`, which publishes both `pypgstac` and `pgstac-migrate` to PyPI via the GitHub `pypi` environment; PyPI trusted publishers must exist for both projects
+- Tagged releases run `.github/workflows/release.yml`, which publishes `pgstac-migrate` and `pypgstac-rs` to PyPI via the GitHub `pypi` environment (and the Rust crate to crates.io); PyPI trusted publishers must exist for both projects
 - DO NOT run `stageversion` without understanding its side effects

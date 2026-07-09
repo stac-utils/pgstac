@@ -25,33 +25,16 @@ updates:
           - "*"
 
   - package-ecosystem: "pip"
-    directory: "/src/pypgstac"
+    directory: "/src/pgstac-migrate"
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
     groups:
-      python-dev-tooling:
+      python-all:
         applies-to: version-updates
         patterns:
-          - "ruff"
-          - "ty"
-          - "pre-commit"
-          - "types-*"
-      python-runtime:
-        applies-to: version-updates
-        patterns:
-          - "cachetools"
-          - "fire"
-          - "hydraters"
-          - "orjson"
-          - "plpygis"
-          - "pydantic"
-          - "python-dateutil"
-          - "smart-open"
-          - "tenacity"
-          - "version-parser"
-          - "psycopg*"
+          - "*"
 
   - package-ecosystem: "cargo"
     directory: "/rust"

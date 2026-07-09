@@ -45,8 +45,21 @@ services:
       - PGUSER=${PGUSER:-username}
       - PGPASSWORD=${PGPASSWORD:-password}
       - PGDATABASE=${PGDATABASE:-postgis}
+    volumes:
+      # The Rust test suite (test_rust) needs the builder scripts and the pgstac-rs crate, neither of
+      # which the image bakes in. Mounting them makes `scripts/test` run the same Rust suite locally as
+      # CI does.
+      - ./scripts:/opt/scripts
+      - ./src/pgstac-rs:/opt/src/pgstac-rs
+      # Persistent cargo dep-registry + build-artifact caches so repeat Rust runs are incremental instead
+      # of recompiling from scratch. Backed by /home/user/.cargo and /opt/cargo-target (CARGO_HOME /
+      # CARGO_TARGET_DIR in the image), both owned by uid 1000 so the volumes init writable.
+      - pgstac-cargo-home:/home/user/.cargo
+      - pgstac-cargo-target:/opt/cargo-target
     depends_on:
       pgstac:
         condition: service_healthy
 volumes:
   pgstac-pgdata:
+  pgstac-cargo-home:
+  pgstac-cargo-target:

@@ -3,15 +3,15 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 REPO_DIR=${PGSTAC_REPO_DIR:-/opt/src}
 export PATH="$SCRIPT_DIR:$PATH"
-if [[ -d "$REPO_DIR/pgstac" && -d "$REPO_DIR/pypgstac" ]]; then
+if [[ -d "$REPO_DIR/pgstac" && -d "$REPO_DIR/pgstac-migrate" ]]; then
     export SRCDIR="$REPO_DIR"
-elif [[ -d "$REPO_DIR/src/pgstac" && -d "$REPO_DIR/src/pypgstac" ]]; then
+elif [[ -d "$REPO_DIR/src/pgstac" && -d "$REPO_DIR/src/pgstac-migrate" ]]; then
     export SRCDIR="$REPO_DIR/src"
-elif [[ -d "$SCRIPT_DIR/../../src/pgstac" && -d "$SCRIPT_DIR/../../src/pypgstac" ]]; then
+elif [[ -d "$SCRIPT_DIR/../../src/pgstac" && -d "$SCRIPT_DIR/../../src/pgstac-migrate" ]]; then
     export SRCDIR="$(cd "$SCRIPT_DIR/../../src" && pwd)"
 else
-    echo "Unable to find pgstac/pypgstac sources under '$REPO_DIR'." >&2
-    echo "Set PGSTAC_REPO_DIR to either a directory containing pgstac/ and pypgstac/ or a repository root containing src/pgstac and src/pypgstac." >&2
+    echo "Unable to find pgstac/pgstac-migrate sources under '$REPO_DIR'." >&2
+    echo "Set PGSTAC_REPO_DIR to either a directory containing pgstac/ and pgstac-migrate/ or a repository root containing src/pgstac and src/pgstac-migrate." >&2
     exit 1
 fi
 export PGSTACDIR=$SRCDIR/pgstac
@@ -32,7 +32,7 @@ Options:
     --pgtap               Run PGTap SQL tests.
     --basicsql            Run basic SQL output tests.
     --basicsql-createout  Recreate missing .sql.out fixtures.
-    --pypgstac            Run Python tests.
+    --pymigrate           Run pgstac-migrate Python tests.
     --migrations          Run migration-path validation.
     --pgdump              Run pg_dump / pg_restore validation.
     --rust                Run the pgstac-rs Rust tests (cargo test --features cli).
@@ -136,11 +136,11 @@ EOSQL
 }
 
 function test_formatting(){
-    cd $SRCDIR/pypgstac
+    cd $SRCDIR/pgstac-migrate
 
     echo "Running ruff"
-    uv run --group dev ruff check src/pypgstac tests
-    uv run --group dev ruff format --check src/pypgstac tests
+    uv run --group dev ruff check src/pgstac_migrate tests
+    uv run --group dev ruff format --check src/pgstac_migrate tests
 
     echo "Running ty"
     uv run --group dev --group test ty check
@@ -150,16 +150,15 @@ function test_formatting(){
 
     echo "Checking for legacy dotted migration filenames."
     find $SRCDIR/pgstac/migrations -maxdepth 1 -type f -name 'pgstac.*.sql' | grep . && { echo "Legacy dotted migration filenames remain in src/pgstac/migrations."; exit 1; }
-    find $SRCDIR/pypgstac/src/pypgstac/migrations -maxdepth 1 -type f -name 'pgstac.*.sql' | grep . && { echo "Legacy dotted migration filenames remain in src/pypgstac/src/pypgstac/migrations."; exit 1; }
 
 
-    VERSION=$(cd $SRCDIR/pypgstac && uv run python -c "from pypgstac.version import __version__; print(__version__)")
+    VERSION=$(cd $SRCDIR/pgstac-migrate && uv run python -c "from pgstac_migrate import __version__; print(__version__)")
     echo $VERSION
     if echo $VERSION | grep "dev"; then
         VERSION="unreleased"
     fi
 
-    echo "Checking whether base sql migration exists for pypgstac version."
+    echo "Checking whether base sql migration exists for pgstac-migrate version."
     [ -f $SRCDIR/pgstac/migrations/pgstac--"${VERSION}".sql ] || { echo "****FAIL No migration exists at pgstac/migrations/pgstac--${VERSION}.sql"; exit 1; }
 
     echo "Congratulations! All formatting tests pass."
@@ -229,18 +228,12 @@ done
 psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";
 }
 
-function test_pypgstac(){
+function test_pymigrate(){
 [[ $MESSAGELOG == 1 ]] && VERBOSE="-vvv"
-TEMPLATEDB=${1:-pgstac_test_db_template}
-    cd $SRCDIR/pypgstac
-    psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
-DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force);
-CREATE DATABASE pgstac_test_pypgstac TEMPLATE $TEMPLATEDB;
-ALTER DATABASE pgstac_test_pypgstac SET client_min_messages to $CLIENTMESSAGES;
-EOSQL
-    uv run --group dev --group test pytest tests $VERBOSE
-    uv run --group dev --group test pytest ../pgstac-migrate/tests $VERBOSE
-    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_pypgstac WITH (force)";
+    # pgstac-migrate's tests are self-contained (baked artifact + mocked DB calls) and need no
+    # live database. The ingest/loader coverage pypgstac used to provide now lives in the Rust
+    # suite (test_rust).
+    uv run --directory "$SRCDIR/pgstac-migrate" --group test pytest tests $VERBOSE
 }
 
 function test_pgdump(){
@@ -354,17 +347,16 @@ EOSQL
     local _prev_pgdatabase="${PGDATABASE:-}"
     export PGDATABASE=pgstac_test_migration
     echo "Migrating from version 0.3.0"
-    cd $SRCDIR/pypgstac
-    uv run --group dev --group test pypgstac migrate --toversion 0.3.0
-    uv run --group dev --group test pypgstac --version
+    uv run --directory "$SRCDIR/pgstac-migrate" pgstac-migrate migrate --to 0.3.0
+    uv run --directory "$SRCDIR/pgstac-migrate" pgstac-migrate current
 
-    uv run --group dev --group test pypgstac migrate
-    uv run --group dev --group test pypgstac --version
+    uv run --directory "$SRCDIR/pgstac-migrate" pgstac-migrate migrate
+    uv run --directory "$SRCDIR/pgstac-migrate" pgstac-migrate current
 
     echo "Running all tests against incrementally migrated database."
     test_pgtap pgstac_test_migration
     test_basicsql pgstac_test_migration
-    test_pypgstac pgstac_test_migration
+    test_pymigrate pgstac_test_migration
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);" postgres
     export PGDATABASE="${_prev_pgdatabase}"
 }
@@ -374,8 +366,21 @@ function test_rust(){
     # _ingest_template / _rich) built by the builder scripts. Passing an explicit PGHOST makes those
     # builders target the dev database (pgstac:5432 in-container) rather than .env's host.
     local host="${PGHOST:-pgstac}" port="${PGPORT:-5432}" user="${PGUSER:-username}" pass="${PGPASSWORD:-password}"
-    local scripts_dir base
-    scripts_dir="$(cd "$SRCDIR/../scripts" && pwd)"
+    local scripts_dir crate_dir base
+    scripts_dir="$SRCDIR/../scripts"
+    crate_dir="$SRCDIR/pgstac-rs"
+    # Fail loudly rather than silently skipping: the builder scripts and the pgstac-rs crate are mounted
+    # into the dev container (docker-compose.yml) and present on the CI checkout. If either is missing the
+    # Rust suite cannot run, and a green gate that skipped it would be a lie.
+    if [[ ! -x "$scripts_dir/pgstac-rs-test-db" ]]; then
+        echo "test_rust: builder scripts not found at '$scripts_dir' (is scripts/ mounted into the container?)." >&2
+        exit 1
+    fi
+    if [[ ! -f "$crate_dir/Cargo.toml" ]]; then
+        echo "test_rust: pgstac-rs crate not found at '$crate_dir' (is src/pgstac-rs mounted into the container?)." >&2
+        exit 1
+    fi
+    scripts_dir="$(cd "$scripts_dir" && pwd)"
     base="postgresql://${user}:${pass}@${host}:${port}"
 
     echo "=== Building pgstac-rs test templates on ${host}:${port} ==="
@@ -385,9 +390,11 @@ function test_rust(){
 
     echo "=== Running pgstac-rs cargo tests ==="
     # Point every test-connection env var the suite reads at the container database, so no test falls back
-    # to the localhost:5439 dev default (which only exists outside the container).
+    # to the localhost:5439 dev default (which only exists outside the container). CARGO_HOME and
+    # CARGO_TARGET_DIR come from the image (persistent named volumes) so the dep registry + build
+    # artifacts survive across runs and never touch the mounted host target/.
     (
-        cd "$SRCDIR/pgstac-rs"
+        cd "$crate_dir"
         PGSTAC_RS_TEST_BASE="$base" \
         PGSTAC_RS_TEST_DB="${base}/pgstac_rs_test_rich" \
         PGSTAC_RS_TEST_RICH_DB="${base}/pgstac_rs_test_rich" \
@@ -401,7 +408,7 @@ FORMATTING=0
 SETUPDB=0
 PGTAP=0
 BASICSQL=0
-PYPGSTAC=0
+PYMIGRATE=0
 MIGRATIONS=0
 PGDUMP=0
 MESSAGENOTICE=0
@@ -454,9 +461,8 @@ while [[ $# -gt 0 ]]
             shift
             ;;
 
-            --pypgstac)
-            SETUPDB=1
-            PYPGSTAC=1
+            --pymigrate)
+            PYMIGRATE=1
             shift
             ;;
 
@@ -476,7 +482,7 @@ while [[ $# -gt 0 ]]
             SETUPDB=1
             PGTAP=1
             BASICSQL=1
-            PYPGSTAC=1
+            PYMIGRATE=1
             shift
             ;;
 
@@ -498,15 +504,14 @@ CLIENTMESSAGES='warning'
 [[ $MESSAGEDEBUG -eq 1 ]] && CLIENTMESSAGES='debug1'
 echo $CLIENTMESSAGES
 
-if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYPGSTAC -eq 0) && ($MIGRATIONS -eq 0) && ($PGDUMP -eq 0) && ($RUST -eq 0) ]]
+if [[ ($FORMATTING -eq 0) && ($SETUPDB -eq 0) && ($PGTAP -eq 0) && ($BASICSQL -eq 0) && ($PYMIGRATE -eq 0) && ($MIGRATIONS -eq 0) && ($PGDUMP -eq 0) && ($RUST -eq 0) ]]
 then
     FORMATTING=1
     SETUPDB=1
     PGTAP=1
     BASICSQL=1
-    # PYPGSTAC and MIGRATIONS are intentionally excluded from the default
-    # run-all block while Python loader updates are pending on this branch.
-    # Use --pypgstac or --migrations flags to run them explicitly.
+    # PYMIGRATE and MIGRATIONS are intentionally excluded from the default
+    # run-all block. Use --pymigrate or --migrations flags to run them explicitly.
     PGDUMP=1
     RUST=1
 fi
@@ -519,7 +524,7 @@ if [ $SETUPDB -eq 1 ]; then
 fi
 [ $PGTAP -eq 1 ] && test_pgtap
 [ $BASICSQL -eq 1 ] && test_basicsql
-[ $PYPGSTAC -eq 1 ] && test_pypgstac
+[ $PYMIGRATE -eq 1 ] && test_pymigrate
 [ $MIGRATIONS -eq 1 ] && test_migrations
 [ $PGDUMP -eq 1 ] && test_pgdump
 [ $RUST -eq 1 ] && test_rust

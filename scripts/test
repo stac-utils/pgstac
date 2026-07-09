@@ -15,13 +15,13 @@ Options:
   -h, --help              Show this help text.
 
 Test suite flags (passed through to the in-container runner; no suite flag = all except
-migrations/pypgstac):
+migrations/pymigrate):
   --formatting            ruff + ty checks.
   --pgtap                 PGTap SQL tests.
   --basicsql              Basic SQL output comparison tests.
   --rust                  pgstac-rs Rust tests (cargo test --features cli).
   --pgdump                pg_dump / pg_restore round-trip.
-  --pypgstac              Python (pypgstac) tests.
+  --pymigrate             pgstac-migrate Python tests.
   --migrations            Full migration-chain validation.
   --nomigrations          Everything except migrations + pg_dump.
 
@@ -29,7 +29,7 @@ Examples:
   $(basename "$0")
   $(basename "$0") --fast
   $(basename "$0") --rust
-  $(basename "$0") --pypgstac --build-policy always
+  $(basename "$0") --pymigrate --build-policy always
 EOF
 }
 

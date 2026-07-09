@@ -33,7 +33,7 @@ Useful options:
 
 ```bash
 scripts/test --fast
-scripts/test --pypgstac
+scripts/test --pymigrate
 scripts/test --build-policy always
 ```
 
@@ -88,19 +88,19 @@ All changes to SQL should only be made in the `/src/pgstac/sql` directory. SQL F
 
 ### Adding Tests
 
-There are three different types of tests within the project: (1) pgTap tests, (2) basic SQL tests, and (3) PyPgSTAC tests.
+There are several types of tests within the project: (1) pgTap tests, (2) basic SQL tests, (3) `pgstac-migrate` Python unit tests, and (4) Rust tests covering ingest, loader, and search.
 
-PgSTAC tests can be written using PGTap or basic SQL output comparisons. Additional testing is available using PyTest in the PyPgSTAC module. Tests can be run using the `scripts/test` command.
+PgSTAC tests can be written using PGTap or basic SQL output comparisons. The `pgstac-migrate` package has PyTest unit tests, and the `pgstac-rs` crate has its own Rust test suites. Tests can be run using the `scripts/test` command.
 
 PGTap tests can be written using [PGTap](https://pgtap.org/) syntax. Tests should be added to the `/src/pgstac/tests/pgtap` directory. Any new SQL files added to this directory must be added to `/src/pgstac/tests/pgtap.sql`.
 
 The Basic SQL tests will run any file ending in '.sql' in the `/src/pgstac/tests/basic` directory and will compare the exact results to the corresponding '.sql.out' file.
 
-PyPgSTAC tests are pytest tests, and they are located in `/src/pypgstac/tests`
+The `pgstac-migrate` pytest tests are located in `src/pgstac-migrate/tests/`. Ingest, loader, and search coverage lives in the Rust test suite under `src/pgstac-rs/tests/`, run via `scripts/test --rust`.
 
 All tests can be found in tests/pgtap.sql and are run using `scripts/test`.
 
-Individual tests can be run with any combination of the following flags `--formatting --basicsql --pgtap --migrations --pypgstac`. The `--formatting` suite runs Ruff lint/format checks and Ty type checks. If pre-commit is installed, tests will be run on commit based on which files have changed.
+Individual tests can be run with any combination of the following flags `--formatting --basicsql --pgtap --migrations --pymigrate --rust`. The `--formatting` suite runs Ruff lint/format checks and Ty type checks. If pre-commit is installed, tests will be run on commit based on which files have changed.
 
 
 ### To make a PR
@@ -122,7 +122,7 @@ Individual tests can be run with any combination of the following flags `--forma
 6) Once the PR has been merged, start the release process.
 7) Create a git tag `git tag v0.2.8` using new version number
 8) Push the git tag `git push origin v0.2.8`
-9) The CI process will push `pypgstac` and `pgstac-migrate` to PyPI, create docker images on ghcr.io, and create a release on GitHub. Register PyPI trusted publishers for both projects before the first tagged release.
+9) The CI process will push `pgstac-migrate` and `pypgstac-rs` to PyPI (and the `pgstac` crate to crates.io), create docker images on ghcr.io, and create a release on GitHub. Register PyPI trusted publishers for both projects before the first tagged release.
 
 
 ### Get Involved
@@ -135,6 +135,6 @@ Dehydration refers to stripping redundant attributes of STAC items when storing 
 
 Rehydration is the process of adding the stripped attributes back to the STAC items, such as during the export of an STAC collection or the response to a search query.
 
-PgSTAC, a versatile tool, is designed to seamlessly integrate with PyPgSTAC or alternative backends. This flexibility allows for direct calls for both rehydration and dehydration, giving developers and technical users a sense of control over the process.
+PgSTAC, a versatile tool, is designed to seamlessly integrate with the `pgstac` Rust CLI / `pypgstac-rs` extension or alternative backends. This flexibility allows for direct calls for both rehydration and dehydration, giving developers and technical users a sense of control over the process.
 
 Hydration and dehydration are de-facto settings that users can not opt out of. In the future, we may provide a configuration for use cases where the size benefits do not justify the added complexity.

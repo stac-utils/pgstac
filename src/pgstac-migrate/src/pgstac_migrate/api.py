@@ -49,3 +49,33 @@ def migrate(
         password=password,
         version_source=PgstacVersionSource(),
     )
+
+
+def current_version(
+    *,
+    conninfo: str | None = None,
+    host: str | None = None,
+    port: int | str | None = None,
+    dbname: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+) -> str | None:
+    """Return the PgSTAC version installed in a live database, or ``None``.
+
+    Reads the authoritative version from ``pgstac.migrations`` the same way the
+    migration planner does. Connection parameters left unset fall back to the
+    standard libpq environment variables (``PGHOST``, ``PGDATABASE``, ...).
+    """
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    resolved = make_conninfo(
+        conninfo or "",
+        host=host,
+        port=port,
+        dbname=dbname,
+        user=user,
+        password=password,
+    )
+    with psycopg.connect(resolved) as conn:
+        return PgstacVersionSource().read_live_version(conn, None)

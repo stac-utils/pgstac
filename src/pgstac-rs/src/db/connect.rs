@@ -59,6 +59,9 @@ pub struct ConnectConfig {
     pub sslkey: Option<String>,
     /// The search path applied at connection startup. Defaults to [`DEFAULT_SEARCH_PATH`].
     pub search_path: String,
+    /// When true, sets `pgstac.use_queue = on` at connection startup so pgstac defers index maintenance to
+    /// the query queue (drained by `PgstacPool::run_queued`). Default false.
+    pub use_queue: bool,
 }
 
 impl Default for ConnectConfig {
@@ -69,6 +72,7 @@ impl Default for ConnectConfig {
             sslcert: None,
             sslkey: None,
             search_path: DEFAULT_SEARCH_PATH.to_string(),
+            use_queue: false,
         }
     }
 }
@@ -104,6 +108,7 @@ impl ConnectConfig {
             sslcert: get("PGSSLCERT"),
             sslkey: get("PGSSLKEY"),
             search_path: DEFAULT_SEARCH_PATH.to_string(),
+            use_queue: false,
         }
     }
 
@@ -189,7 +194,10 @@ impl ConnectConfig {
             .map(str::to_string)
             .or_else(|| get("PGOPTIONS"))
             .unwrap_or_default();
-        let merged = merge_search_path(&base_options, &self.search_path);
+        let mut merged = merge_search_path(&base_options, &self.search_path);
+        if self.use_queue && !merged.contains("use_queue") {
+            merged.push_str(" -c pgstac.use_queue=on");
+        }
         let _ = config.options(&merged);
 
         Ok(config)
@@ -247,6 +255,26 @@ mod tests {
             "options should carry the startup search_path, got {options:?}"
         );
         assert_eq!(config.get_application_name(), Some("pgstac"));
+    }
+
+    #[test]
+    fn use_queue_sets_the_startup_guc() {
+        let off = ConnectConfig::default().to_pg_config_from(|_| None).unwrap();
+        assert!(!off.get_options().unwrap_or_default().contains("use_queue"));
+
+        let on = ConnectConfig {
+            use_queue: true,
+            ..Default::default()
+        }
+        .to_pg_config_from(|_| None)
+        .unwrap();
+        let options = on.get_options().unwrap_or_default();
+        assert!(
+            options.contains("pgstac.use_queue=on"),
+            "use_queue should set the startup GUC, got {options:?}"
+        );
+        // search_path is still applied alongside it.
+        assert!(options.contains("search_path=pgstac,public"));
     }
 
     #[test]

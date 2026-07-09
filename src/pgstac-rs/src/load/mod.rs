@@ -7,5 +7,8 @@ pub mod ingest;
 #[cfg(feature = "export")]
 pub mod parquet_decode;
 #[cfg(feature = "pool")]
+pub(crate) mod extensions;
+#[cfg(feature = "pool")]
 pub(crate) mod pool_ingest;
+#[cfg(feature = "pool")]
 pub(crate) mod queryables;

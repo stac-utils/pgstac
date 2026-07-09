@@ -131,101 +131,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha, mode=max
 
-  buildpypgstac:
-    name: Build and push base pyrust
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
-        # Temporary workaround for ARM builds
-        # https://github.com/docker/setup-qemu-action/issues/198
-        with:
-          image: tonistiigi/binfmt:qemu-v7.0.0-28
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Log in to the Container registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-pypgstac
-      - name: Build and Push Base Postgres
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          platforms: linux/amd64,linux/arm64
-          context: .
-          target: pypgstac
-          file: docker/pypgstac/Dockerfile
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha, mode=max
-
-  buildpypgstacruntime:
-    name: Build and push pypgstac runtime image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
-        with:
-          image: tonistiigi/binfmt:qemu-v7.0.0-28
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Log in to the Container registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-pypgstac-runtime
-      - name: Build and Push pypgstac runtime
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          platforms: linux/amd64,linux/arm64
-          context: .
-          target: pypgstac-runtime
-          file: docker/pypgstac/Dockerfile
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha, mode=max
-
-  releasetopypi:
-    name: Release
+  releasepypgstacrstopypi:
+    name: Release pypgstac-rs to PyPI
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     environment:
       name: pypi
-      url: https://pypi.org/p/pypgstac
+      url: https://pypi.org/p/pypgstac-rs
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.x"
-      - name: Install build
-        working-directory: src/pypgstac
-        run: pip install build
-      - name: Build
-        working-directory: src/pypgstac
-        run: python -m build
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      # Publishes the portable sdist so `pip install pypgstac-rs` builds the extension from source.
+      # Prebuilt manylinux/macOS/Windows wheels can be added later via a PyO3/maturin-action matrix.
+      - name: Build sdist
+        run: uvx --from maturin maturin sdist -m src/pgstac-rs/Cargo.toml --out dist
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          packages-dir: src/pypgstac/dist
+          packages-dir: dist
 
   releasepgstacmigratetopypi:
     name: Release pgstac-migrate to PyPI

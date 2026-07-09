@@ -56,6 +56,13 @@ enum Command {
     Maintain(MaintainArgs),
     /// Delete an item (with --item) or a whole collection (without --item).
     Delete(DeleteArgs),
+    /// Load queryables from a JSON-schema document into `pgstac.queryables`.
+    LoadQueryables(LoadQueryablesArgs),
+    /// Fetch the STAC extension schemas referenced by collections into
+    /// `pgstac.stac_extensions` (supports http(s) URLs and local paths).
+    LoadExtensions,
+    /// Run any queued pgstac maintenance queries (`CALL run_queued_queries()`).
+    Runqueue,
 }
 
 #[derive(clap::Args, Debug)]
@@ -262,6 +269,21 @@ struct DumpArgs {
 
 const DEFAULT_DSN: &str = "postgresql://username:password@localhost:5432/postgis";
 
+#[derive(clap::Args, Debug)]
+struct LoadQueryablesArgs {
+    /// Path to a queryables JSON-schema document; its `properties` are loaded.
+    file: String,
+    /// Restrict the queryables to these collection ids (repeatable). Omit for the shared scope.
+    #[arg(long = "collection", short = 'c')]
+    collections: Vec<String>,
+    /// Delete existing queryables in the same scope that are absent from the file.
+    #[arg(long)]
+    delete_missing: bool,
+    /// Create a BTREE index for these fields (repeatable). Omit for no indexes.
+    #[arg(long = "index-field")]
+    index_fields: Vec<String>,
+}
+
 /// Builds a [`ConnectConfig`] from the environment, with an explicit `--dsn` (or `$PGSTAC_DSN`) taking
 /// precedence over ambient `PG*` / `DATABASE_URL` values.
 fn connect_config(dsn: Option<&str>) -> ConnectConfig {
@@ -315,6 +337,9 @@ fn main() -> ExitCode {
         Command::Restore(args) => runtime.block_on(run_restore(args, dsn)),
         Command::Maintain(args) => runtime.block_on(run_maintain(args, dsn)),
         Command::Delete(args) => runtime.block_on(run_delete(args, dsn)),
+        Command::LoadQueryables(args) => runtime.block_on(run_load_queryables(args, dsn)),
+        Command::LoadExtensions => runtime.block_on(run_load_extensions(dsn)),
+        Command::Runqueue => runtime.block_on(run_runqueue(dsn)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -739,6 +764,38 @@ async fn run_delete(args: DeleteArgs, dsn: Option<String>) -> Result<(), Box<dyn
         }
     }
     pool.close();
+    Ok(())
+}
+
+async fn run_load_queryables(
+    args: LoadQueryablesArgs,
+    dsn: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let queryables: Value = serde_json::from_slice(&std::fs::read(&args.file)?)?;
+    let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
+    let collection_ids = (!args.collections.is_empty()).then_some(args.collections);
+    let index_fields = (!args.index_fields.is_empty()).then_some(args.index_fields);
+    let n = pool
+        .load_queryables(queryables, collection_ids, args.delete_missing, index_fields)
+        .await?;
+    pool.close();
+    eprintln!("loaded {n} queryable(s)");
+    Ok(())
+}
+
+async fn run_load_extensions(dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
+    let n = pool.load_extensions().await?;
+    pool.close();
+    eprintln!("loaded {n} extension(s)");
+    Ok(())
+}
+
+async fn run_runqueue(dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
+    pool.run_queued().await?;
+    pool.close();
+    eprintln!("ran queued queries");
     Ok(())
 }
 

@@ -307,6 +307,16 @@ impl PgstacPool {
         crate::collections::get_queryables(&**client, collection_id).await
     }
 
+    /// Runs any queued pgstac maintenance queries (`CALL run_queued_queries()`).
+    ///
+    /// Work is enqueued when a session has `pgstac.use_queue` on (see [`ConnectConfig::use_queue`]); this
+    /// drains that queue.
+    pub async fn run_queued(&self) -> Result<()> {
+        let client = self.get().await?;
+        client.batch_execute("CALL run_queued_queries()").await?;
+        Ok(())
+    }
+
     /// Closes the pool, preventing it from handing out further connections.
     pub fn close(&self) {
         self.pool.close();

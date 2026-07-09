@@ -347,41 +347,36 @@ impl Pgstac {
         })
     }
 
-    #[pyo3(signature = (_file, _collection_ids=None, _delete_missing=None, _index_fields=None))]
+    /// Loads a queryables JSON-schema document's `properties` into `pgstac.queryables`.
+    #[pyo3(signature = (queryables, collection_ids=None, delete_missing=None, index_fields=None))]
     fn load_queryables<'py>(
         &self,
         py: Python<'py>,
-        _file: String,
-        _collection_ids: Option<Vec<String>>,
-        _delete_missing: Option<bool>,
-        _index_fields: Option<Vec<String>>,
+        queryables: &str,
+        collection_ids: Option<Vec<String>>,
+        delete_missing: Option<bool>,
+        index_fields: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let pool = self.pool.clone();
+        let queryables: Value = serde_json::from_str(queryables).map_err(pyerr)?;
         future_into_py(py, async move {
-            Err::<(), _>(pyo3::exceptions::PyNotImplementedError::new_err("load_queryables is stubbed in rust"))
+            pool.load_queryables(queryables, collection_ids, delete_missing.unwrap_or(false), index_fields)
+                .await
+                .map_err(pyerr)
         })
     }
 
-    #[pyo3(signature = (_toversion=None))]
-    fn migrate<'py>(
-        &self,
-        py: Python<'py>,
-        _toversion: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        future_into_py(py, async move {
-            Err::<String, _>(pyo3::exceptions::PyNotImplementedError::new_err("migrate is stubbed in rust"))
-        })
+    /// Loads the STAC extension schemas referenced by collections into `pgstac.stac_extensions`, fetching
+    /// each referenced URL (http(s) or local path). Returns the number newly populated.
+    fn load_extensions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let pool = self.pool.clone();
+        future_into_py(py, async move { pool.load_extensions().await.map_err(pyerr) })
     }
 
+    /// Runs any queued pgstac maintenance queries (`CALL run_queued_queries()`).
     fn runqueue<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        future_into_py(py, async move {
-            Err::<String, _>(pyo3::exceptions::PyNotImplementedError::new_err("runqueue is stubbed in rust"))
-        })
-    }
-
-    fn pgready<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        future_into_py(py, async move {
-            Err::<(), _>(pyo3::exceptions::PyNotImplementedError::new_err("pgready is stubbed in rust"))
-        })
+        let pool = self.pool.clone();
+        future_into_py(py, async move { pool.run_queued().await.map_err(pyerr) })
     }
 }
 

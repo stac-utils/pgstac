@@ -130,6 +130,11 @@ pub enum Error {
     #[error("dehydrate error: {0}")]
     Dehydrate(String),
 
+    /// A queryables document could not be loaded.
+    #[cfg(feature = "pool")]
+    #[error("queryables error: {0}")]
+    Queryables(String),
+
     /// [std::io::Error]
     #[error(transparent)]
     Io(#[from] std::io::Error),

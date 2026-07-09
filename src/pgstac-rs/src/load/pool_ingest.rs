@@ -53,6 +53,39 @@ impl PgstacPool {
         self.create_items(vec![item], ConflictPolicy::Upsert).await
     }
 
+    /// Loads a queryables JSON-schema document's `properties` into `pgstac.queryables`.
+    ///
+    /// Non-core properties are upserted scoped to `collection_ids` (or the shared NULL scope when `None`);
+    /// each property named in `index_fields` gets a `BTREE` index type (built later by the async index
+    /// sweep). With `delete_missing`, queryables in the same scope absent from the document are removed.
+    /// Returns the number loaded.
+    pub async fn load_queryables(
+        &self,
+        queryables: Value,
+        collection_ids: Option<Vec<String>>,
+        delete_missing: bool,
+        index_fields: Option<Vec<String>>,
+    ) -> Result<u64> {
+        let mut client = self.get().await?;
+        crate::load::queryables::load_queryables(
+            &mut client,
+            &queryables,
+            collection_ids.as_deref(),
+            delete_missing,
+            index_fields.as_deref(),
+        )
+        .await
+    }
+
+    /// Loads STAC extension schemas into `pgstac.stac_extensions`: records the distinct `stac_extensions`
+    /// URLs referenced by collections, then fetches and stores the JSON schema for each not yet populated.
+    /// `http(s)://` URLs (with the `store` feature) and local paths (`file://…` or bare) are supported; a
+    /// URL that cannot be fetched or parsed is logged and skipped. Returns the number newly populated.
+    pub async fn load_extensions(&self) -> Result<u64> {
+        let client = self.get().await?;
+        crate::load::extensions::load_extensions(&**client).await
+    }
+
     /// Deletes an item by id from a collection.
     pub async fn delete_item(&self, collection_id: &str, item_id: &str) -> Result<()> {
         let client = self.get().await?;
