@@ -360,9 +360,14 @@ impl Pgstac {
         let pool = self.pool.clone();
         let queryables: Value = serde_json::from_str(queryables).map_err(pyerr)?;
         future_into_py(py, async move {
-            pool.load_queryables(queryables, collection_ids, delete_missing.unwrap_or(false), index_fields)
-                .await
-                .map_err(pyerr)
+            pool.load_queryables(
+                queryables,
+                collection_ids,
+                delete_missing.unwrap_or(false),
+                index_fields,
+            )
+            .await
+            .map_err(pyerr)
         })
     }
 
@@ -370,7 +375,10 @@ impl Pgstac {
     /// each referenced URL (http(s) or local path). Returns the number newly populated.
     fn load_extensions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let pool = self.pool.clone();
-        future_into_py(py, async move { pool.load_extensions().await.map_err(pyerr) })
+        future_into_py(
+            py,
+            async move { pool.load_extensions().await.map_err(pyerr) },
+        )
     }
 
     /// Runs any queued pgstac maintenance queries (`CALL run_queued_queries()`).
@@ -379,7 +387,6 @@ impl Pgstac {
         future_into_py(py, async move { pool.run_queued().await.map_err(pyerr) })
     }
 }
-
 
 /// The `pypgstac_rs` extension module.
 #[pymodule]

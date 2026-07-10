@@ -259,7 +259,9 @@ mod tests {
 
     #[test]
     fn use_queue_sets_the_startup_guc() {
-        let off = ConnectConfig::default().to_pg_config_from(|_| None).unwrap();
+        let off = ConnectConfig::default()
+            .to_pg_config_from(|_| None)
+            .unwrap();
         assert!(!off.get_options().unwrap_or_default().contains("use_queue"));
 
         let on = ConnectConfig {

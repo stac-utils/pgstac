@@ -15,7 +15,8 @@ fn base() -> String {
 }
 
 fn template() -> String {
-    std::env::var("PGSTAC_RS_INGEST_TEMPLATE").unwrap_or_else(|_| "pgstac_rs_ingest_template".to_string())
+    std::env::var("PGSTAC_RS_INGEST_TEMPLATE")
+        .unwrap_or_else(|_| "pgstac_rs_ingest_template".to_string())
 }
 
 /// A disposable database cloned from the ingest template, dropped on `Drop`.
@@ -36,7 +37,10 @@ impl CloneDb {
             .unwrap();
         let handle = tokio::spawn(connection);
         let _ = client
-            .execute(&format!("CREATE DATABASE {name} TEMPLATE {}", template()), &[])
+            .execute(
+                &format!("CREATE DATABASE {name} TEMPLATE {}", template()),
+                &[],
+            )
             .await
             .unwrap();
         handle.abort();
@@ -130,10 +134,16 @@ async fn loaded(db: &CloneDb) -> HashMap<String, (String, Option<String>)> {
 }
 
 fn all_index_fields() -> Vec<String> {
-    ["test:string_prop", "test:number_prop", "test:integer_prop", "test:datetime_prop", "test:array_prop"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "test:string_prop",
+        "test:number_prop",
+        "test:integer_prop",
+        "test:datetime_prop",
+        "test:array_prop",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 #[tokio::test]
@@ -147,23 +157,44 @@ async fn load_queryables_maps_wrappers_and_indexes() {
     assert_eq!(n, 5, "5 non-core queryables loaded (core fields skipped)");
     let q = loaded(&db).await;
     assert_eq!(q.len(), 5);
-    assert_eq!(q["test:string_prop"], ("to_text".into(), Some("BTREE".into())));
-    assert_eq!(q["test:number_prop"], ("to_float".into(), Some("BTREE".into())));
-    assert_eq!(q["test:integer_prop"], ("to_int".into(), Some("BTREE".into())));
-    assert_eq!(q["test:datetime_prop"], ("to_tstz".into(), Some("BTREE".into())));
-    assert_eq!(q["test:array_prop"], ("to_text_array".into(), Some("BTREE".into())));
+    assert_eq!(
+        q["test:string_prop"],
+        ("to_text".into(), Some("BTREE".into()))
+    );
+    assert_eq!(
+        q["test:number_prop"],
+        ("to_float".into(), Some("BTREE".into()))
+    );
+    assert_eq!(
+        q["test:integer_prop"],
+        ("to_int".into(), Some("BTREE".into()))
+    );
+    assert_eq!(
+        q["test:datetime_prop"],
+        ("to_tstz".into(), Some("BTREE".into()))
+    );
+    assert_eq!(
+        q["test:array_prop"],
+        ("to_text_array".into(), Some("BTREE".into()))
+    );
 }
 
 #[tokio::test]
 async fn load_queryables_without_index_fields_has_no_index() {
     let db = CloneDb::create().await;
     let pool = pool(&db).await;
-    let n = pool.load_queryables(queryables_doc(), None, false, None).await.unwrap();
+    let n = pool
+        .load_queryables(queryables_doc(), None, false, None)
+        .await
+        .unwrap();
     assert_eq!(n, 5);
     let q = loaded(&db).await;
     assert_eq!(q["test:number_prop"].0, "to_float");
     for (name, (_wrapper, index)) in &q {
-        assert!(index.is_none(), "{name} should have no index without index_fields");
+        assert!(
+            index.is_none(),
+            "{name} should have no index without index_fields"
+        );
     }
 }
 
@@ -171,7 +202,10 @@ async fn load_queryables_without_index_fields_has_no_index() {
 async fn load_queryables_specific_index_fields() {
     let db = CloneDb::create().await;
     let pool = pool(&db).await;
-    let indexed = vec!["test:string_prop".to_string(), "test:datetime_prop".to_string()];
+    let indexed = vec![
+        "test:string_prop".to_string(),
+        "test:datetime_prop".to_string(),
+    ];
     pool.load_queryables(queryables_doc(), None, false, Some(indexed))
         .await
         .unwrap();
@@ -187,14 +221,22 @@ async fn load_queryables_specific_index_fields() {
 async fn load_queryables_delete_missing_removes_absent() {
     let db = CloneDb::create().await;
     let pool = pool(&db).await;
-    pool.load_queryables(queryables_doc(), None, false, None).await.unwrap();
+    pool.load_queryables(queryables_doc(), None, false, None)
+        .await
+        .unwrap();
     let partial = json!({"properties": {
         "test:string_prop": {"type": "string"},
         "test:number_prop": {"type": "number"}
     }});
-    pool.load_queryables(partial, None, true, None).await.unwrap();
+    pool.load_queryables(partial, None, true, None)
+        .await
+        .unwrap();
     let q = loaded(&db).await;
-    assert_eq!(q.len(), 2, "delete_missing removed the 3 absent test:* queryables");
+    assert_eq!(
+        q.len(),
+        2,
+        "delete_missing removed the 3 absent test:* queryables"
+    );
     assert!(q.contains_key("test:string_prop"));
     assert!(q.contains_key("test:number_prop"));
 }
@@ -203,8 +245,13 @@ async fn load_queryables_delete_missing_removes_absent() {
 async fn load_queryables_no_properties_errors() {
     let db = CloneDb::create().await;
     let pool = pool(&db).await;
-    let result = pool.load_queryables(json!({"type": "object"}), None, false, None).await;
-    assert!(result.is_err(), "a document with no `properties` must error");
+    let result = pool
+        .load_queryables(json!({"type": "object"}), None, false, None)
+        .await;
+    assert!(
+        result.is_err(),
+        "a document with no `properties` must error"
+    );
 }
 
 /// The `collection_ids` scope of every queryables row for `name` (NULL = shared), ordered.
@@ -220,7 +267,9 @@ async fn scopes_for(db: &CloneDb, name: &str) -> Vec<Option<Vec<String>>> {
         .await
         .unwrap();
     handle.abort();
-    rows.into_iter().map(|r| r.get::<_, Option<Vec<String>>>(0)).collect()
+    rows.into_iter()
+        .map(|r| r.get::<_, Option<Vec<String>>>(0))
+        .collect()
 }
 
 /// A collection-scoped load replaces the shared (NULL-scope) row of the same name: the shared row must be
@@ -230,8 +279,14 @@ async fn scopes_for(db: &CloneDb, name: &str) -> Vec<Option<Vec<String>>> {
 async fn load_queryables_scoped_replaces_shared() {
     let db = CloneDb::create().await;
     let pool = pool(&db).await;
-    pool.load_queryables(queryables_doc(), None, false, None).await.unwrap();
-    assert_eq!(scopes_for(&db, "test:string_prop").await, vec![None], "starts shared");
+    pool.load_queryables(queryables_doc(), None, false, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        scopes_for(&db, "test:string_prop").await,
+        vec![None],
+        "starts shared"
+    );
 
     // A scoped queryable requires the collection to exist — the constraint trigger validates collection_ids.
     pool.create_collection(&json!({

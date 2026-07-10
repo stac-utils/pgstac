@@ -50,13 +50,17 @@ store = [
     "tokio/fs",
     "tokio/io-util",
 ]
+# The streaming search-result writer: `stream_search_collection` drives the keyset portal + the shared
+# `stac_io::write_item_collection` to emit one flat-memory ItemCollection. Lightweight (pool + stac-io,
+# no clap/tar/zstd) so rustac's pgstac backend can stream via the SAME code without the whole CLI.
+search-writer = ["pool", "dep:stac-io"]
 # The `pgstac` binary (CLI). Implies `export` + `store` (dump/search) + `pool` (load/restore via the Rust loader).
 cli = [
     "export",
     "pool",
     "store",
+    "search-writer",
     "dep:clap",
-    "dep:stac-io",
     "dep:tar",
     "dep:zstd",
     "tokio/macros",
@@ -123,3 +127,10 @@ required-features = ["cli"]
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+# search-parity branch ONLY: build against the local rustac worktree carrying the
+# streaming ItemCollection writer (stac_io::write_item_collection) and the
+# search-parity trait changes. Do NOT merge this [patch] to a published-crate branch.
+[patch.crates-io]
+stac = { path = "/home/bitner/data/rustac-pgstac-search/crates/core" }
+stac-io = { path = "/home/bitner/data/rustac-pgstac-search/crates/io" }

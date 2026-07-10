@@ -210,6 +210,16 @@ struct SearchArgs {
     /// Cap the total items streamed (NDJSON / geoparquet).
     #[arg(long)]
     max_items: Option<usize>,
+
+    /// URL this search is served at (JSON output). When set, `rel:next`/`rel:prev` hrefs are absolute
+    /// (`<self-href>?token=…`); otherwise relative (`?token=…`).
+    #[arg(long = "self-href")]
+    self_href: Option<String>,
+
+    /// Include the STAC context (`numberMatched`) in JSON output. Off by default (the count is an extra
+    /// query).
+    #[arg(long)]
+    context: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -304,7 +314,8 @@ fn confirm_delete(target: &str, yes: bool) -> Result<bool, Box<dyn std::error::E
     }
     if !std::io::stdin().is_terminal() {
         return Err(
-            "refusing to delete without confirmation: stdin is not a TTY; pass --yes to confirm".into(),
+            "refusing to delete without confirmation: stdin is not a TTY; pass --yes to confirm"
+                .into(),
         );
     }
     eprint!("delete {target}? this cannot be undone [y/N]: ");
@@ -491,8 +502,11 @@ fn make_sink(out: &str) -> Result<Box<dyn std::io::Write>, Box<dyn std::error::E
 /// Search-driven export (0.10 only): stream a search / CQL2 result as NDJSON, a single ItemCollection
 /// page, or stac-geoparquet. Every page is built in Rust from `search_plan` (Rust band-stepping +
 /// keyset minting); the SQL `search()` function is never called.
-async fn run_search(args: SearchArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    use stac::api::{ItemsClient, Search};
+async fn run_search(
+    args: SearchArgs,
+    dsn: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use stac::api::Search;
     use std::io::Write as _;
 
     let pool = PgstacPool::connect(connect_config(dsn.as_deref())).await?;
@@ -538,40 +552,38 @@ async fn run_search(args: SearchArgs, dsn: Option<String>) -> Result<(), Box<dyn
             out.flush()?;
             eprintln!("search: streamed {n} item(s) as NDJSON");
         }
-        Format::Json(_) => {
-            // A single keyset page assembled in Rust via ItemsClient::search (search_plan + Rust
-            // band-stepping): features, next/prev tokens, links, and context all minted client-side.
-            let mut out = make_sink(&args.out)?;
+        Format::Json(pretty) => {
+            let out = make_sink(&args.out)?;
+            // The continuation token rides in the search body.
             if let Some(token) = &args.token {
                 let _ = search
+                    .items
                     .additional_fields
                     .insert("token".into(), serde_json::Value::String(token.clone()));
             }
-            let item_collection = ItemsClient::search(&pool, search).await?;
-            let mut fc = serde_json::to_value(&item_collection)?;
-            // ItemCollection serializes next/prev only into links; also surface them as top-level
-            // fields (as before) so token-paging callers need not re-parse links.
-            if let serde_json::Value::Object(map) = &mut fc {
-                if let Some(t) = item_collection.next.as_ref().and_then(|m| m.get("token")) {
-                    let _ = map.insert("next".into(), t.clone());
-                }
-                if let Some(t) = item_collection.prev.as_ref().and_then(|m| m.get("token")) {
-                    let _ = map.insert("prev".into(), t.clone());
-                }
-            }
-            serde_json::to_writer(&mut out, &fc)?;
-            out.flush()?;
-            let n = item_collection
-                .number_returned
-                .unwrap_or(item_collection.items.len() as u64);
-            eprintln!("search: wrote 1 ItemCollection page ({n} item(s))");
+            use stac_io::StreamSearch as _;
+            let n = pool
+                .write_search(
+                    search,
+                    args.max_items,
+                    args.context,
+                    args.self_href.clone(),
+                    out,
+                    pretty,
+                )
+                .await
+                // Unsize the writer's Send+Sync boxed error to this fn's boxed error.
+                .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+            eprintln!("search: streamed 1 ItemCollection ({n} item(s))");
         }
         Format::Geoparquet(writer_options) => {
             // Flat-memory streaming: items stream from the search portal into row-group batches, so the
             // item working set is one batch (0.10 registry schema), not the whole result.
             let body = serde_json::to_value(&search)?;
             // --format geoparquet[<codec>] carries the compression; --row-group-size stays a flag.
-            let compression = writer_options.compression.unwrap_or_else(default_compression);
+            let compression = writer_options
+                .compression
+                .unwrap_or_else(default_compression);
             let row_group_size = args.row_group_size;
             let n = if args.out == "-" {
                 // The geoparquet writer needs a Send sink and stdout's lock is not Send: encode into a
@@ -688,7 +700,10 @@ async fn run_load(args: LoadArgs, dsn: Option<String>) -> Result<(), Box<dyn std
 /// (per-collection `collection.json` + partition geoparquet) is exactly what
 /// [`run_load`] consumes, so this is `load` over the dump directory with an
 /// upsert policy.
-async fn run_restore(args: RestoreArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_restore(
+    args: RestoreArgs,
+    dsn: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !args.src.is_dir() {
         return Err(format!(
             "restore source must be a dump directory: {} (extract a .tar dump first)",
@@ -743,7 +758,10 @@ async fn run_maintain(
 
 /// Delete an item (with `--item`) or a whole collection (without). Both go through the pool's
 /// SECURITY DEFINER delete functions.
-async fn run_delete(args: DeleteArgs, dsn: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_delete(
+    args: DeleteArgs,
+    dsn: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let target = match &args.item {
         Some(item) => format!("item {}/{}", args.collection, item),
         None => format!("collection {} and all its items", args.collection),
@@ -776,7 +794,12 @@ async fn run_load_queryables(
     let collection_ids = (!args.collections.is_empty()).then_some(args.collections);
     let index_fields = (!args.index_fields.is_empty()).then_some(args.index_fields);
     let n = pool
-        .load_queryables(queryables, collection_ids, args.delete_missing, index_fields)
+        .load_queryables(
+            queryables,
+            collection_ids,
+            args.delete_missing,
+            index_fields,
+        )
         .await?;
     pool.close();
     eprintln!("loaded {n} queryable(s)");

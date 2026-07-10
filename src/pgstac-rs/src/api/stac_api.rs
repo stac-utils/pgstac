@@ -66,7 +66,8 @@ impl StreamItemsClient for PgstacPool {
     ) -> Result<impl Stream<Item = Result<stac::api::Item, Error>> + Send, Error> {
         let search = serde_json::to_value(search)?;
         let items = self.search_items(search, None, None);
-        Ok(items
-            .map(|result| result.and_then(|value| serde_json::from_value(value).map_err(Error::from))))
+        Ok(items.map(|result| {
+            result.and_then(|value| serde_json::from_value(value).map_err(Error::from))
+        }))
     }
 }

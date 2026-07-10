@@ -37,7 +37,7 @@ updates:
           - "*"
 
   - package-ecosystem: "cargo"
-    directory: "/rust"
+    directory: "/src/pgstac-rs"
     schedule:
       interval: "weekly"
       day: "monday"

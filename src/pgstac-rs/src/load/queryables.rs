@@ -64,33 +64,37 @@ pub(crate) async fn load_queryables(
         // Replace any existing row for this name in the target scope (and the shared NULL scope when scoped).
         match collection_ids {
             None => {
-                let _ = tx.execute(
-                    "DELETE FROM queryables WHERE name = $1 AND collection_ids IS NULL",
-                    &[name],
-                )
-                .await?;
+                let _ = tx
+                    .execute(
+                        "DELETE FROM queryables WHERE name = $1 AND collection_ids IS NULL",
+                        &[name],
+                    )
+                    .await?;
             }
             Some(cids) => {
-                let _ = tx.execute(
-                    "DELETE FROM queryables WHERE name = $1 AND collection_ids = $2",
-                    &[name, &cids],
-                )
-                .await?;
-                let _ = tx.execute(
-                    "DELETE FROM queryables WHERE name = $1 AND collection_ids IS NULL",
-                    &[name],
-                )
-                .await?;
+                let _ = tx
+                    .execute(
+                        "DELETE FROM queryables WHERE name = $1 AND collection_ids = $2",
+                        &[name, &cids],
+                    )
+                    .await?;
+                let _ = tx
+                    .execute(
+                        "DELETE FROM queryables WHERE name = $1 AND collection_ids IS NULL",
+                        &[name],
+                    )
+                    .await?;
             }
         }
 
-        let _ = tx.execute(
-            "INSERT INTO queryables \
+        let _ = tx
+            .execute(
+                "INSERT INTO queryables \
              (name, collection_ids, definition, property_wrapper, property_index_type) \
              VALUES ($1, $2, $3, $4, $5)",
-            &[name, &collection_ids, definition, &wrapper, &index_type],
-        )
-        .await?;
+                &[name, &collection_ids, definition, &wrapper, &index_type],
+            )
+            .await?;
         loaded += 1;
     }
 
@@ -98,20 +102,22 @@ pub(crate) async fn load_queryables(
         let core: Vec<&str> = CORE_FIELDS.to_vec();
         match collection_ids {
             None => {
-                let _ = tx.execute(
-                    "DELETE FROM queryables \
+                let _ = tx
+                    .execute(
+                        "DELETE FROM queryables \
                      WHERE collection_ids IS NULL AND name <> ALL($1) AND name <> ALL($2)",
-                    &[&names, &core],
-                )
-                .await?;
+                        &[&names, &core],
+                    )
+                    .await?;
             }
             Some(cids) => {
-                let _ = tx.execute(
-                    "DELETE FROM queryables \
+                let _ = tx
+                    .execute(
+                        "DELETE FROM queryables \
                      WHERE collection_ids = $1 AND name <> ALL($2) AND name <> ALL($3)",
-                    &[&cids, &names, &core],
-                )
-                .await?;
+                        &[&cids, &names, &core],
+                    )
+                    .await?;
             }
         }
     }

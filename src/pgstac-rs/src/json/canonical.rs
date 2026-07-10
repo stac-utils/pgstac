@@ -59,7 +59,11 @@ pub fn jsonb_canonical_hash(value: &Value) -> crate::Result<[u8; 32]> {
 /// A path step is `<US>` then `k<key>` (object member) or `i<index>` (0-based array index); the `k`/`i`
 /// tags keep object key `"0"` distinct from array index 0, and `<US>` keeps nesting distinct from a key
 /// that itself contains a separator character.
-fn collect_leaves(out: &mut Vec<(String, String)>, path: String, value: &Value) -> crate::Result<()> {
+fn collect_leaves(
+    out: &mut Vec<(String, String)>,
+    path: String,
+    value: &Value,
+) -> crate::Result<()> {
     match value {
         Value::Object(map) if !map.is_empty() => {
             for (key, child) in map {
@@ -125,7 +129,9 @@ fn canonical_stac_datetime(s: &str) -> crate::Result<Option<String>> {
     // Rewrite to a strict RFC3339 string (uppercase `T`/`Z`, `±HH:MM` offset, `Z` when the offset is
     // absent), then parse once — the same instant `to_tstz`'s UTC-pinned `::timestamptz` cast produces.
     let parsed = chrono::DateTime::parse_from_rfc3339(&to_rfc3339_utc_assumed(s)).map_err(|e| {
-        crate::Error::Dehydrate(format!("timestamp-shaped item value {s:?} is not a valid instant: {e}"))
+        crate::Error::Dehydrate(format!(
+            "timestamp-shaped item value {s:?} is not a valid instant: {e}"
+        ))
     })?;
     Ok(Some(
         parsed
@@ -340,7 +346,10 @@ mod tests {
 
     #[test]
     fn key_order_and_number_scale_are_irrelevant() {
-        assert_eq!(hash(&json!({"b": 1, "a": {"y": 1, "x": 2}})), hash(&json!({"a": {"x": 2, "y": 1}, "b": 1})));
+        assert_eq!(
+            hash(&json!({"b": 1, "a": {"y": 1, "x": 2}})),
+            hash(&json!({"a": {"x": 2, "y": 1}, "b": 1}))
+        );
         // 1.0 and 1 both canonicalize to float8 "1".
         assert_eq!(hash(&json!({"n": 1.0})), hash(&json!({"n": 1})));
     }
@@ -375,35 +384,62 @@ mod tests {
             "2020-01-01T05:00:00+0500",
             "2020-06-15T12:34:56.789Z",
         ] {
-            assert!(is_datetime_shaped(ok.as_bytes()), "{ok:?} should be datetime-shaped");
+            assert!(
+                is_datetime_shaped(ok.as_bytes()),
+                "{ok:?} should be datetime-shaped"
+            );
         }
         for no in [
-            "2020",                 // bare year (PostgreSQL rejects it too)
-            "2020-01",              // year-month
-            "now",                  // volatile special
-            "today",                // volatile special
-            "epoch",                // special
-            "20200101",             // compact (no dashes)
-            "hello",                // plain string
-            "http://x/2020-01-01",  // not anchored at the start
-            "2020-01-01T00:00",     // time without seconds
-            "2020-01-01Txx:00:00",  // non-numeric time
+            "2020",                  // bare year (PostgreSQL rejects it too)
+            "2020-01",               // year-month
+            "now",                   // volatile special
+            "today",                 // volatile special
+            "epoch",                 // special
+            "20200101",              // compact (no dashes)
+            "hello",                 // plain string
+            "http://x/2020-01-01",   // not anchored at the start
+            "2020-01-01T00:00",      // time without seconds
+            "2020-01-01Txx:00:00",   // non-numeric time
             "2020-01-01T00:00:00+5", // truncated offset
         ] {
-            assert!(!is_datetime_shaped(no.as_bytes()), "{no:?} should not be datetime-shaped");
+            assert!(
+                !is_datetime_shaped(no.as_bytes()),
+                "{no:?} should not be datetime-shaped"
+            );
         }
     }
 
     #[test]
     fn to_rfc3339_normalizes_to_parseable_utc() {
         assert_eq!(to_rfc3339_utc_assumed("2020-01-01"), "2020-01-01T00:00:00Z");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01 12:00:00"), "2020-01-01T12:00:00Z");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01T12:00:00"), "2020-01-01T12:00:00Z");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01t12:00:00z"), "2020-01-01T12:00:00Z");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01T12:00:00Z"), "2020-01-01T12:00:00Z");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01T12:00:00+0500"), "2020-01-01T12:00:00+05:00");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01T12:00:00+05:00"), "2020-01-01T12:00:00+05:00");
-        assert_eq!(to_rfc3339_utc_assumed("2020-01-01T12:00:00.5-05:00"), "2020-01-01T12:00:00.5-05:00");
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01 12:00:00"),
+            "2020-01-01T12:00:00Z"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01T12:00:00"),
+            "2020-01-01T12:00:00Z"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01t12:00:00z"),
+            "2020-01-01T12:00:00Z"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01T12:00:00Z"),
+            "2020-01-01T12:00:00Z"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01T12:00:00+0500"),
+            "2020-01-01T12:00:00+05:00"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01T12:00:00+05:00"),
+            "2020-01-01T12:00:00+05:00"
+        );
+        assert_eq!(
+            to_rfc3339_utc_assumed("2020-01-01T12:00:00.5-05:00"),
+            "2020-01-01T12:00:00.5-05:00"
+        );
     }
 
     #[test]
@@ -411,7 +447,10 @@ mod tests {
         // "now"/"today" must NOT normalize to the current time (non-deterministic); they stay raw strings.
         assert_ne!(hash(&json!({"d": "now"})), hash(&json!({"d": "today"})));
         // a bare year stays raw, distinct from the normalized full date
-        assert_ne!(hash(&json!({"d": "2020"})), hash(&json!({"d": "2020-01-01"})));
+        assert_ne!(
+            hash(&json!({"d": "2020"})),
+            hash(&json!({"d": "2020-01-01"}))
+        );
     }
 
     #[test]
@@ -442,7 +481,10 @@ mod tests {
             "2020-13-45T99:99:99Z", // every field out of range
             "2020-01-01T25:00:00Z", // hour 25
         ] {
-            assert!(jsonb_canonical_hash(&json!({ "d": bad })).is_err(), "{bad:?} should error");
+            assert!(
+                jsonb_canonical_hash(&json!({ "d": bad })).is_err(),
+                "{bad:?} should error"
+            );
         }
         // a non-datetime string is fine (classification, not an error)
         assert!(jsonb_canonical_hash(&json!({"id": "item-2020"})).is_ok());

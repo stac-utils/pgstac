@@ -90,18 +90,20 @@ mod load;
 #[cfg(feature = "python")]
 mod python;
 mod read;
+#[cfg(feature = "search-writer")]
+mod stream_collection;
 
 // The modules above live in api/ db/ json/ load/ python/ read/ subdirectories; they are re-exported at
 // the crate root so existing `pgstac::…` and internal `crate::…` paths are unchanged — public modules
 // stay public, previously-private ones stay crate-internal.
-pub use json::{canonical, geom, rawjson, temporal};
-pub use load::{dehydrate, fragment, ingest};
-#[cfg(feature = "export")]
-pub use load::parquet_decode;
-pub use read::{collections, feature, fields, hydrate, keyset, search, source};
-pub(crate) use load::field_registry;
 #[cfg(feature = "pool")]
 pub(crate) use db::tls;
+pub use json::{canonical, geom, rawjson, temporal};
+pub(crate) use load::field_registry;
+#[cfg(feature = "export")]
+pub use load::parquet_decode;
+pub use load::{dehydrate, fragment, ingest};
+pub use read::{collections, feature, fields, hydrate, keyset, search, source};
 
 pub use db::client::Client;
 pub use db::connect::{ConnectConfig, DEFAULT_APPLICATION_NAME, DEFAULT_SEARCH_PATH};
@@ -699,10 +701,7 @@ pub(crate) mod tests {
             .delete_item(&item.id, Some("collection-id"))
             .await
             .unwrap();
-        assert_eq!(
-            client.item("collection-id", "an-id").await.unwrap(),
-            None,
-        );
+        assert_eq!(client.item("collection-id", "an-id").await.unwrap(), None,);
     }
 
     #[rstest]
@@ -861,10 +860,7 @@ pub(crate) mod tests {
         client.add_item(item.clone()).await.unwrap();
         let mut search = Search::default();
         search.items.bbox = Some(vec![-106., 40., -105., 41.].try_into().unwrap());
-        assert_eq!(
-            client.search(search.clone()).await.unwrap().items.len(),
-            1
-        );
+        assert_eq!(client.search(search.clone()).await.unwrap().items.len(), 1);
         search.items.bbox = Some(vec![-106., 41., -105., 42.].try_into().unwrap());
         assert!(client.search(search).await.unwrap().items.is_empty());
     }
@@ -881,10 +877,7 @@ pub(crate) mod tests {
         client.add_item(item.clone()).await.unwrap();
         let mut search = Search::default();
         search.items.datetime = Some("2023-01-07T00:00:00Z".to_string());
-        assert_eq!(
-            client.search(search.clone()).await.unwrap().items.len(),
-            1
-        );
+        assert_eq!(client.search(search.clone()).await.unwrap().items.len(), 1);
         search.items.datetime = Some("2023-01-08T00:00:00Z".to_string());
         assert!(client.search(search).await.unwrap().items.is_empty());
     }
@@ -958,7 +951,10 @@ pub(crate) mod tests {
             .additional_fields
             .insert("token".to_string(), next.into());
         let page = client.search(search.clone()).await.unwrap();
-        assert_eq!(serde_json::to_value(&page.items[0]).unwrap()["id"], "another-id");
+        assert_eq!(
+            serde_json::to_value(&page.items[0]).unwrap()["id"],
+            "another-id"
+        );
         let prev = token(&page.prev).expect("prev token");
         let _ = search
             .additional_fields

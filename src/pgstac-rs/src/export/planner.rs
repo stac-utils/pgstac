@@ -14,7 +14,6 @@ use crate::export::budget::MemoryBudget;
 use crate::export::format::{
     Format, GeoparquetMode, GeoparquetStreamWriter, compression_label, default_compression,
 };
-use stac::geoparquet::Compression;
 use crate::export::manifest::{
     Checkpoint, CheckpointEntry, CollectionEntry, DatetimeRange, FileEntry, Filter, Manifest,
     Options, PartitionEntry, Source, Tool, sha256_hex,
@@ -26,6 +25,7 @@ use crate::hydrate::HydrationModel;
 use crate::source::{ScanFilter, detect_hydration_model, load_collection_context, scan_partition};
 use crate::{Error, Result};
 use serde_json::Value;
+use stac::geoparquet::Compression;
 use std::collections::BTreeMap;
 use tokio_postgres::GenericClient;
 
@@ -159,7 +159,9 @@ impl DumpPlanner {
             // collection.json
             let coll_json = collection_json(plan);
             let coll_bytes = serde_json::to_vec_pretty(&coll_json)?;
-            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes).await?;
+            let coll_file = sink
+                .put(&format!("{coll_dir}/collection.json"), &coll_bytes)
+                .await?;
 
             let mut partition_entries: Vec<PartitionEntry> = Vec::new();
             let mut coll_item_count: u64 = 0;
@@ -318,7 +320,9 @@ impl DumpPlanner {
             let coll_dir = format!("collections/{}", encode_collection_dir(&plan.id));
             let coll_json = collection_json(plan);
             let coll_bytes = serde_json::to_vec_pretty(&coll_json)?;
-            let coll_file = sink.put(&format!("{coll_dir}/collection.json"), &coll_bytes).await?;
+            let coll_file = sink
+                .put(&format!("{coll_dir}/collection.json"), &coll_bytes)
+                .await?;
             collection_meta.push(CollectionMeta {
                 id: plan.id.clone(),
                 coll_dir: coll_dir.clone(),

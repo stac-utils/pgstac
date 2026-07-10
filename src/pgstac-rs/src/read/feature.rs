@@ -250,7 +250,9 @@ mod tests {
         let value = h.hydrate(make_item(), &CollectionContext::default(), Some(&frag));
 
         let mut buf: Vec<u8> = Vec::new();
-        make_item().write_fragment_feature(Some(&frag), &mut buf).unwrap();
+        make_item()
+            .write_fragment_feature(Some(&frag), &mut buf)
+            .unwrap();
         let byte_value: Value = serde_json::from_slice(&buf).unwrap();
 
         assert_eq!(byte_value, value, "byte path != value path");

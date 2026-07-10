@@ -416,7 +416,10 @@ mod tests {
         // put_from_path streams + hashes.
         let mut tf = tempfile::NamedTempFile::new().unwrap();
         Write::write_all(&mut tf, b"parquet-bytes").unwrap();
-        let w2 = sink.put_from_path("c/items.parquet", tf.path()).await.unwrap();
+        let w2 = sink
+            .put_from_path("c/items.parquet", tf.path())
+            .await
+            .unwrap();
         assert_eq!(w2.bytes, 13);
         assert_eq!(w2.sha256, sha256_hex(b"parquet-bytes"));
         let copied = std::fs::read(dir.path().join("c/items.parquet")).unwrap();

@@ -8,8 +8,6 @@
 
 #[cfg(feature = "export")]
 use crate::export::format::{Format, GeoparquetMode, GeoparquetStreamWriter, encode_all};
-#[cfg(feature = "export")]
-use stac::geoparquet::Compression;
 use crate::hydrate::{CollectionContext, FragmentContext, HydrationModel, Hydrator};
 use crate::search::{band_ranges, fetch_plan};
 use crate::source::{
@@ -19,6 +17,8 @@ use crate::{PgstacPool, Result};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use serde_json::Value;
+#[cfg(feature = "export")]
+use stac::geoparquet::Compression;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_postgres::GenericClient;

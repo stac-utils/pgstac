@@ -17,7 +17,8 @@ fn base() -> String {
 }
 
 fn template() -> String {
-    std::env::var("PGSTAC_RS_INGEST_TEMPLATE").unwrap_or_else(|_| "pgstac_rs_ingest_template".to_string())
+    std::env::var("PGSTAC_RS_INGEST_TEMPLATE")
+        .unwrap_or_else(|_| "pgstac_rs_ingest_template".to_string())
 }
 
 /// A disposable database cloned from the ingest template, dropped on `Drop`.
@@ -38,7 +39,10 @@ impl CloneDb {
             .unwrap();
         let handle = tokio::spawn(connection);
         let _ = client
-            .execute(&format!("CREATE DATABASE {name} TEMPLATE {}", template()), &[])
+            .execute(
+                &format!("CREATE DATABASE {name} TEMPLATE {}", template()),
+                &[],
+            )
             .await
             .unwrap();
         handle.abort();
@@ -94,7 +98,10 @@ async fn pool(db: &CloneDb) -> PgstacPool {
 /// connection handle when done. Raw connections have no `pgstac` search_path, so callers schema-qualify.
 async fn raw(
     db: &CloneDb,
-) -> (tokio_postgres::Client, tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>) {
+) -> (
+    tokio_postgres::Client,
+    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+) {
     let (client, connection) = tokio_postgres::connect(&db.dsn(), NoTls).await.unwrap();
     let handle = tokio::spawn(connection);
     (client, handle)
@@ -104,7 +111,10 @@ async fn raw(
 async fn insert_extension_url(db: &CloneDb, url: &str) {
     let (client, handle) = raw(db).await;
     let _ = client
-        .execute("INSERT INTO pgstac.stac_extensions (url) VALUES ($1)", &[&url])
+        .execute(
+            "INSERT INTO pgstac.stac_extensions (url) VALUES ($1)",
+            &[&url],
+        )
         .await
         .unwrap();
     handle.abort();
@@ -114,7 +124,10 @@ async fn insert_extension_url(db: &CloneDb, url: &str) {
 async fn content_of(db: &CloneDb, url: &str) -> Option<Value> {
     let (client, handle) = raw(db).await;
     let row = client
-        .query_one("SELECT content FROM pgstac.stac_extensions WHERE url = $1", &[&url])
+        .query_one(
+            "SELECT content FROM pgstac.stac_extensions WHERE url = $1",
+            &[&url],
+        )
         .await
         .unwrap();
     let content = row.get::<_, Option<Value>>(0);
@@ -133,7 +146,9 @@ async fn ext_urls_like(db: &CloneDb, pattern: &str) -> Vec<String> {
         .await
         .unwrap();
     handle.abort();
-    rows.into_iter().map(|row| row.get::<_, String>(0)).collect()
+    rows.into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect()
 }
 
 /// A JSON file written under the temp dir, removed on drop.
@@ -187,7 +202,10 @@ async fn collections_extensions_collected_distinct_and_fragment_stripped() {
     .unwrap();
 
     let loaded = pool.load_extensions().await.unwrap();
-    assert_eq!(loaded, 0, "the bare paths do not exist, so no content is populated");
+    assert_eq!(
+        loaded, 0,
+        "the bare paths do not exist, so no content is populated"
+    );
 
     let urls = ext_urls_like(&db, "/pgstac-rs-ext-test/%").await;
     assert_eq!(
@@ -215,8 +233,14 @@ async fn local_file_populates_content() {
 
     let loaded = pool.load_extensions().await.unwrap();
     assert_eq!(loaded, 2, "both local extensions were fetched and stored");
-    assert_eq!(content_of(&db, &bare.path_str()).await, Some(json!({"title": "bare-ext"})));
-    assert_eq!(content_of(&db, &file_url).await, Some(json!({"title": "file-url-ext"})));
+    assert_eq!(
+        content_of(&db, &bare.path_str()).await,
+        Some(json!({"title": "bare-ext"}))
+    );
+    assert_eq!(
+        content_of(&db, &file_url).await,
+        Some(json!({"title": "file-url-ext"}))
+    );
 }
 
 /// The skip-with-warning path: an unreachable URL is skipped (its content stays NULL) and the command
@@ -233,7 +257,10 @@ async fn bad_url_is_skipped_and_good_still_loads() {
 
     let loaded = pool.load_extensions().await.unwrap();
     assert_eq!(loaded, 1, "only the reachable extension is populated");
-    assert_eq!(content_of(&db, &good.path_str()).await, Some(json!({"title": "good-ext"})));
+    assert_eq!(
+        content_of(&db, &good.path_str()).await,
+        Some(json!({"title": "good-ext"}))
+    );
     assert_eq!(
         content_of(&db, missing).await,
         None,

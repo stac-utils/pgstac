@@ -3949,8 +3949,6 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stac"
 version = "0.17.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79e4b3d417e58a0eeae1022484652d91bb92b8a8e69daabae126452397f15622"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -3985,8 +3983,6 @@ dependencies = [
 [[package]]
 name = "stac-derive"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "087057f442c3a980721f249f723db459460ce74221730c9b2115bd63957027ae"
 dependencies = [
  "quote",
  "syn",
@@ -3995,8 +3991,6 @@ dependencies = [
 [[package]]
 name = "stac-io"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9962a05ecbefe29748d9213baf932d054fad0c07952faf2258e451364c39f42"
 dependencies = [
  "async-stream",
  "bytes",
