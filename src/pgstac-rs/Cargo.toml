@@ -128,9 +128,9 @@ required-features = ["cli"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
-# search-parity branch ONLY: build against the local rustac worktree carrying the
+# search-parity branch ONLY: build against the rustac branch carrying the
 # streaming ItemCollection writer (stac_io::write_item_collection) and the
 # search-parity trait changes. Do NOT merge this [patch] to a published-crate branch.
 [patch.crates-io]
-stac = { path = "/home/bitner/data/rustac-pgstac-search/crates/core" }
-stac-io = { path = "/home/bitner/data/rustac-pgstac-search/crates/io" }
+stac = { git = "https://github.com/stac-utils/rustac.git", branch = "pgstac-search-parity" }
+stac-io = { git = "https://github.com/stac-utils/rustac.git", branch = "pgstac-search-parity" }

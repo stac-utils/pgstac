@@ -3949,6 +3949,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stac"
 version = "0.17.2"
+source = "git+https://github.com/stac-utils/rustac.git?branch=pgstac-search-parity#9f0e572a5ec19ff15388b26a7c9dae05dd338a29"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -3983,6 +3984,7 @@ dependencies = [
 [[package]]
 name = "stac-derive"
 version = "0.3.0"
+source = "git+https://github.com/stac-utils/rustac.git?branch=pgstac-search-parity#9f0e572a5ec19ff15388b26a7c9dae05dd338a29"
 dependencies = [
  "quote",
  "syn",
@@ -3991,6 +3993,7 @@ dependencies = [
 [[package]]
 name = "stac-io"
 version = "0.3.0"
+source = "git+https://github.com/stac-utils/rustac.git?branch=pgstac-search-parity#9f0e572a5ec19ff15388b26a7c9dae05dd338a29"
 dependencies = [
  "async-stream",
  "bytes",
