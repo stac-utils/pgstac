@@ -15,11 +15,11 @@ pgstac-migrate = "pgstac_migrate.cli:main"
 
 [dependency-groups]
 dev = [
-    "ruff==0.15.14",
-    "ty==0.0.39",
+    "ruff==0.15.22",
+    "ty==0.0.61",
 ]
 test = [
-    "pytest>=8.3,<9.1",
+    "pytest>=8.3,<9.2",
 ]
 
 [build-system]
