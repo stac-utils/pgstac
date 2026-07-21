@@ -13,9 +13,34 @@ dependencies = [
 [project.scripts]
 pgstac-migrate = "pgstac_migrate.cli:main"
 
+[dependency-groups]
+dev = [
+    "ruff==0.15.14",
+    "ty==0.0.39",
+]
+test = [
+    "pytest>=8.3,<9.1",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pgstac_migrate"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint.isort]
+known-first-party = ["pgstac_migrate"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src/pgstac_migrate", "tests"]
+
+[tool.pytest.ini_options]
+addopts = "-vv"

@@ -40,10 +40,16 @@ SELECT lives_ok(
 );
 
 RESET pgstac.context;
-SELECT is_definer('update_partition_stats');
-SELECT is_definer('partition_after_triggerfunc');
-SELECT is_definer('drop_table_constraints');
-SELECT is_definer('create_table_constraints');
+SELECT is_definer('widen_partition_stats');
+SELECT is_definer('tighten_partition_stats');
+SELECT is_definer('ensure_fragments');
+SELECT is_definer('make_binary_staging');
+SELECT is_definer('flush_items_staging_binary');
+SELECT is_definer('delete_item');
+SELECT is_definer('items_staging_triggerfunc');
+SELECT is_definer('update_field_registry_from_sample');
+SELECT is_definer('refresh_field_registry');
+SELECT is_definer('gc_fragments');
 SELECT is_definer('check_partition');
 SELECT is_definer('repartition');
 SELECT is_definer('where_stats');

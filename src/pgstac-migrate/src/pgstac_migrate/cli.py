@@ -18,6 +18,7 @@ from pgpkg.planner import MigrationPlan, plan
 from pgpkg.versioning import default_target
 
 from pgstac_migrate.api import artifact_path as resolved_artifact_path
+from pgstac_migrate.api import current_version
 from pgstac_migrate.api import migrate as migrate_database
 from pgstac_migrate.build import build_local_artifact
 
@@ -90,6 +91,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_migrate.add_argument("--dry-run", action="store_true")
 
+    p_current = sub.add_parser(
+        "current",
+        help="Print the PgSTAC version installed in a live DB",
+        add_help=False,
+    )
+    p_current.add_argument("--help", action="help", help="Show help and exit")
+    _add_db_args(p_current)
+
     sub.add_parser("info", help="Print baked artifact info")
     sub.add_parser("versions", help="List baked migration versions")
     sub.add_parser("build-artifact", help="Bake the local PgSTAC migration artifact")
@@ -125,6 +134,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"final version: {result.final_version}")
             if args.dry_run:
                 print("(dry-run: rolled back)")
+            return 0
+
+        if args.cmd == "current":
+            password = _resolve_password(args)
+            version = current_version(
+                conninfo=args.dsn,
+                host=args.host,
+                port=args.port,
+                dbname=args.dbname,
+                user=args.user,
+                password=password,
+            )
+            print(version if version is not None else "(not installed)")
             return 0
 
         artifact, catalog = _load_artifact_and_catalog()

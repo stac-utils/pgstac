@@ -8,7 +8,8 @@ BASEDIR=$SRCDIR
 PGSTACDIR=$BASEDIR/pgstac
 PGPKGDIR=${PGPKG_REPO_DIR:-}
 SQLDIR=$BASEDIR/pgstac/sql
-PYPGSTACDIR=$BASEDIR/pypgstac
+MIGRATEDIR=$BASEDIR/pgstac-migrate
+RSDIR=$BASEDIR/pgstac-rs
 MIGRATIONSDIR=$BASEDIR/pgstac/migrations
 
 function run_pgpkg() {
@@ -28,8 +29,8 @@ function usage() {
         cat <<EOF
 Usage: $(basename "$0") [version]
 
-Create a new base migration, update pypgstac version metadata, and generate the
-incremental migration via makemigration.
+Create a new base migration, update pgstac-migrate/pgstac-rs version metadata, and
+generate the incremental migration via makemigration.
 
 Important workflow note:
         This command regenerates *unreleased* migrations each time it runs.
@@ -92,13 +93,16 @@ cd $PGSTACDIR
 
 # Update the version number in the appropriate places
 [[ $VERSION == 'unreleased' ]] && PYVERSION="${OLDVERSION}-dev" || PYVERSION="$VERSION"
-echo "Setting pypgstac version to $PYVERSION"
-cat <<EOD > $PYPGSTACDIR/src/pypgstac/version.py
-"""Version."""
+echo "Setting pgstac-migrate version to $PYVERSION"
+cat <<EOD > $MIGRATEDIR/src/pgstac_migrate/__init__.py
+"""PgSTAC migration wrapper."""
 
 __version__ = "${PYVERSION}"
 EOD
-sed -i "s/^version[ ]*=[ ]*.*$/version = \"${PYVERSION}\"/" $PYPGSTACDIR/pyproject.toml
+sed -i "s/^version[ ]*=[ ]*.*$/version = \"${PYVERSION}\"/" $MIGRATEDIR/pyproject.toml
+
+echo "Setting pgstac-rs crate version to $PYVERSION"
+sed -i "s/^version[ ]*=[ ]*.*$/version = \"${PYVERSION}\"/" $RSDIR/Cargo.toml
 
 makemigration -f $OLDVERSION -t $VERSION
 

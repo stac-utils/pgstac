@@ -1,10 +1,10 @@
 """Cross-surface migration plan parity tests.
 
-Asserts that the pgstac-migrate artifact catalog and the pypgstac MigrationPath
-compatibility helper produce *identical* ordered file sequences for every
-(source, target) pair in the parity matrix.
+Asserts that the pgstac-migrate artifact catalog and the
+``pgstac_migrate.compat.MigrationPath`` compatibility helper produce *identical*
+ordered file sequences for every (source, target) pair in the parity matrix.
 
-This is the canonical regression test for "both tools would apply exactly the
+This is the canonical regression test for "both surfaces would apply exactly the
 same SQL in exactly the same order".
 """
 
@@ -65,7 +65,7 @@ def test_plan_parity_across_surfaces(
     source: str | None,
     target: str,
 ) -> None:
-    """pgstac-migrate catalog plan == pypgstac MigrationPath for every test case."""
+    """pgstac-migrate catalog plan == compat MigrationPath for every test case."""
     pgpkg_planner = import_module("pgpkg.planner")
     compat = import_module("pgstac_migrate.compat")
 
@@ -79,7 +79,7 @@ def test_plan_parity_across_surfaces(
         pgpkg_files.append(migration_plan.bootstrap_base.name)
     pgpkg_files.extend(step.file.name for step in migration_plan.steps)
 
-    # ---- pypgstac MigrationPath compat path ----------------------------------
+    # ---- pgstac_migrate.compat MigrationPath path ----------------------------
     compat_source = "init" if source is None else source
     compat_files = compat.MigrationPath(
         migrations_dir, compat_source, target
@@ -87,6 +87,6 @@ def test_plan_parity_across_surfaces(
 
     assert pgpkg_files == compat_files, (
         f"Plan mismatch for {source!r} → {target!r}:\n"
-        f"  pgstac-migrate catalog: {pgpkg_files}\n"
-        f"  pypgstac MigrationPath: {compat_files}"
+        f"  pgstac-migrate catalog:      {pgpkg_files}\n"
+        f"  compat MigrationPath helper: {compat_files}"
     )

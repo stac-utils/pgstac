@@ -23,7 +23,7 @@ class PgstacVersionSource:
     def read_live_version(
         self,
         conn: psycopg.Connection,
-        config: ProjectConfig,
+        config: ProjectConfig | None,
     ) -> str | None:
         del config
         with conn.cursor() as cur:

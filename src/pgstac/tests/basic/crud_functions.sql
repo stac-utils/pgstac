@@ -2,8 +2,9 @@
 SET ROLE pgstac_ingest;
 SET pgstac.use_queue=FALSE;
 SELECT get_setting_bool('use_queue');
-SET pgstac.update_collection_extent=TRUE;
-SELECT get_setting_bool('update_collection_extent');
+-- NOTE: collection extent is no longer auto-updated on ingest. It is refreshed EXPLICITLY via
+-- update_collection_extents() (exercised at the end of this test), so the inline checks below show an
+-- unset extent right after ingest.
 --create base data to use with tests
 CREATE TEMP TABLE test_items AS
 SELECT jsonb_build_object(
@@ -20,14 +21,14 @@ INSERT INTO collections (content, partition_trunc) VALUES ('{"id":"pgstactest-cr
 SELECT create_item((SELECT content FROM test_items LIMIT 1));
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
 
--- Check to see if extent got updated
+-- Extent is NOT auto-updated on ingest (now explicit/async) -- expect it unset here
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- Update item with new datetime that is in a different partition
 SELECT update_item((SELECT content || '{"properties":{"datetime":"2023-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
 
--- Check to see if extent got updated
+-- Extent is NOT auto-updated on ingest (now explicit/async) -- expect it unset here
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- Update item with new datetime that is in a different partition
@@ -43,7 +44,9 @@ aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT create_items(items) FROM aggregated;
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
 
-DELETE FROM items WHERE collection='pgstactest-crudtest';
+-- clear the collection via delete_item (direct DELETE on items is blocked by the privilege wall)
+WITH ids AS MATERIALIZED (SELECT id FROM items WHERE collection='pgstactest-crudtest')
+SELECT count(*) AS cleared FROM (SELECT delete_item(id, 'pgstactest-crudtest') FROM ids) d;
 
 -- upsert items that do not exist yet
 WITH c AS (SELECT content FROM test_items LIMIT 2),
@@ -57,11 +60,10 @@ aggregated AS (SELECT jsonb_agg(content) as items FROM c)
 SELECT upsert_items(items) FROM aggregated;
 SELECT id, geometry, collection, datetime, end_datetime, properties, extra FROM items WHERE collection='pgstactest-crudtest' ORDER BY id;
 
--- turn off update_collection_extent then add an item and verify that the extent did not get updated automatically
-SET pgstac.update_collection_extent=FALSE;
-SELECT get_setting_bool('update_collection_extent');
-SELECT update_item((SELECT content || '{"properties":{"datetime":"2024-01-01 00:00:00Z"}}'::jsonb  FROM test_items LIMIT 1));
-
+-- Collection extent is refreshed EXPLICITLY (maintenance), not automatically on ingest. Tighten the
+-- partitions to exact stats, then refresh the stored extent, and verify it is now populated.
+SELECT tighten_partition_stats(partition) FROM partitions_view WHERE collection='pgstactest-crudtest';
+SELECT update_collection_extents();
 SELECT content->'extent' FROM collections WHERE id='pgstactest-crudtest';
 
 -- check formatting of temporal extent

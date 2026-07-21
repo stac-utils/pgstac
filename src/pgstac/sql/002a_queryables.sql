@@ -446,10 +446,13 @@ $$ LANGUAGE SQL;
 CREATE OR REPLACE FUNCTION queryables_trigger_func() RETURNS TRIGGER AS $$
 DECLARE
 BEGIN
-    PERFORM maintain_partitions();
+    -- Queryable definitions changed, so every partition's queryable indexes may be stale. Flag them and let
+    -- the async sweep (build_pending_indexes) (re)build off the hot path, instead of rebuilding every
+    -- partition synchronously inside this trigger.
+    UPDATE pgstac.partition_stats SET indexes_pending = true;
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 CREATE TRIGGER queryables_trigger AFTER INSERT OR UPDATE ON queryables
 FOR EACH STATEMENT EXECUTE PROCEDURE queryables_trigger_func();

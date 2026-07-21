@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-PgSTAC is a PostgreSQL extension (SQL functions + schema) for Spatio-Temporal Asset Catalogs (STAC), paired with pypgstac, a Python package for database migrations and bulk data ingestion.
+PgSTAC is a PostgreSQL extension (SQL functions + schema) for Spatio-Temporal Asset Catalogs (STAC), paired with `pgstac-migrate` for database migrations and the `pgstac` Rust CLI plus the `pypgstac-rs` Python extension for bulk data ingestion and reads.
 
 - **Repository**: stac-utils/pgstac
 - **License**: MIT
@@ -16,11 +16,10 @@ src/pgstac/sql/          ← ALL SQL source files (edit ONLY here)
 src/pgstac/pgstac.sql    ← Assembled output (DO NOT edit directly)
 src/pgstac/migrations/   ← Base + incremental migration files
 src/pgstac/tests/        ← PGTap and basic SQL tests
-src/pgstac-migrate/      ← Standalone pgstac-migrate wrapper package + baked artifact
-src/pypgstac/src/pypgstac/ ← Python package source
-src/pypgstac/tests/        ← pytest tests
+src/pgstac-migrate/      ← Migration package (pgstac-migrate CLI + baked artifact)
+src/pgstac-rs/           ← Rust crate: pgstac CLI + pgstac Python extension + tests
 scripts/                 ← Host-facing entrypoint scripts
-scripts/container-scripts/ ← Scripts copied into the pypgstac container image
+scripts/container-scripts/ ← Scripts copied into the dev container image
 ```
 
 ### Documentation Files
@@ -83,7 +82,8 @@ scripts/server         # Start database (use --detach for background)
 
 ```bash
 scripts/test                    # All test suites
-scripts/test --pypgstac         # pytest only
+scripts/test --pymigrate        # pgstac-migrate pytest
+scripts/test --rust             # Rust ingest/loader/search tests
 scripts/test --pgtap            # PGTap SQL tests
 scripts/test --basicsql         # SQL output comparison tests
 scripts/test --migrations       # Full migration chain test
@@ -96,7 +96,7 @@ All tests run inside Docker via `scripts/runinpypgstac`. Use `--build` to rebuil
 ### Docker Architecture
 
 - **pgstac** container: PostgreSQL 17 + PostGIS 3 + extensions, port 5439→5432
-- **pypgstac** container: Python + Rust build tools, runs scripts
+- **pypgstac** container: Rust toolchain + `pgstac-migrate` (Python), runs scripts (no legacy Python package)
 - `scripts/runinpypgstac` uses the published-package path by default; set `PGPKG_LOCAL_REPO_DIR` to mount a local `pgpkg` checkout at `/pgpkg` and export `PGPKG_REPO_DIR` when `stageversion` or `makemigration` should run against a local checkout
 - When no local checkout is mounted, the in-container `stageversion` / `makemigration` helpers resolve `pgpkg>=0.1.1,<0.2` from PyPI with `uv run --no-project --with ...`
 - Credentials: `username` / `password`, database: `postgis`
@@ -114,7 +114,7 @@ This runs inside Docker and:
 2. Writes `SELECT set_version('0.9.11');` to `999_version.sql`
 3. Runs `pgpkg stageversion` against `src/pgstac/pyproject.toml` → `migrations/pgstac--0.9.11.sql`
 4. Uses `--also-write` to keep `pgstac.sql` synchronized with the latest base migration
-5. Updates `version.py` and `pyproject.toml` version strings
+5. Updates the `pgstac-migrate` version-of-record (`src/pgstac-migrate/src/pgstac_migrate/__init__.py` and its `pyproject.toml`) plus the `pgstac-rs` `Cargo.toml` version string
 6. Runs `makemigration -f 0.9.10 -t 0.9.11` to generate the wrapped incremental migration via `pgpkg`
 
 ### How makemigration Works
@@ -137,17 +137,18 @@ This runs inside Docker and:
 ### Running Migrations
 
 ```bash
-pypgstac migrate                    # Backwards-compatible wrapper over pgstac-migrate
-pypgstac migrate --toversion 0.9.10 # Backwards-compatible wrapper over pgstac-migrate
+pgstac-migrate migrate              # Apply all pending migrations
+pgstac-migrate migrate --to 0.9.10  # Migrate to a specific version
+pgstac-migrate current              # Print the DB-installed version
 uv run --directory src/pgstac-migrate pgstac-migrate build-artifact
 uv run --directory src/pgstac-migrate pgstac-migrate info
 uv run --directory src/pgstac-migrate pgstac-migrate versions
 ```
 
-`pgstac-migrate` owns runtime migration planning and apply logic. `pypgstac migrate` delegates to the same Python API for backwards compatibility and does not execute source-tree SQL files directly.
+`pgstac-migrate` owns runtime migration planning and apply logic and does not execute source-tree SQL files directly.
 The source-tree `pgstac-migrate` package prefers the baked artifact at `src/pgstac-migrate/src/pgstac_migrate/migrations.tar.zst` and rebuilds it from the source tree when that file is missing.
 `src/pgstac-migrate/pyproject.toml` resolves `pgpkg>=0.1.1,<0.2` from PyPI. The standalone `src/pgstac-migrate/scripts/build_artifact.py` helper does not use that lockfile; it carries its own inline `pgpkg>=0.1.1,<0.2` dependency.
-`src/pypgstac/pyproject.toml` keeps a local `[tool.uv.sources]` override to the sibling `../pgstac-migrate` project so `uv run --directory src/pypgstac ...` resolves the wrapper stack from the source tree, while `pgpkg` resolves from PyPI. In the Docker-backed dev flow, `scripts/runinpypgstac` can mount a local pgpkg checkout at `/pgpkg` and export `PGPKG_REPO_DIR` for container-script testing.
+In the Docker-backed dev flow, `scripts/runinpypgstac` can mount a local pgpkg checkout at `/pgpkg` and export `PGPKG_REPO_DIR` for container-script testing.
 
 ## Testing Details
 
@@ -156,29 +157,29 @@ The source-tree `pgstac-migrate` package prefers the baked artifact at `src/pgst
 Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test suite:
 - `pgstac_test_pgtap` – PGTap tests
 - `pgstac_test_basicsql` – basic SQL tests
-- `pgstac_test_pypgstac` – pytest (function-scoped fixture creates fresh DB per test)
+
+The `pgstac-migrate` Python tests need no database (mocked DB + baked artifact); the Rust suites clone their own templates from `pgstac_test_db_template`.
 
 ### Test Types
 
 1. **PGTap**: SQL assertions in `src/pgstac/tests/pgtap.sql`
 2. **Basic SQL**: `.sql` files in `src/pgstac/tests/basic/`, output compared to `.sql.out`
-3. **Pytest**: `src/pypgstac/tests/test_load.py`, `test_benchmark.py`, `test_queryables.py`, `hydration/`
+3. **Pytest**: `src/pgstac-migrate/tests/` (migration package unit tests). Ingest, loader, and search coverage lives in the Rust suites under `src/pgstac-rs/tests/` (run via `scripts/test --rust`).
 4. **Migration**: Installs v0.3.0, migrates to latest, runs all test suites against migrated DB
 5. **pg_dump**: Dumps a database with sample data, restores via `pgstac_restore`, verifies counts match
 
-### Pytest Fixtures (conftest.py)
+### Test Harness
 
-- `db` – function-scoped `PgstacDB` connected to fresh test DB
-- `loader` – `Loader(db)` instance
+`pgstac-migrate` pytest tests are self-contained — they use a mocked database plus the baked migration artifact, so they need no live PostgreSQL. The Rust suites under `src/pgstac-rs/tests/` clone their own database templates and cover ingest, loader, and search.
 
 ## PR Checklist
 
-1. Changes only in `src/pgstac/sql/` for SQL, `src/pypgstac/` for Python
+1. Changes only in `src/pgstac/sql/` for SQL, `src/pgstac-migrate/` for Python
 2. Tests added if appropriate
 3. `CHANGELOG.md` updated under `## [UNRELEASED]`
 4. `docs/src/release-notes.md` updated to match `CHANGELOG.md` (they must stay identical)
 5. Docs updated if needed
-6. All tests pass: `scripts/test` (or `scripts/runinpypgstac --build test --pypgstac`)
+6. All tests pass: `scripts/test` (or `scripts/runinpypgstac --build test --pymigrate`)
 
 ## Release Checklist
 
@@ -190,7 +191,7 @@ Tests create `pgstac_test_db_template` from `pgstac.sql`, then clone it per test
 6. Copy updated `CHANGELOG.md` to `docs/src/release-notes.md` (keep identical)
 7. Create PR, merge
 8. `git tag vVERSION && git push origin vVERSION`
-9. CI publishes `pypgstac` and `pgstac-migrate` to PyPI plus the ghcr.io images (requires trusted publishers for both PyPI projects on `.github/workflows/release.yml` with the `pypi` environment)
+9. CI publishes `pgstac-migrate` and `pypgstac-rs` to PyPI (and the `pgstac` crate to crates.io) plus the ghcr.io images (requires trusted publishers for both PyPI projects on `.github/workflows/release.yml` with the `pypi` environment)
 
 ## Common Patterns
 

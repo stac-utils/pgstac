@@ -4,9 +4,9 @@ cd $SCRIPT_DIR/..
 
 function usage() {
 	cat <<EOF
-Usage: $(basename "$0") [options] [pypgstac migrate args...]
+Usage: $(basename "$0") [options] [pgstac-migrate migrate args...]
 
-Run pypgstac migrations inside the development container.
+Run pgstac-migrate migrations inside the development container.
 
 Options:
   --build-policy POLICY   One of: always, missing, never. Default: always.
@@ -34,4 +34,5 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" pypgstac migrate "${POSITIONAL[@]}"
+$SCRIPT_DIR/runinpypgstac --build-policy "$BUILD_POLICY" \
+	uv run --directory /opt/src/pgstac-migrate pgstac-migrate migrate "${POSITIONAL[@]}"

@@ -79,63 +79,51 @@ CREATE OR REPLACE FUNCTION explode_dotpaths_recurse(IN j jsonb) RETURNS SETOF te
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
--- jsonb_canonical: RFC 8785 (JSON Canonicalization Scheme)-aligned serialization.
--- Produces a deterministic, key-order-independent text encoding that an external
--- client can reproduce byte-for-byte. NOTE: do NOT use `jsonb::text` for hashing —
--- PostgreSQL re-normalizes object key order to length-then-bytewise and inserts
--- ": " / ", " separators, so `jsonb::text` is neither alphabetical nor compact.
+-- jsonb_canonical_hash: a deterministic 32-byte SHA-256 identity digest of a JSONB document, reproducible
+-- outside PostgreSQL (pgstac-rs `canonical::jsonb_canonical_hash` produces identical bytes).
 --
--- Canonical rules (must match the external recipe below):
---   * object keys sorted by Unicode code point (== UTF-8 byte order, COLLATE "C"),
---   * compact separators: ',' between members, ':' between key and value,
---   * strings: standard JSON escaping, NON-ASCII left as UTF-8 (no \uXXXX),
---   * numbers: IEEE-754 double, shortest round-trip form (Ryu) — matches
---     PostgreSQL float8 output and ECMAScript Number::toString for in-range
---     values. (STAC numbers are physical quantities; integers beyond 2^53 are
---     out of contract, as in RFC 8785.)
---   * true / false / null as literals.
---
--- External equivalents:
---   Python: an RFC 8785 canonicalizer, or the rule-for-rule reference:
---     def canon(v):
---       if isinstance(v, bool): return 'true' if v else 'false'
---       if v is None: return 'null'
---       if isinstance(v, dict):
---         return '{'+','.join(json.dumps(k,ensure_ascii=False)+':'+canon(v[k])
---                             for k in sorted(v))+'}'
---       if isinstance(v, list): return '['+','.join(canon(x) for x in v)+']'
---       if isinstance(v,(int,float)):
---         f=float(v); return str(int(f)) if f==int(f) and abs(f)<1e16 else repr(f)
---       return json.dumps(v, ensure_ascii=False)
---   Rust: the `rfc8785` crate (serde_jcs) over serde_json::Value.
-CREATE OR REPLACE FUNCTION jsonb_canonical(j jsonb) RETURNS text AS $$
-    SELECT CASE jsonb_typeof(j)
-        WHEN 'object' THEN COALESCE((
-            SELECT '{' || string_agg(
-                to_json(kv.key)::text || ':' || jsonb_canonical(kv.value),
-                ',' ORDER BY kv.key COLLATE "C"
-            ) || '}'
-            FROM jsonb_each(j) kv
-        ), '{}')
-        WHEN 'array' THEN COALESCE((
-            SELECT '[' || string_agg(jsonb_canonical(e.value), ',' ORDER BY e.ord) || ']'
-            FROM jsonb_array_elements(j) WITH ORDINALITY e(value, ord)
-        ), '[]')
-        WHEN 'number' THEN (j #>> '{}')::float8::text
-        ELSE j::text  -- string (JSON-escaped, UTF-8 preserved), 'true' / 'false' / 'null'
-    END;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
-
--- jsonb_hash: raw 32-byte sha256 of the canonical (RFC 8785-aligned) JSON form.
--- Returns bytea so callers store the compact binary digest directly (32 B vs
--- 64-char hex). Use encode(jsonb_hash(j), 'hex') when a printable string is
--- needed for display or external comparison.
--- Externally reproducible: sha256(utf8_bytes(jsonb_canonical(j))).
--- The private jsonb column on items/collections is intentionally excluded — it
--- stores operator metadata outside the STAC item identity contract.
-CREATE OR REPLACE FUNCTION jsonb_hash(j jsonb) RETURNS bytea AS $$
-    SELECT sha256(convert_to(jsonb_canonical(j), 'UTF8'));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+-- The document is flattened to leaf (path, value) rows, each rendered as `path <FS> value`, sorted by path
+-- (byte order), joined by <RS>, and hashed. Separators are C0 control chars US/RS/FS (0x1F/0x1E/0x1D),
+-- which do not occur in STAC JSON keys or strings.
+--   * path    — per step, <US> then 'k'||key (object) or 'i'||idx (0-based array). The 'k'/'i' tags keep an
+--               object key "0" distinct from array index 0; <US> keeps nesting distinct from a key with '/'.
+--   * number  — 'n' || (v)::float8::text, so the digest matches a value stored in a float8 (promoted) column
+--               and read back.
+--   * string  — datetime-shaped (YYYY-MM-DD, optional T/space time, optional offset): 't' || the instant
+--               normalized to UTC / 6-digit microseconds / 'Z'. Offset-less is assumed UTC (the SET TIMEZONE
+--               below pins the cast), matching pgstac's to_tstz ingest; the cast raises on a shaped-but-
+--               invalid timestamp. Other strings: 's' || the raw string.
+--   * boolean — 'b'||'true'/'false';  null — 'z';  empty {} — 'e', empty [] — 'a'.
+CREATE OR REPLACE FUNCTION jsonb_canonical_hash(j jsonb) RETURNS bytea AS $$
+    WITH RECURSIVE t(path, value) AS (
+        SELECT ''::text, j
+      UNION ALL
+        SELECT t.path || E'\x1F' || e.seg, e.value
+        FROM t CROSS JOIN LATERAL (
+            SELECT 'k' || key AS seg, value
+                FROM jsonb_each(t.value) WHERE jsonb_typeof(t.value) = 'object'
+            UNION ALL
+            SELECT 'i' || (ord - 1)::text AS seg, value
+                FROM jsonb_array_elements(t.value) WITH ORDINALITY x(value, ord)
+                WHERE jsonb_typeof(t.value) = 'array'
+        ) e
+    )
+    SELECT sha256(convert_to(COALESCE(string_agg(
+        t.path || E'\x1E' || CASE jsonb_typeof(t.value)
+            WHEN 'number'  THEN 'n' || (t.value #>> '{}')::float8::text
+            WHEN 'boolean' THEN 'b' || (t.value #>> '{}')
+            WHEN 'null'    THEN 'z'
+            WHEN 'string'  THEN CASE
+                WHEN (t.value #>> '{}') ~ '^\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?)?$'
+                THEN 't' || to_char((t.value #>> '{}')::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'
+                ELSE 's' || (t.value #>> '{}') END
+            WHEN 'object'  THEN 'e'
+            WHEN 'array'   THEN 'a'
+            ELSE 'c' END,
+        E'\x1D' ORDER BY t.path COLLATE "C"), ''), 'UTF8'))
+    FROM t
+    WHERE jsonb_typeof(t.value) NOT IN ('object', 'array') OR t.value = '{}'::jsonb OR t.value = '[]'::jsonb;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT SET TIMEZONE = 'UTC';
 
 -- jsonb_field_rows: Recursively walk a JSONB document and emit one row per field path.
 -- max_depth guards against runaway recursion on pathologically nested documents.

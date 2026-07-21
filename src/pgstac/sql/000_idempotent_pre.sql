@@ -39,6 +39,7 @@ DO $$
 $$;
 
 
+
 GRANT pgstac_admin TO current_user;
 
 -- Function to make sure pgstac_admin is the owner of items
@@ -190,6 +191,11 @@ RETURNS timestamptz AS $$
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+-- Drop objects superseded by the current partition_stats model.
+DROP MATERIALIZED VIEW IF EXISTS partitions CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS partition_steps;
+DROP VIEW IF EXISTS partition_steps;
+
 -- Drop function signatures whose argument lists changed (CREATE OR REPLACE cannot alter them)
 DROP FUNCTION IF EXISTS chunker(pred_envelope);
 DROP FUNCTION IF EXISTS search_bands(pred_envelope, boolean, integer, integer);
@@ -209,6 +215,7 @@ DROP FUNCTION IF EXISTS xyzsearch(integer, integer, integer, text, jsonb, intege
 DROP FUNCTION IF EXISTS search(jsonb);
 DROP FUNCTION IF EXISTS search_page(jsonb, integer, text, boolean);
 DROP FUNCTION IF EXISTS search_plan(jsonb, text);
+DROP FUNCTION IF EXISTS fields_to_itemcols(jsonb);
 DROP FUNCTION IF EXISTS search_query(jsonb, boolean, jsonb);
 DROP FUNCTION IF EXISTS where_stats(text, text, boolean, jsonb);
 DROP FUNCTION IF EXISTS keyset_sortkeys(jsonb);

@@ -125,7 +125,7 @@ If two or more collections in your catalog share a property name, but have diffe
 
 There is a utility SQL function that can be used to help populate the `queryables` table by looking at a sample of data for each collection. This utility can also look to the json schema for STAC extensions defined in the `stac_extensions` table.
 
-The `stac_extensions` table contains a `url` field and a `content` field for each extension that should be introspected to compare for fields. This can either be filled in manually or by using the `pypgstac loadextensions` command included with pypgstac. This command will look at the `stac_extensions` attribute in all collections to populate the `stac_extensions` table, fetching the json content of each extension. If any urls were added manually to the stac_extensions table, it will also populate any records where the content is NULL.
+The `stac_extensions` table contains a `url` field and a `content` field for each extension that should be introspected to compare for fields. This can either be filled in manually or by using the `pgstac load-extensions` command (the Rust CLI built from `src/pgstac-rs`). This command will look at the `stac_extensions` attribute in all collections to populate the `stac_extensions` table, fetching the json content of each extension (http(s) URLs and local paths). If any urls were added manually to the stac_extensions table, it will also populate any records where the content is NULL.
 
 Once the `stac_extensions` table has been filled in, you can run the `missing_queryables` function either for a single collection:
 

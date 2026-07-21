@@ -44,16 +44,16 @@ repos:
         pass_filenames: false
         verbose: true
         fail_fast: true
-        files: ^(src/pypgstac/(src/pypgstac|tests)/.*\.py|src/pypgstac/pyproject\.toml)$
-    -   id: pypgstac
-        name: pypgstac
+        files: ^(src/pgstac-migrate/(src/pgstac_migrate|tests)/.*\.py|src/pgstac-migrate/pyproject\.toml)$
+    -   id: pymigrate
+        name: pymigrate
         entry: scripts/test
-        args: [--pypgstac]
+        args: [--pymigrate]
         language: script
         pass_filenames: false
         verbose: true
         fail_fast: true
-        files: pypgstac\/.*\.py$
+        files: pgstac-migrate\/.*\.py$
     -   id: migrations
         name: migrations
         entry: scripts/test

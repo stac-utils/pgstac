@@ -78,12 +78,17 @@ BEGIN
     END IF;
 
     IF array_length(bnds.months, 1) IS NOT NULL THEN
-        cursor_idx := 1;
+        -- Walk bands in the SEARCH's datetime direction: newest month first for a descending search,
+        -- oldest first when sorting datetime ascending. Mirrors search_page (004_search). Walking the
+        -- wrong direction returns older items before newer ones for a descending limit/early-exit search,
+        -- and (because band grouping shifts with the partition_stats histogram) makes the result depend on
+        -- stats — a bug, since stats must only affect performance, never which rows come back.
+        cursor_idx := CASE WHEN is_asc THEN 1 ELSE array_length(bnds.months, 1) END;
         band_target := (_limit + 1) * band_margin;
         <<bands>>
         WHILE NOT exit_flag AND guard < 80 LOOP
             guard := guard + 1;
-            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months);
+            SELECT * INTO band FROM next_band(bnds.counts, cursor_idx, band_target, band_cap_months, NOT is_asc);
             -- process a valid band even when next_band also flags done; stop only on no band.
             EXIT bands WHEN band.band_start_idx IS NULL;
             query := format(

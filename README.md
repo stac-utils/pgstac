@@ -8,8 +8,8 @@
   <a href="https://github.com/stac-utils/pgstac/actions?query=workflow%3ACI" target="_blank">
       <img src="https://github.com/stac-utils/pgstac/workflows/CI/badge.svg" alt="Test">
   </a>
-  <a href="https://pypi.org/project/pypgstac" target="_blank">
-      <img src="https://img.shields.io/pypi/v/pypgstac?color=%2334D058&label=pypi%20package" alt="Package version">
+  <a href="https://pypi.org/project/pgstac-migrate" target="_blank">
+      <img src="https://img.shields.io/pypi/v/pgstac-migrate?color=%2334D058&label=pypi%20package" alt="Package version">
   </a>
   <a href="https://github.com/stac-utils/pgstac/blob/master/LICENSE" target="_blank">
       <img src="https://img.shields.io/github/license/stac-utils/pgstac.svg" alt="License">
@@ -24,15 +24,17 @@
 
 ---
 
-**PgSTAC** is a set of SQL functions and schema to build highly performant databases for Spatio-Temporal Asset Catalogs ([STAC](https://stacspec.org/)). The project also provides **pgstac-migrate** (a focused migration package) and **pypgstac** (a Python module for compatibility migration commands and document ingestion).
+**PgSTAC** is a set of SQL functions and schema to build highly performant databases for Spatio-Temporal Asset Catalogs ([STAC](https://stacspec.org/)). The project also provides **pgstac-migrate** (a focused migration package), the **pgstac** Rust CLI (loading, search, queryables, extensions, maintenance), and **pypgstac-rs** (a Rust-backed Python read/write extension for stac-fastapi-pgstac).
 
 PgSTAC provides functionality for STAC Filters, CQL2 search, and utilities to help manage the indexing and partitioning of STAC Collections and Items.
 
 PgSTAC is used in production to scale to hundreds of millions of STAC items. PgSTAC implements core data models and functions to provide a STAC API from a PostgreSQL database. PgSTAC is entirely within the database and does not provide an HTTP-facing API. The [STAC FastAPI](https://github.com/stac-utils/stac-fastapi) PgSTAC backend and [Franklin](https://github.com/azavea/franklin) can be used to expose a PgSTAC catalog. Integrating PgSTAC with any other language with PostgreSQL drivers is also possible.
 
-PgSTAC Documentation: https://stac-utils.github.io/pgstac/pgstac
+PgSTAC Documentation: https://stac-utils.github.io/pgstac/pgstac
 
-pyPgSTAC Documentation: https://stac-utils.github.io/pgstac/pypgstac
+Rust client & CLI Documentation: https://stac-utils.github.io/pgstac/pgstac-rs
+
+Migrating off pyPgSTAC: https://stac-utils.github.io/pgstac/pypgstac
 
 pgstac-migrate package: `src/pgstac-migrate`
 
@@ -40,12 +42,12 @@ pgstac-migrate package: `src/pgstac-migrate`
 
 ```
 /
- ├── src/pypgstac           - pyPgSTAC python module
- ├── src/pypgstac/tests/    - pyPgSTAC tests
- ├── scripts/               - scripts to set up the environment, create migrations, and run tests
  ├── src/pgstac/sql/        - PgSTAC SQL code
  ├── src/pgstac/migrations/ - Migrations for incremental upgrades
- └── src/pgstac/tests/      - test suite
+ ├── src/pgstac/tests/      - PgSTAC SQL test suite
+ ├── src/pgstac-migrate/    - pgstac-migrate migration package
+ ├── src/pgstac-rs/         - Rust crate: pgstac CLI + pgstac Python extension
+ └── scripts/               - scripts to set up the environment, create migrations, and run tests
 ```
 
 ## Contribution & Development

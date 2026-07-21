@@ -25,12 +25,12 @@ Migration specialist for PgSTAC. See CLAUDE.md "Migration Process" for full work
 1. Edit SQL in `src/pgstac/sql/*.sql`
 2. `src/pgstac/pyproject.toml` is the `pgpkg` project config for the SQL + migrations tree
 3. `uv run --directory src/pgstac-migrate pgstac-migrate info|versions|plan` inspects the baked migration artifact during wrapper work
-4. `uv run --directory src/pypgstac pypgstac migrate -- --help` remains a backwards-compatible wrapper over `pgstac-migrate`; put new runtime migration behavior in `src/pgstac-migrate/`, not `src/pypgstac/`
+4. `uv run --directory src/pgstac-migrate pgstac-migrate migrate --help` drives migrations directly; put new runtime migration behavior in `src/pgstac-migrate/`
 5. `scripts/stageversion VERSION` regenerates canonical `pgstac--VERSION.sql` plus incremental `pgstac--FROM--TO.sql`; set `PGPKG_LOCAL_REPO_DIR` when `stageversion` or `makemigration` should run against a local pgpkg checkout. The Docker-backed flow mounts that override at `/pgpkg` and exports `PGPKG_REPO_DIR` to the container scripts.
 6. Review the generated incremental migration (watch for DROPs, unsafe ALTERs, missing `CREATE OR REPLACE`)
 7. If you hand-edit the incremental migration, rebuild the baked artifact: `uv run --directory src/pgstac-migrate pgstac-migrate build-artifact`
 8. Run `scripts/test --migrations` (or full `scripts/test` gate)
-9. Tagged releases publish both `pypgstac` and `pgstac-migrate` to PyPI from `.github/workflows/release.yml`; keep the PyPI trusted publisher registration aligned with the `pypi` environment and workflow path
+9. Tagged releases publish `pgstac-migrate` and `pypgstac-rs` to PyPI (and the `pgstac` crate to crates.io) from `.github/workflows/release.yml`; keep the PyPI trusted publisher registration aligned with the `pypi` environment and workflow path
 
 ### Review Checklist
 
@@ -43,14 +43,11 @@ Migration specialist for PgSTAC. See CLAUDE.md "Migration Process" for full work
 
 ## loader-developer
 
-Specialist in pypgstac bulk loading (`src/pypgstac/src/pypgstac/load.py`). See CLAUDE.md "pypgstac Loader Internals" for full details.
+Specialist in the Rust bulk loader (`src/pgstac-rs/src/load/pool_ingest.rs`, plus `src/pgstac-rs/src/load/dehydrate.rs` and `fragment.rs`). See CLAUDE.md for partition architecture.
 
 ### Critical Patterns
 
-- **Materialize generators**: `list(g)` before `load_partition()` — generators can't survive tenacity retries
-- **Live view only**: Query `partition_sys_meta` (VIEW), never `partitions` (stale MATERIALIZED VIEW)
-- **Retry safety**: `item.pop("partition", None)` with `None` default; `before_sleep` sets `partition.requires_update = True` on `CheckViolation`
-- **Retry scope**: `CheckViolation`, `DeadlockDetected`, `SerializationFailure`, `LockNotAvailable`, `ObjectInUse`
-- **Load modes**: `insert`, `ignore`/`insert_ignore`, `upsert`, `delsert`
+- **Conflict policies**: `upsert` (default), `ignore`, `error`, plus loader-level delsert
+- **Live view only**: partition metadata comes from the `partition_sys_meta` live VIEW, never the stale `partitions` MATERIALIZED VIEW
 - **Sample data load**: `scripts/loadsampledata`
-- Test: `scripts/runinpypgstac --build test --pypgstac`
+- Tests: `src/pgstac-rs/tests/` (`pool_ingest.rs`, `ingest_load.rs`, `cli.rs`); run with `scripts/test --rust`

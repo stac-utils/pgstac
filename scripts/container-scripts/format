@@ -18,7 +18,7 @@ This script is meant to be run inside the dev container.
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "Formatting pypgstac..."
-    ruff check --fix pypgstac/src/pypgstac pypgstac/tests
-    ruff format pypgstac/src/pypgstac pypgstac/tests
+    echo "Formatting pgstac-migrate..."
+    uv run --directory pgstac-migrate --group dev ruff check --fix src/pgstac_migrate tests
+    uv run --directory pgstac-migrate --group dev ruff format src/pgstac_migrate tests
 fi
