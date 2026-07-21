@@ -208,3 +208,11 @@ SELECT lives_ok(
 );
 
 RESET pgstac.additional_properties;
+
+SELECT results_eq(
+    $$ SELECT indexdef(q)
+       FROM queryables q
+       WHERE name = 'testqueryable'; $$,
+    $$ SELECT 'CREATE INDEX ON %I USING btree (to_text((properties -> ''testqueryable''::text)))'; $$,
+    'Managed indexes for JSON property queryables target the split properties column.'
+);

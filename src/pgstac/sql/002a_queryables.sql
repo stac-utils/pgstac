@@ -259,7 +259,7 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
                 q.property_path
             );
         ELSE
-            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            out := format($q$CREATE INDEX ON %%I USING %s (%s((properties -> %L::text)))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
                 lower(COALESCE(q.property_wrapper, 'to_text')),
                 q.name
@@ -278,6 +278,7 @@ SELECT
     regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
         substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM 'properties -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
@@ -296,6 +297,7 @@ SELECT
     indexdef,
     COALESCE(
         substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        substring(indexdef FROM 'properties -> ''([a-zA-Z0-9\:\_-]+)''::text'),
         substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
     ) AS field,
@@ -342,6 +344,7 @@ WITH p AS (
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
                 substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+                substring(indexdef FROM 'properties -> ''([a-zA-Z0-9\:\_-]+)''::text'),
                 substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
