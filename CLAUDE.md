@@ -17,7 +17,7 @@ src/pgstac/pgstac.sql    ← Assembled output (DO NOT edit directly)
 src/pgstac/migrations/   ← Base + incremental migration files
 src/pgstac/tests/        ← PGTap and basic SQL tests
 src/pgstac-migrate/      ← Migration package (pgstac-migrate CLI + baked artifact)
-src/pgstac-rs/           ← Rust crate: pgstac CLI + pypgstac_rs extension + tests
+src/pgstac-rs/           ← Rust crate: pgstac CLI + pgstac Python extension + tests
 scripts/                 ← Host-facing entrypoint scripts
 scripts/container-scripts/ ← Scripts copied into the dev container image
 ```

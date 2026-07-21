@@ -9,7 +9,7 @@ capability it provided now lives in one of its replacements:
 - **`pgstac`** — the Rust CLI (built from `src/pgstac-rs` with the `cli` feature)
   for loading, searching, queryables, extensions, and maintenance.
 - **`pypgstac-rs`** — the Rust-backed Python extension (module name
-  `pypgstac_rs`) exposing the read/write pool API for `stac-fastapi-pgstac`,
+  `pgstac`) exposing the read/write pool API for `stac-fastapi-pgstac`,
   published to PyPI as
   [`pypgstac-rs`](https://pypi.org/project/pypgstac-rs/).
 
@@ -29,8 +29,8 @@ versions are published.
 | `pypgstac loadextensions` | `pgstac load-extensions` |
 | `pypgstac runqueue` | `pgstac runqueue` |
 | `pypgstac pgready` | `pg_isready` (or a connect-retry loop) |
-| `pypgstac.hydration.hydrate` | `hydraters.hydrate`, or the `pypgstac_rs` read API (server-side hydration) |
-| `pypgstac.hydration.dehydrate` | the Rust loader in `pgstac load` / `pypgstac_rs` (dehydration runs in Rust at ingest) |
+| `pypgstac.hydration.hydrate` | `hydraters.hydrate`, or the `pgstac` read API (server-side hydration) |
+| `pypgstac.hydration.dehydrate` | the Rust loader in `pgstac load` / `pgstac` (dehydration runs in Rust at ingest) |
 | `pypgstac.migrate.MigrationPath` | `pgstac_migrate.compat.MigrationPath` |
 | `pypgstac.__version__` | `pgstac_migrate.__version__` (or the `pypgstac-rs` wheel version) |
 

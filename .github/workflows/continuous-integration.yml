@@ -170,17 +170,17 @@ jobs:
             exit 1
           fi
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-      - name: Build the pypgstac_rs wheel and install pgstac-migrate
+      - name: Build the pgstac wheel and install pgstac-migrate
         working-directory: /__w/pgstac/pgstac
         run: |
           export UV_CACHE_DIR=/tmp/.uv-cache
           export XDG_CACHE_HOME=/tmp/.cache
           mkdir -p "$UV_CACHE_DIR" "$XDG_CACHE_HOME"
           uv --cache-dir "$UV_CACHE_DIR" venv /tmp/ci-venv
-          # Build the Rust-backed pypgstac_rs extension wheel (the read API used by stac-fastapi-pgstac).
+          # Build the Rust-backed pgstac extension wheel (the read API used by stac-fastapi-pgstac).
           uv --cache-dir "$UV_CACHE_DIR" pip install --python /tmp/ci-venv/bin/python maturin
-          /tmp/ci-venv/bin/maturin build --release -m src/pgstac-rs/Cargo.toml --out /tmp/pypgstac-rs-wheels
-          uv --cache-dir "$UV_CACHE_DIR" pip install --python /tmp/ci-venv/bin/python /tmp/pypgstac-rs-wheels/*.whl
+          /tmp/ci-venv/bin/maturin build --release -m src/pgstac-rs/Cargo.toml --out /tmp/pgstac-wheels
+          uv --cache-dir "$UV_CACHE_DIR" pip install --python /tmp/ci-venv/bin/python /tmp/pgstac-wheels/*.whl
           # Install pgstac-migrate (the migration CLI) plus its dev/test tooling for the container test runner.
           uv --cache-dir "$UV_CACHE_DIR" pip install --python /tmp/ci-venv/bin/python ${{ matrix.flags }} ./src/pgstac-migrate
           echo "/tmp/ci-venv/bin" >> "$GITHUB_PATH"

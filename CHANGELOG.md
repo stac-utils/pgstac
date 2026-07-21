@@ -17,13 +17,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Deterministic Planetary Computer benchmark fixture manifest + fetch tooling for `naip`, `sentinel-2-l2a`, and `landsat-c2-l2` (1000 items per collection), plus CI/manual benchmark workflows that emit JSON/CSV/Markdown artifacts and branch comparison reports.
 - `src/pgstac-rs` read/streaming engine: a Rust-side keyset search that drives `search_plan`/`collection_search_plan` and does the band stepping, hydration, token minting, and the STAC `fields` include/exclude projection client-side (page-equivalent to SQL `search()`); a flat-memory streaming iterator (`query_raw` portal on one pooled connection + per-new-fragment fetch on a parallel connection, so memory stays flat regardless of result size); byte-identical Rust hydration (EWKB→GeoJSON, serialize-time fragment-asset merge that never deep-parses large asset arrays, `bbox` emitted from raw bytes to preserve numeric precision); collection search, item/collection getters, and queryables; a pooled hydration-invariant cache; and a parallel-context primitive.
 - `pgstac` CLI (`src/pgstac-rs`, `cli` feature): `dump` a pgstac instance to a directory / `*.tar(.zst)` / S3 (object-store) / stdout as fully-hydrated stac-geoparquet (one file per partition) + collection/queryables/settings JSON + a sha256'd manifest, with collection/datetime/bbox prefilters, parallel and consistent-snapshot modes, and dry-run; `search` to stream results off the keyset engine, selecting the format with rustac's `stac_io::Format` spelling — `--format ndjson` (default), `json` (one ItemCollection page), or `geoparquet[<compression>]` (compression carried in the format string, e.g. `geoparquet[snappy]`).
-- `pypgstac_rs` Python wheel (`src/pgstac-rs`, `python` feature, built with maturin): a pyo3 extension exposing the async read API (search, collection search, getters, queryables, parallel match count) over a startup-created connection pool, for use in `stac-fastapi-pgstac`.
+- `pgstac` Python wheel (`src/pgstac-rs`, `python` feature, built with maturin): a pyo3 extension exposing the async read API (search, collection search, getters, queryables, parallel match count) over a startup-created connection pool, for use in `stac-fastapi-pgstac`.
 - New [Rust client & CLI](https://stac-utils.github.io/pgstac/pgstac-rs/) reference documenting the crate features, the full read/pool API, every `pgstac dump` / `pgstac search` option, and all connection + test environment variables.
 - `src/pgstac-rs`: a `store` cargo feature that gates the `object_store`-backed remote dump sink (local fs + S3/GCS/Azure), so the remote sink can be built without the full `cli` feature.
 
 ### Removed
 
-- Removed the legacy `pypgstac` Python package (`src/pypgstac`). Every capability moved to a replacement: `pgstac-migrate` (migrations), the `pgstac` Rust CLI (`src/pgstac-rs`, `cli` feature — loading, search, queryables, extensions, run-queue, maintenance), and the `pypgstac-rs` Python extension (`pypgstac_rs` module — the read/write pool API). Previously published `pypgstac` releases remain on PyPI; no new versions are published. Migration reference:
+- Removed the legacy `pypgstac` Python package (`src/pypgstac`). Every capability moved to a replacement: `pgstac-migrate` (migrations), the `pgstac` Rust CLI (`src/pgstac-rs`, `cli` feature — loading, search, queryables, extensions, run-queue, maintenance), and the `pgstac` Python wheel (`pgstac` module — the read/write pool API). Previously published `pypgstac` releases remain on PyPI; no new versions are published. Migration reference:
     - `pypgstac migrate --toversion X` → `pgstac-migrate migrate --to X`
     - `pypgstac version` → `pgstac-migrate current`
     - `pypgstac load items f --method upsert` → `pgstac load f --policy upsert` (default policy changed from `insert` to `upsert`; `--method`→`--policy`, `--chunksize`→`--batch-size`; table is auto-detected)
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
     - `pypgstac loadextensions` → `pgstac load-extensions`
     - `pypgstac runqueue` → `pgstac runqueue`
     - `pypgstac pgready` → `pg_isready`
-    - `pypgstac.hydration.{hydrate,dehydrate}` → `hydraters` / the `pypgstac_rs` read API (hydration and dehydration run in Rust)
+    - `pypgstac.hydration.{hydrate,dehydrate}` → `hydraters` / the `pgstac` read API (hydration and dehydration run in Rust)
     - `pypgstac.migrate.MigrationPath` → `pgstac_migrate.compat.MigrationPath`
     - `pypgstac.__version__` → `pgstac_migrate.__version__`
 - Removed the `pypgstac` PyPI publish job and the `-pypgstac` / `-pypgstac-runtime` Docker image build jobs from the release workflow; added a `pypgstac-rs` (maturin) PyPI publish job. The `pgstac-migrate` and crates.io publish jobs are unchanged.

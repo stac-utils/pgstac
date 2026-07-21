@@ -24,7 +24,7 @@ See the [documentation](https://docs.rs/pgstac) for more.
 | `pool`    | [`PgstacPool`] — a `deadpool` connection pool (rustls TLS, PgBouncer-safe) with the read API: `search_page`, the flat-memory streaming iterator `search_items` / `stream_ndjson`, `collection_search`, `get_item`/`get_collection`/`get_queryables`, and `search_matched`. |
 | `export`  | The export/dump library: scan partitions and write fully-hydrated stac-geoparquet + a sha256'd manifest. |
 | `cli`     | The `pgstac` binary (implies `export`): `pgstac dump` and `pgstac search`. |
-| `python`  | A pyo3 extension module (`pypgstac_rs`) built with [maturin]. |
+| `python`  | A pyo3 extension module (`pgstac`) built with [maturin]. |
 
 The read API drives `search_plan` / `collection_search_plan` and does the band-stepping,
 hydration (EWKB→GeoJSON, fragment merge), and keyset token minting **in Rust** — page-equivalent
@@ -64,14 +64,14 @@ pgstac search --dsn "$PGSTAC_DSN" -c landsat-c2-l2 --datetime 2024-01-01/.. --fo
 ### Python wheel (`python` feature)
 
 ```sh
-maturin build -m src/pgstac-rs/Cargo.toml   # builds the pypgstac_rs wheel
+maturin build -m src/pgstac-rs/Cargo.toml   # builds the pgstac wheel
 ```
 
 ```python
-import asyncio, orjson, pypgstac_rs
+import asyncio, orjson, pgstac
 
 async def main():
-    pool = await pypgstac_rs.Pgstac.connect()  # libpq env, or pass a dsn
+    pool = await pgstac.Pgstac.connect()  # libpq env, or pass a dsn
     fc = orjson.loads(await pool.search(orjson.dumps({"collections": ["landsat-c2-l2"], "limit": 10}).decode()))
     print(fc["numberReturned"])
 

@@ -46,7 +46,7 @@ pgstac-migrate package: `src/pgstac-migrate`
  ├── src/pgstac/migrations/ - Migrations for incremental upgrades
  ├── src/pgstac/tests/      - PgSTAC SQL test suite
  ├── src/pgstac-migrate/    - pgstac-migrate migration package
- ├── src/pgstac-rs/         - Rust crate: pgstac CLI + pypgstac-rs Python extension
+ ├── src/pgstac-rs/         - Rust crate: pgstac CLI + pgstac Python extension
  └── scripts/               - scripts to set up the environment, create migrations, and run tests
 ```
 

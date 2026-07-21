@@ -388,9 +388,9 @@ impl Pgstac {
     }
 }
 
-/// The `pypgstac_rs` extension module.
+/// The `pgstac` Python extension module.
 #[pymodule]
-fn pypgstac_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn pgstac(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Pgstac>()?;
     Ok(())
 }

@@ -10,7 +10,7 @@ database. It provides:
   `fragment_id` in the projection it returns, so the engine skips the per-row `item_fragments` lookup;
 - a **connection pool** (`PgstacPool`, the `pool` feature) with the async read API;
 - a **dump/export** library + the `pgstac` **CLI** (`export` / `cli` features);
-- a **Python wheel** (`pypgstac_rs`, the `python` feature, built with [maturin](https://github.com/PyO3/maturin)).
+- a **Python wheel** (`pgstac`, the `python` feature, built with [maturin](https://github.com/PyO3/maturin)).
 
 ## Cargo features
 
@@ -20,7 +20,7 @@ database. It provides:
 | `pool`      | `PgstacPool`: pooled async read API (rustls TLS, PgBouncer-safe). |
 | `export`    | The dump library (scan partitions → stac-geoparquet + manifest). |
 | `cli`       | The `pgstac` binary (implies `export`). |
-| `python`    | The `pypgstac_rs` pyo3 extension module. |
+| `python`    | The `pgstac` pyo3 extension module. |
 
 ## Environment variables
 
@@ -139,14 +139,14 @@ Streams a 0.10 search off the keyset engine.
 ## Python wheel
 
 ```sh
-maturin build -m src/pgstac-rs/Cargo.toml     # produces the pypgstac_rs wheel
+maturin build -m src/pgstac-rs/Cargo.toml     # produces the pgstac wheel
 ```
 
 ```python
-import asyncio, orjson, pypgstac_rs
+import asyncio, orjson, pgstac
 
 async def main():
-    pool = await pypgstac_rs.Pgstac.connect()           # libpq env, or pass a dsn string
+    pool = await pgstac.Pgstac.connect()           # libpq env, or pass a dsn string
     body = orjson.dumps({"collections": ["landsat-c2-l2"], "limit": 10}).decode()
     fc = orjson.loads(await pool.search(body))
     print(fc["numberReturned"])
