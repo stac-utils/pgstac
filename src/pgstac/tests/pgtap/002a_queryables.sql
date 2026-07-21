@@ -208,3 +208,58 @@ SELECT lives_ok(
 );
 
 RESET pgstac.additional_properties;
+
+SELECT lives_ok(
+    $$ SELECT create_item('{"id":"pgstac-test-item-dotted","type":"Feature","collection":"pgstac-test-collection","geometry":{"type":"Point","coordinates":[0,0]},"bbox":[0,0,0,0],"properties":{"datetime":"2011-08-25T00:00:00Z","a.b":"x","test:a.b.c":"y","test:detail.value":1.5},"assets":{},"links":[],"stac_version":"1.0.0"}'); $$,
+    'Create item for dotted queryable index tests.'
+);
+
+SELECT lives_ok(
+    $$ INSERT INTO queryables (name, collection_ids, property_wrapper, property_index_type) VALUES
+        ('a.b', '{pgstac-test-collection}', 'to_text', 'BTREE'),
+        ('test:a.b.c', '{pgstac-test-collection}', 'to_text', 'BTREE'),
+        ('test:detail.value', '{pgstac-test-collection}', 'to_float', 'BTREE'),
+        ('test:prop', '{pgstac-test-collection}', 'to_text', 'BTREE'); $$,
+    'Can index dotted and non-dotted queryables.'
+);
+
+SELECT lives_ok(
+    $$ SELECT build_pending_indexes();
+       SELECT maintain_partitions() FROM generate_series(1, 2); $$,
+    'build_pending_indexes + repeated maintain_partitions succeeds for dotted queryables.'
+);
+
+SELECT results_eq(
+    $$ SELECT field, count(*)::int
+       FROM pgstac_indexes
+       WHERE field IN ('a.b', 'test:a.b.c', 'test:detail.value', 'test:prop')
+       GROUP BY field
+       ORDER BY field; $$,
+    $$ VALUES ('a.b', 1), ('test:a.b.c', 1), ('test:detail.value', 1), ('test:prop', 1); $$,
+    'Repeated maintain leaves exactly one index per dotted/non-dotted queryable.'
+);
+
+SELECT is_empty(
+    $$ SELECT field FROM queryable_indexes('items', true)
+       WHERE field IN ('a.b', 'test:a.b.c', 'test:detail.value', 'test:prop'); $$,
+    'queryable_indexes(changes:=true) finds no changes for matching defs.'
+);
+
+
+SELECT results_eq(
+    $q$ SELECT substring(
+            $i$CREATE INDEX ON pgstac._items_1 USING btree (to_float((properties -> 'test:detail.value'::text)))$i$,
+            'properties -> ''([^'']+)''::text'
+        ); $q$,
+    $$ SELECT 'test:detail.value'; $$,
+    'Extraction captures full dotted property names from split properties indexes.'
+);
+
+SELECT results_eq(
+    $q$ SELECT substring(
+            $i$CREATE INDEX ON pgstac._items_1 USING btree (to_float(((content -> 'properties'::text) -> 'test:detail.value'::text)))$i$,
+            '\(content -> ''properties''::text\) -> ''([^'']+)''::text'
+        ); $q$,
+    $$ SELECT 'test:detail.value'; $$,
+    'Legacy content->properties extraction captures dotted names.'
+);
