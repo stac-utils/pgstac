@@ -571,9 +571,7 @@ async fn run_search(
                     out,
                     pretty,
                 )
-                .await
-                // Unsize the writer's Send+Sync boxed error to this fn's boxed error.
-                .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+                .await?;
             eprintln!("search: streamed 1 ItemCollection ({n} item(s))");
         }
         Format::Geoparquet(writer_options) => {

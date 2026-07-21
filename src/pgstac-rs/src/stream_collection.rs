@@ -8,8 +8,10 @@ use stac_io::{Finalize, ItemStream, StreamSearch, StreamedSearch};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A boxed error so backend and writer errors compose, matching the shared writer's error type.
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
+/// Adapts a pgstac-side error into the [`stac_io::Error`] the shared streaming writer returns.
+fn backend(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> stac_io::Error {
+    stac_io::Error::from(error.into())
+}
 
 impl PgstacPool {
     /// Whether the database has the v0.10 streaming layout: the `search_plan(jsonb, text, integer)`
@@ -51,7 +53,7 @@ async fn sql_search_fallback(
     mut search: serde_json::Value,
     token: Option<String>,
     context: bool,
-) -> Result<StreamedSearch, BoxError> {
+) -> stac_io::Result<StreamedSearch> {
     if let serde_json::Value::Object(map) = &mut search {
         if let Some(token) = token {
             let _ = map.insert("token".into(), serde_json::Value::String(token));
@@ -64,14 +66,15 @@ async fn sql_search_fallback(
         }
     }
 
-    let client = pool.get().await?;
+    let client = pool.get().await.map_err(backend)?;
     let response: serde_json::Value = client
         .query_one("SELECT pgstac.search($1::jsonb)", &[&search])
-        .await?
+        .await
+        .map_err(backend)?
         .get(0);
     let mut object = match response {
         serde_json::Value::Object(object) => object,
-        _ => return Err("pgstac.search did not return an object".into()),
+        _ => return Err(backend("pgstac.search did not return an object")),
     };
     let features = match object.remove("features") {
         Some(serde_json::Value::Array(features)) => features,
@@ -97,7 +100,7 @@ impl StreamSearch for PgstacPool {
         max_items: Option<usize>,
         context: bool,
         self_href: Option<String>,
-    ) -> impl Future<Output = Result<StreamedSearch, BoxError>> + Send {
+    ) -> impl Future<Output = stac_io::Result<StreamedSearch>> + Send {
         let pool = self.clone();
         async move {
             let mut search = serde_json::to_value(&search)?;
@@ -108,7 +111,7 @@ impl StreamSearch for PgstacPool {
                 .and_then(|value| value.as_str().map(str::to_string));
 
             // Older databases lack the streaming layout; fall back to the SQL `search()` function.
-            if !pool.has_streaming_layout().await? {
+            if !pool.has_streaming_layout().await.map_err(backend)? {
                 return sql_search_fallback(&pool, search, token, context).await;
             }
 
@@ -156,7 +159,7 @@ impl StreamSearch for PgstacPool {
                             yield Ok(value);
                         }
                         Err(error) => {
-                            yield Err(error.into());
+                            yield Err(backend(error));
                             break;
                         }
                     }
@@ -180,7 +183,10 @@ impl StreamSearch for PgstacPool {
                         links.push(page_link(self_href.as_deref(), "prev", &token));
                     }
                     let number_matched = match count_handle {
-                        Some(handle) => handle.await??.map(|matched| matched as u64),
+                        Some(handle) => handle
+                            .await?
+                            .map_err(backend)?
+                            .map(|matched| matched as u64),
                         None => None,
                     };
                     let mut collection = ItemCollection::new(Vec::new())?;
