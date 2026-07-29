@@ -132,6 +132,19 @@ ALTER DEFAULT PRIVILEGES FOR ROLE pgstac_ingest IN SCHEMA pgstac GRANT ALL ON FU
 RESET ROLE;
 
 SET SEARCH_PATH TO pgstac, public;
+
+-- PgSTAC references PostGIS without schema qualification and runs with
+-- search_path pinned to "pgstac, public", so PostGIS has to be reachable from
+-- there. Fail here rather than part way through creating the schema.
+DO $$
+  BEGIN
+    IF to_regtype('geometry') IS NULL THEN
+      RAISE EXCEPTION 'PostGIS is not reachable from search_path "pgstac, public"'
+        USING HINT = 'PgSTAC requires the postgis extension in the public schema.';
+    END IF;
+  END
+$$;
+
 SET ROLE pgstac_admin;
 
 DO $$
@@ -148,6 +161,26 @@ DO $$
     RAISE NOTICE '%, skipping', SQLERRM USING ERRCODE = SQLSTATE;
   END
 $$;
+-- Drain the queue here, where the functions its entries name still have the
+-- signatures they were queued against and pgstac_admin owns the objects any
+-- queued DDL touches. Statistics updates are discarded instead:
+-- 998_idempotent_post recalculates every partition regardless.
+DO $$
+  BEGIN
+    DELETE FROM query_queue WHERE query LIKE 'SELECT update_partition_stats(%';
+    PERFORM run_queued_queries_intransaction();
+  EXCEPTION WHEN undefined_table OR undefined_function THEN
+    RAISE NOTICE 'No query queue to drain.';
+  END
+$$;
+
+-- Return type or argument list differs from an earlier release, which
+-- CREATE OR REPLACE cannot change.
+DROP FUNCTION IF EXISTS run_or_queue(text);
+DROP FUNCTION IF EXISTS update_partition_stats_q(text, boolean);
+DROP FUNCTION IF EXISTS update_partition_stats(text, boolean);
+DROP FUNCTION IF EXISTS maintain_index(text, text, boolean, boolean, boolean);
+DROP FUNCTION IF EXISTS queryable_indexes(text, boolean);
 
 -- Install these idempotently as migrations do not put them before trying to modify the collections table
 

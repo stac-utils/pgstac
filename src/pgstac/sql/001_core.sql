@@ -213,19 +213,21 @@ END;
 $$ LANGUAGE PLPGSQL;
 
 
-CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS VOID AS $$
+-- TRUE if the query ran, FALSE if it was queued, so callers can tell whether
+-- its effects are visible in this transaction.
+CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS boolean AS $$
 DECLARE
-    use_queue text := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+    use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
 BEGIN
     IF get_setting_bool('debug') THEN
         RAISE NOTICE '%', query;
     END IF;
     IF use_queue THEN
         INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
-    ELSE
-        EXECUTE query;
+        RETURN FALSE;
     END IF;
-    RETURN;
+    EXECUTE query;
+    RETURN TRUE;
 END;
 $$ LANGUAGE PLPGSQL;
 
@@ -321,6 +323,12 @@ BEGIN
         IF current_setting('pg_stat_statements.track_statements', TRUE) IS DISTINCT FROM 'all' THEN
             RAISE WARNING 'SET pg_stat_statements.track_statements TO ''all''; --In order to track statements within functions.';
         END IF;
+    END IF;
+
+    -- Undrained queue means stale statistics and constraints, silently.
+    SELECT count(*) INTO settingval FROM query_queue;
+    IF settingval::bigint > 0 THEN
+        RAISE WARNING '% queries are waiting in query_queue. Run "CALL run_queued_queries();" (pypgstac runqueue) to drain it -- until then partition statistics and constraints are stale.', settingval;
     END IF;
 
 END;

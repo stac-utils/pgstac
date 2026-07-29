@@ -266,7 +266,8 @@ CREATE OR REPLACE FUNCTION queryable_indexes(
     OUT field text,
     OUT indexname text,
     OUT existing_idx text,
-    OUT queryable_idx text
+    OUT queryable_idx text,
+    OUT queryable_id bigint
 ) RETURNS SETOF RECORD AS $$
 WITH p AS (
         SELECT
@@ -300,7 +301,8 @@ WITH p AS (
             name AS field,
             collection,
             partition,
-            format(indexdef(queryables), partition) as qidx
+            format(indexdef(queryables), partition) as qidx,
+            queryables.id as qid
         FROM queryables, unnest_collection(queryables.collection_ids) collection
             JOIN p USING (collection)
         WHERE property_index_type IS NOT NULL OR name IN ('datetime','geometry','id')
@@ -311,40 +313,53 @@ WITH p AS (
         field,
         indexname,
         iidx as existing_idx,
-        qidx as queryable_idx
+        qidx as queryable_idx,
+        qid as queryable_id
     FROM i FULL JOIN q USING (field, partition)
     WHERE CASE WHEN changes THEN lower(iidx) IS DISTINCT FROM lower(qidx) ELSE TRUE END;
 ;
 $$ LANGUAGE SQL;
 
+-- SECURITY DEFINER, so the index statement is built here from the queryables
+-- row; a caller supplied one would run with the privileges of the schema owner.
 CREATE OR REPLACE FUNCTION maintain_index(
-    indexname text,
-    queryable_idx text,
+    _partition text,
+    _indexname text,
+    _queryable_id bigint,
     dropindexes boolean DEFAULT FALSE,
     rebuildindexes boolean DEFAULT FALSE,
     idxconcurrently boolean DEFAULT FALSE
 ) RETURNS VOID AS $$
 DECLARE
+    _queryable_idx text;
 BEGIN
-    IF indexname IS NOT NULL THEN
-        IF dropindexes OR queryable_idx IS NOT NULL THEN
-            EXECUTE format('DROP INDEX IF EXISTS %I;', indexname);
+    -- Runs elevated, so it may only touch partitions of items.
+    IF NOT EXISTS (SELECT 1 FROM partition_catalog_meta(_partition)) THEN
+        RETURN;
+    END IF;
+    IF _queryable_id IS NOT NULL AND _partition IS NOT NULL THEN
+        SELECT format(indexdef(q), _partition) INTO _queryable_idx
+        FROM queryables q WHERE q.id = _queryable_id;
+    END IF;
+    IF _indexname IS NOT NULL THEN
+        IF dropindexes OR _queryable_idx IS NOT NULL THEN
+            EXECUTE format('DROP INDEX IF EXISTS %I;', _indexname);
         ELSIF rebuildindexes THEN
             IF idxconcurrently THEN
-                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', _indexname);
             ELSE
-                EXECUTE format('REINDEX INDEX CONCURRENTLY %I;', indexname);
+                EXECUTE format('REINDEX INDEX %I;', _indexname);
             END IF;
         END IF;
     END IF;
-    IF queryable_idx IS NOT NULL THEN
+    IF _queryable_idx IS NOT NULL THEN
         IF idxconcurrently THEN
-            EXECUTE replace(queryable_idx, 'INDEX', 'INDEX CONCURRENTLY');
-        ELSE EXECUTE queryable_idx;
+            EXECUTE replace(_queryable_idx, 'INDEX', 'INDEX CONCURRENTLY');
+        ELSE EXECUTE _queryable_idx;
         END IF;
     END IF;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 
 
@@ -364,10 +379,11 @@ BEGIN
     ) LOOP
         q := format(
             'SELECT maintain_index(
-                %L,%L,%L,%L,%L
+                %L,%L,%L,%L,%L,%L
             );',
+            rec.partition,
             rec.indexname,
-            rec.queryable_idx,
+            rec.queryable_id,
             dropindexes,
             rebuildindexes,
             idxconcurrently

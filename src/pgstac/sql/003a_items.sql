@@ -23,9 +23,11 @@ DECLARE
     t timestamptz := clock_timestamp();
 BEGIN
     RAISE NOTICE 'Updating partition stats %', t;
+    -- Ordered: each iteration holds a partition_stats row lock until commit.
     FOR p IN SELECT DISTINCT partition
-        FROM newdata n JOIN partition_sys_meta p
+        FROM newdata n JOIN partition_stats p
         ON (n.collection=p.collection AND n.datetime <@ p.partition_dtrange)
+        ORDER BY 1
     LOOP
         PERFORM run_or_queue(format('SELECT update_partition_stats(%L, %L);', p, true));
     END LOOP;
@@ -35,7 +37,7 @@ BEGIN
     RAISE NOTICE 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 
 CREATE TRIGGER items_after_insert_trigger
 AFTER INSERT ON items
@@ -192,8 +194,6 @@ CREATE UNLOGGED TABLE items_staging_upsert (
 
 CREATE OR REPLACE FUNCTION items_staging_triggerfunc() RETURNS TRIGGER AS $$
 DECLARE
-    p record;
-    _partitions text[];
     part text;
     ts timestamptz := clock_timestamp();
     nrows int;
@@ -214,7 +214,10 @@ BEGIN
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
         GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+    -- Ordered: check_partition holds DDL and row locks until commit.
+    ) SELECT check_partition(collection, dtrange, edtrange) FROM (
+        SELECT * FROM p ORDER BY collection, d
+    ) ordered LOOP
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
@@ -240,11 +243,20 @@ BEGIN
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
-        DELETE FROM items i USING tmpdata s
-            WHERE
-                i.id = s.id
-                AND i.collection = s.collection
-                AND i IS DISTINCT FROM s
+        -- Locked in a fixed order first, so concurrent upserts over an
+        -- overlapping id set cannot deadlock. A bare DELETE gives no ordering;
+        -- ORDER BY ... FOR UPDATE does, because LockRows sits above the sort.
+        WITH locked AS (
+            SELECT o.collection, o.id
+            FROM tmpdata s
+                JOIN items o ON (o.id = s.id AND o.collection = s.collection)
+            WHERE o IS DISTINCT FROM s
+            ORDER BY o.collection, o.id
+            FOR UPDATE OF o
+        )
+        DELETE FROM items i
+        USING locked l
+        WHERE i.collection = l.collection AND i.id = l.id
         ;
         GET DIAGNOSTICS nrows = ROW_COUNT;
         RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
@@ -256,7 +268,7 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
-    DELETE FROM items_staging;
+    EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
     RAISE NOTICE 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
@@ -340,14 +352,18 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
 
+-- Recalculates partition statistics before aggregating them; the observed
+-- ranges are only maintained automatically when update_collection_extent is on.
+-- return_target, not use_json_null: collection_extent returns NULL when it
+-- cannot compute a full extent, and JSON null is not a valid STAC extent.
 CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
 UPDATE collections
     SET content = jsonb_set_lax(
         content,
         '{extent}'::text[],
-        collection_extent(id, FALSE),
+        collection_extent(id, TRUE),
         true,
-        'use_json_null'
+        'return_target'
     )
 ;
 $$ LANGUAGE SQL;

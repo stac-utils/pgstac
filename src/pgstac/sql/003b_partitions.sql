@@ -1,5 +1,11 @@
+-- collection and partition_dtrange describe the partition itself and are
+-- written synchronously by check_partition. dtrange, edtrange and spatial
+-- describe the data in the partition and may be updated asynchronously
+-- through the query queue.
 CREATE TABLE partition_stats (
     partition text PRIMARY KEY,
+    collection text,
+    partition_dtrange tstzrange,
     dtrange tstzrange,
     edtrange tstzrange,
     spatial geometry,
@@ -7,7 +13,7 @@ CREATE TABLE partition_stats (
     keys text[]
 ) WITH (FILLFACTOR=90);
 
-CREATE INDEX partitions_range_idx ON partition_stats USING GIST(dtrange);
+CREATE INDEX partition_stats_collection_idx ON partition_stats (collection);
 
 
 CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
@@ -70,6 +76,80 @@ CREATE OR REPLACE FUNCTION get_partition_name(relid regclass) RETURNS text AS $$
     SELECT (parse_ident(relid::text))[cardinality(parse_ident(relid::text))];
 $$ LANGUAGE SQL STABLE STRICT;
 
+-- Resolve a partition name, bare or pgstac qualified, against pgstac rather
+-- than the search_path. NULL if there is no such table, or if the name is
+-- qualified with a different schema.
+CREATE OR REPLACE FUNCTION partition_oid(_partition text) RETURNS oid AS $$
+    SELECT CASE
+        WHEN cardinality(parts) > 1 AND parts[cardinality(parts) - 1] <> 'pgstac' THEN NULL
+        ELSE to_regclass(format('pgstac.%I', parts[cardinality(parts)]))
+    END
+    FROM parse_ident(_partition) AS parts;
+$$ LANGUAGE SQL STABLE STRICT;
+
+-- Catalog metadata for one partition, touching one relation. pg_partition_tree
+-- would lock every partition in the tree. No rows unless _partition is a leaf
+-- partition of items.
+CREATE OR REPLACE FUNCTION partition_catalog_meta(_partition text)
+RETURNS TABLE (
+    collection text,
+    partition_dtrange tstzrange,
+    constraint_dtrange tstzrange,
+    constraint_edtrange tstzrange
+) AS $$
+DECLARE
+    _oid oid;
+    _parent oid;
+    _expr text;
+    _inf tstzrange := tstzrange('-infinity', 'infinity', '[]');
+    _dtrange tstzrange;
+BEGIN
+    _oid := partition_oid(_partition);
+    -- Leaves only, matching partitions_view: an intermediate partition has no
+    -- meaningful range of its own.
+    IF _oid IS NULL OR EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = _oid) THEN
+        RETURN;
+    END IF;
+
+    SELECT inhparent INTO _parent FROM pg_inherits WHERE inhrelid = _oid;
+
+    -- Partitions of items only. The SECURITY DEFINER functions below use this
+    -- to decide what they may alter, so any other relation must return nothing.
+    IF _parent IS NULL
+        OR (
+            _parent <> 'pgstac.items'::regclass
+            AND NOT EXISTS (
+                SELECT 1 FROM pg_inherits
+                WHERE inhrelid = _parent AND inhparent = 'pgstac.items'::regclass
+            )
+        )
+    THEN
+        RETURN;
+    END IF;
+
+    -- A partition of a sub-partitioned collection carries a datetime range
+    -- bound; its collection is on the parent. A direct partition of items
+    -- carries the collection itself.
+    IF _parent = 'pgstac.items'::regclass THEN
+        SELECT pg_get_expr(relpartbound, oid) INTO _expr FROM pg_class WHERE oid = _oid;
+    ELSE
+        SELECT pg_get_expr(relpartbound, oid) INTO _expr FROM pg_class WHERE oid = _parent;
+    END IF;
+
+    SELECT COALESCE(
+        constraint_tstzrange(pg_get_expr(relpartbound, oid)),
+        _inf
+    ) INTO _dtrange FROM pg_class WHERE oid = _oid;
+
+    RETURN QUERY SELECT
+        replace(replace(_expr, 'FOR VALUES IN (''', ''), ''')', ''),
+        _dtrange,
+        COALESCE(get_tstz_constraint(_oid, 'datetime'), _dtrange, _inf),
+        COALESCE(get_tstz_constraint(_oid, 'end_datetime'), _inf);
+END;
+$$ LANGUAGE PLPGSQL STABLE;
+
+
 CREATE OR REPLACE VIEW partition_sys_meta AS
 SELECT
     partition,
@@ -99,86 +179,47 @@ FROM
     pg_partition_tree('items')
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-    LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
     JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
     JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
     JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
     JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
-    JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
-    JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
 WHERE isleaf
 ;
 
+-- partition_sys_meta plus the statistics tracked alongside each partition.
 CREATE OR REPLACE VIEW partitions_view AS
 SELECT
-    (parse_ident(relid::text))[cardinality(parse_ident(relid::text))] as partition,
-    replace(
-        replace(
-            CASE WHEN level = 1 THEN partition_expr ELSE parent_partition_expr END,
-            'FOR VALUES IN (''',
-            ''
-        ),
-        ''')',
-        ''
-    ) AS collection,
-    level,
-    c.reltuples,
-    c.relhastriggers,
-    partition_dtrange,
-    COALESCE(
-        get_tstz_constraint(c.oid, 'datetime'),
-        partition_dtrange,
-        inf_range
-    ) as constraint_dtrange,
-    COALESCE(
-        get_tstz_constraint(c.oid, 'end_datetime'),
-        inf_range
-    ) as constraint_edtrange,
-    dtrange,
-    edtrange,
-    spatial,
-    last_updated
-FROM
-    pg_partition_tree('items')
-    JOIN pg_class c ON (relid::regclass = c.oid)
-    JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
-    LEFT JOIN pg_constraint edt ON (conrelid=c.oid AND contype='c')
-    JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
-    JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
-    JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
-    JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
-    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
-    JOIN LATERAL get_tstz_constraint(c.oid, 'datetime') as datetime_constraint ON TRUE
-    JOIN LATERAL get_tstz_constraint(c.oid, 'end_datetime') as end_datetime_constraint ON TRUE
-    LEFT JOIN pgstac.partition_stats USING (partition)
-WHERE isleaf
+    sm.*,
+    ps.dtrange,
+    ps.edtrange,
+    ps.spatial,
+    ps.last_updated
+FROM partition_sys_meta sm
+    LEFT JOIN pgstac.partition_stats ps USING (partition)
 ;
 
-CREATE MATERIALIZED VIEW partitions AS
+CREATE VIEW partitions AS
 SELECT * FROM partitions_view;
-CREATE UNIQUE INDEX ON partitions (partition);
-
-CREATE MATERIALIZED VIEW partition_steps AS
-SELECT
-    partition as name,
-    date_trunc('month',lower(partition_dtrange)) as sdate,
-    date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
-    FROM partitions_view WHERE partition_dtrange IS NOT NULL AND partition_dtrange != 'empty'::tstzrange
-    ORDER BY dtrange ASC
-;
 
 
-CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS VOID AS $$
+-- Returns TRUE if the stats update ran, FALSE if it was queued.
+CREATE OR REPLACE FUNCTION update_partition_stats_q(_partition text, istrigger boolean default false) RETURNS boolean AS $$
 DECLARE
 BEGIN
-    PERFORM run_or_queue(
+    RETURN run_or_queue(
         format('SELECT update_partition_stats(%L, %L);', _partition, istrigger)
     );
 END;
 $$ LANGUAGE PLPGSQL;
 
-CREATE OR REPLACE FUNCTION update_partition_stats(_partition text, istrigger boolean default false) RETURNS VOID AS $$
+-- _extent NULL follows pgstac.update_collection_extent; TRUE computes the
+-- spatial extent regardless, for callers that are about to read it.
+CREATE OR REPLACE FUNCTION update_partition_stats(
+    _partition text,
+    istrigger boolean default false,
+    _extent boolean default NULL
+) RETURNS VOID AS $$
 DECLARE
     dtrange tstzrange;
     edtrange tstzrange;
@@ -186,34 +227,87 @@ DECLARE
     cedtrange tstzrange;
     extent geometry;
     collection text;
+    pdtrange tstzrange;
+    auto_extent boolean := get_setting_bool('update_collection_extent');
+    do_extent boolean := COALESCE(_extent, auto_extent);
 BEGIN
+    -- Cannot be STRICT: _extent is three valued, and STRICT would skip the
+    -- body whenever it is NULL.
+    IF _partition IS NULL OR istrigger IS NULL THEN
+        RETURN;
+    END IF;
     RAISE NOTICE 'Updating stats for %.', _partition;
-    EXECUTE format(
-        $q$
-            SELECT
-                tstzrange(min(datetime), max(datetime),'[]'),
-                tstzrange(min(end_datetime), max(end_datetime), '[]')
-            FROM %I
-        $q$,
-        _partition
-    ) INTO dtrange, edtrange;
-    EXECUTE format('ANALYZE %I;', _partition);
-    extent := st_estimatedextent('pgstac', _partition, 'geometry');
-    RAISE DEBUG 'Estimated Extent: %', extent;
-    INSERT INTO partition_stats (partition, dtrange, edtrange, spatial, last_updated)
-        SELECT _partition, dtrange, edtrange, extent, now()
-        ON CONFLICT (partition) DO
-            UPDATE SET
-                dtrange=EXCLUDED.dtrange,
-                edtrange=EXCLUDED.edtrange,
-                spatial=EXCLUDED.spatial,
-                last_updated=EXCLUDED.last_updated
-    ;
 
-    SELECT
-        constraint_dtrange, constraint_edtrange, pv.collection
-        INTO cdtrange, cedtrange, collection
-    FROM partitions_view pv WHERE partition = _partition;
+    SELECT m.collection, m.partition_dtrange, m.constraint_dtrange, m.constraint_edtrange
+        INTO collection, pdtrange, cdtrange, cedtrange
+    FROM partition_catalog_meta(_partition) m;
+
+    -- A queued update can outlive the partition it names.
+    IF NOT FOUND THEN
+        RAISE NOTICE 'Partition % no longer exists, skipping stats update.', _partition;
+        RETURN;
+    END IF;
+
+    -- Taken before the partition is read. The constraint rebuild below needs
+    -- ACCESS EXCLUSIVE, and escalating to that mid-transaction deadlocks
+    -- against another session doing the same. SHARE UPDATE EXCLUSIVE conflicts
+    -- with itself but not with readers.
+    IF NOT istrigger THEN
+        EXECUTE format('LOCK TABLE %I IN SHARE UPDATE EXCLUSIVE MODE', _partition);
+    END IF;
+
+    -- The observed ranges feed the constraint tightening below and collection
+    -- extents. When neither will read them, only the partition's identity is
+    -- written, which is what keeps it visible to search.
+    IF NOT istrigger OR do_extent THEN
+        -- st_extent visits every geometry, so it is only run when wanted.
+        IF do_extent THEN
+            EXECUTE format(
+                $q$
+                    SELECT
+                        tstzrange(min(datetime), max(datetime),'[]'),
+                        tstzrange(min(end_datetime), max(end_datetime), '[]'),
+                        st_extent(geometry)::geometry
+                    FROM %I
+                $q$,
+                _partition
+            ) INTO dtrange, edtrange, extent;
+            RAISE DEBUG 'Extent: %', extent;
+        ELSE
+            EXECUTE format(
+                $q$
+                    SELECT
+                        tstzrange(min(datetime), max(datetime),'[]'),
+                        tstzrange(min(end_datetime), max(end_datetime), '[]')
+                    FROM %I
+                $q$,
+                _partition
+            ) INTO dtrange, edtrange;
+        END IF;
+
+        INSERT INTO partition_stats
+            (partition, collection, partition_dtrange, dtrange, edtrange, spatial, last_updated)
+            VALUES (_partition, collection, pdtrange, dtrange, edtrange, extent, now())
+            ON CONFLICT (partition) DO
+                UPDATE SET
+                    collection=EXCLUDED.collection,
+                    partition_dtrange=EXCLUDED.partition_dtrange,
+                    dtrange=EXCLUDED.dtrange,
+                    edtrange=EXCLUDED.edtrange,
+                    spatial=COALESCE(EXCLUDED.spatial, partition_stats.spatial),
+                    last_updated=EXCLUDED.last_updated
+        ;
+    ELSE
+        INSERT INTO partition_stats (partition, collection, partition_dtrange)
+            VALUES (_partition, collection, pdtrange)
+            ON CONFLICT (partition) DO UPDATE
+                SET collection = EXCLUDED.collection,
+                    partition_dtrange = EXCLUDED.partition_dtrange
+                WHERE
+                    partition_stats.collection IS DISTINCT FROM EXCLUDED.collection
+                    OR partition_stats.partition_dtrange IS DISTINCT FROM EXCLUDED.partition_dtrange
+        ;
+    END IF;
 
     RAISE NOTICE 'Checking if we need to modify constraints...';
     RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
@@ -227,10 +321,11 @@ BEGIN
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
     END IF;
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
+    -- auto_extent, not do_extent: a caller that passed _extent aggregates the
+    -- extent itself, and update_collection_extents would then be updating
+    -- collections from inside its own UPDATE of collections.
     RAISE NOTICE 'Checking if we need to update collection extents.';
-    IF get_setting_bool('update_collection_extent') THEN
+    IF auto_extent THEN
         RAISE NOTICE 'updating collection extent for %', collection;
         PERFORM run_or_queue(format($q$
             UPDATE collections
@@ -248,7 +343,8 @@ BEGIN
     END IF;
 
 END;
-$$ LANGUAGE PLPGSQL STRICT SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
+
 
 
 CREATE OR REPLACE FUNCTION partition_name( IN collection text, IN dt timestamptz, OUT partition_name text, OUT partition_range tstzrange) AS $$
@@ -286,10 +382,19 @@ $$ LANGUAGE PLPGSQL STABLE;
 CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
 DECLARE
     q text;
+    _oid oid := partition_oid(t);
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
+    IF _oid IS NULL THEN
         RETURN NULL;
     END IF;
+    -- Only partitions of items. This runs elevated, so without the check it
+    -- would alter any table pgstac_admin owns that the caller names.
+    IF NOT EXISTS (SELECT 1 FROM partition_catalog_meta(t)) THEN
+        RETURN NULL;
+    END IF;
+    -- Reduce to the bare name so the ALTER statements below quote it correctly
+    -- even when the caller passed a schema qualified name.
+    t := get_partition_name(_oid);
     FOR q IN SELECT FORMAT(
         $q$
             ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I;
@@ -297,21 +402,30 @@ BEGIN
         t,
         conname
     ) FROM pg_constraint
-        WHERE conrelid=t::regclass::oid AND contype='c'
+        WHERE conrelid=_oid AND contype='c'
     LOOP
         EXECUTE q;
     END LOOP;
     RETURN t;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION create_table_constraints(t text, _dtrange tstzrange, _edtrange tstzrange) RETURNS text AS $$
 DECLARE
     q text;
+    _oid oid := partition_oid(t);
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM partitions_view WHERE partition=t) THEN
+    IF _oid IS NULL THEN
         RETURN NULL;
     END IF;
+    -- Only partitions of items. This runs elevated, so without the check it
+    -- would alter any table pgstac_admin owns that the caller names.
+    IF NOT EXISTS (SELECT 1 FROM partition_catalog_meta(t)) THEN
+        RETURN NULL;
+    END IF;
+    -- Reduce to the bare name so the ALTER statements below quote it correctly
+    -- even when the caller passed a schema qualified name.
+    t := get_partition_name(_oid);
     RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
     IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
         q :=format(
@@ -382,10 +496,12 @@ BEGIN
             t
         );
     END IF;
-    PERFORM run_or_queue(q);
+    -- Run, not queued: the queue runner is not a definer, so queued DDL
+    -- executes as whoever drains it. Defer by queueing a call to this function.
+    EXECUTE q;
     RETURN t;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 
 CREATE OR REPLACE FUNCTION check_partition(
@@ -401,7 +517,6 @@ DECLARE
     _constraint_dtrange tstzrange;
     _constraint_edtrange tstzrange;
     q text;
-    deferrable_q text;
     err_context text;
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
@@ -432,7 +547,14 @@ BEGIN
         _partition_name := format('_items_%s', c.key);
     END IF;
 
-    SELECT * INTO pm FROM partition_sys_meta WHERE collection=_collection AND partition_dtrange @> _dtrange;
+    -- Constraint ranges are maintained asynchronously, so they come from the
+    -- catalog rather than partition_stats.
+    SELECT ps.partition, m.constraint_dtrange, m.constraint_edtrange
+        INTO pm
+    FROM partition_stats ps
+        JOIN LATERAL partition_catalog_meta(ps.partition) m ON TRUE
+    WHERE ps.collection = _collection AND ps.partition_dtrange @> _dtrange
+    LIMIT 1;
     IF FOUND THEN
         RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
         _constraint_edtrange :=
@@ -515,20 +637,38 @@ BEGIN
             RAISE INFO 'Error State:%', SQLSTATE;
             RAISE INFO 'Error Context:%', err_context;
     END;
+    -- The _constraint_ ranges are the union of the existing constraint and the
+    -- incoming batch, so they hold for rows already present as well as the ones
+    -- about to be added. Queueable: rebuilding validates the partition under an
+    -- ACCESS EXCLUSIVE lock.
+    PERFORM run_or_queue(format(
+        'SELECT create_table_constraints(%L, %L, %L);',
+        _partition_name,
+        _constraint_dtrange,
+        _constraint_edtrange
+    ));
     PERFORM maintain_partitions(_partition_name);
-    PERFORM update_partition_stats_q(_partition_name, true);
-    REFRESH MATERIALIZED VIEW partitions;
-    REFRESH MATERIALIZED VIEW partition_steps;
+    -- Search finds partitions through partition_stats, so the row has to exist
+    -- before this transaction commits. A queued stats update has not written it.
+    IF NOT update_partition_stats_q(_partition_name, true) THEN
+        INSERT INTO partition_stats (partition, collection, partition_dtrange)
+            VALUES (_partition_name, _collection, _partition_dtrange)
+            ON CONFLICT (partition) DO UPDATE
+                SET collection = EXCLUDED.collection,
+                    partition_dtrange = EXCLUDED.partition_dtrange
+                WHERE
+                    partition_stats.collection IS DISTINCT FROM EXCLUDED.collection
+                    OR partition_stats.partition_dtrange IS DISTINCT FROM EXCLUDED.partition_dtrange
+        ;
+    END IF;
     RETURN _partition_name;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 
 CREATE OR REPLACE FUNCTION repartition(_collection text, _partition_trunc text, triggered boolean DEFAULT FALSE) RETURNS text AS $$
 DECLARE
     c RECORD;
-    q text;
-    from_trunc text;
 BEGIN
     SELECT * INTO c FROM pgstac.collections WHERE id=_collection;
     IF NOT FOUND THEN
@@ -549,6 +689,7 @@ BEGIN
             $q$
                 CREATE TEMP TABLE changepartitionstaging ON COMMIT DROP AS SELECT * FROM %I;
                 DROP TABLE IF EXISTS %I CASCADE;
+                DELETE FROM partition_stats WHERE collection = %L;
                 WITH p AS (
                     SELECT
                         collection,
@@ -566,13 +707,14 @@ BEGIN
             $q$,
             concat('_items_', c.key),
             concat('_items_', c.key),
+            _collection,
             c.partition_trunc,
             c.partition_trunc
         );
     END IF;
     RETURN _collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION collections_trigger_func() RETURNS TRIGGER AS $$
 DECLARE

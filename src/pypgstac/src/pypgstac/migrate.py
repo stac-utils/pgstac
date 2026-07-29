@@ -1,4 +1,5 @@
 """Utilities to help migrate pgstac schema."""
+
 import glob
 import logging
 import os
@@ -36,7 +37,8 @@ class MigrationPath:
     def parse_filename(self, filename: str) -> List[str]:
         """Get version numbers from filename."""
         filename = os.path.splitext(os.path.basename(filename))[0].replace(
-            "pgstac.", "",
+            "pgstac.",
+            "",
         )
         return filename.split("-")
 
@@ -96,7 +98,7 @@ class MigrationPath:
 def get_sql(file: str) -> str:
     """Get sql from a file as a string."""
     sqlstrs = []
-    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev","unreleased",file)
+    file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
     file_handle: Any = open(fp)
 
@@ -118,7 +120,7 @@ class Migrate:
         if toversion is None:
             toversion = __version__
         files = []
-        if re.search(r"-dev$",toversion):
+        if re.search(r"-dev$", toversion):
             logger.info("using unreleased version")
             toversion = "unreleased"
 
@@ -126,7 +128,7 @@ class Migrate:
             map(
                 int,
                 [
-                    self.db.pg_version[i:i + 2]
+                    self.db.pg_version[i : i + 2]
                     for i in range(0, len(self.db.pg_version), 2)
                 ],
             ),
@@ -149,6 +151,7 @@ class Migrate:
 
         conn = self.db.connect()
 
+        queued = 0
         with conn.cursor() as cur:
             conn.autocommit = False
             for file in files:
@@ -159,6 +162,19 @@ class Migrate:
                 logger.debug(cur.rowcount)
 
             logger.debug(f"Database migrated to {toversion}")
+
+            # Inside the migration's transaction: querying after the commit
+            # below leaves this connection idle in transaction, holding locks.
+            # Two statements, not one guarded by CASE: query_queue does not
+            # exist in the versions a chain starts from, and names resolve at
+            # parse time, so even an unreachable reference aborts the
+            # migration.
+            cur.execute("SELECT to_regclass('pgstac.query_queue') IS NOT NULL;")
+            exists = cur.fetchone()
+            if exists and exists[0]:
+                cur.execute("SELECT count(*) FROM pgstac.query_queue;")
+                row = cur.fetchone()
+                queued = row[0] if row else 0
 
         newversion = self.db.version
         if conn is not None:
@@ -171,5 +187,14 @@ class Migrate:
                 )
 
         logger.debug(f"New Version: {newversion}")
+
+        # With pgstac.use_queue on, statistics and constraint maintenance are
+        # deferred, and nothing else reports that they are still pending.
+        if queued > 0:
+            logger.warning(
+                f"{queued} queries are queued after migration. "
+                "Run 'pypgstac runqueue' until it drains -- until then "
+                "partition statistics and constraints are stale.",
+            )
 
         return newversion

@@ -476,10 +476,21 @@ class Loader:
                         "Available modes are insert, ignore, upsert, and delsert."
                         f"You entered {insert_mode}.",
                     )
-                logger.debug("Updating Partition Stats")
+
+            # Outside the transaction above: this takes ACCESS EXCLUSIVE, and
+            # holding that alongside the load's EXCLUSIVE lock blocks readers
+            # for the combined window. Logged, not raised: the rows are
+            # committed and the retry wrapping this would re-COPY them. Only
+            # the observed ranges lag, not the identity columns search uses.
+            logger.debug("Updating Partition Stats")
+            try:
                 cur.execute("SELECT update_partition_stats_q(%s);", (partition.name,))
                 logger.debug(cur.statusmessage)
-                logger.debug(f"Rows affected: {cur.rowcount}")
+            except psycopg.Error as e:
+                logger.warning(
+                    f"Could not update partition stats for {partition.name}: {e}. "
+                    "Data was loaded; run update_partition_stats to refresh.",
+                )
         logger.debug(
             f"Copying data for {partition} took {time.perf_counter() - t} seconds",
         )
@@ -521,7 +532,7 @@ class Loader:
                             as end_datetime_range_min,
                         nullif(upper(constraint_edtrange),'infinity')
                             as end_datetime_range_max
-                    FROM partition_sys_meta WHERE partition=%s;
+                    FROM partition_catalog_meta(%s);
                     """,
                     [partition_name],
                 ),
