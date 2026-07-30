@@ -87,16 +87,18 @@ ALTER FUNCTION to_int COST 5000;
 ALTER FUNCTION to_tstz COST 5000;
 ALTER FUNCTION to_text_array COST 5000;
 
-ALTER FUNCTION update_partition_stats SECURITY DEFINER;
-ALTER FUNCTION partition_after_triggerfunc SECURITY DEFINER;
 ALTER FUNCTION drop_table_constraints SECURITY DEFINER;
 ALTER FUNCTION create_table_constraints SECURITY DEFINER;
 ALTER FUNCTION check_partition SECURITY DEFINER;
 ALTER FUNCTION repartition SECURITY DEFINER;
-ALTER FUNCTION where_stats SECURITY DEFINER;
-ALTER FUNCTION search_query SECURITY DEFINER;
-ALTER FUNCTION format_item SECURITY DEFINER;
 ALTER FUNCTION maintain_index SECURITY DEFINER;
+
+-- Elevated only where ownership of pgstac_admin's objects is required.
+-- Everything else relies on table privileges, which any role inheriting
+-- pgstac_ingest or pgstac_read already has.
+ALTER FUNCTION where_stats SECURITY INVOKER;
+ALTER FUNCTION search_query SECURITY INVOKER;
+ALTER FUNCTION format_item SECURITY INVOKER;
 
 GRANT USAGE ON SCHEMA pgstac to pgstac_read;
 GRANT ALL ON SCHEMA pgstac to pgstac_ingest;
@@ -109,6 +111,11 @@ GRANT EXECUTE ON FUNCTION item_by_id TO pgstac_read;
 GRANT EXECUTE ON FUNCTION get_item TO pgstac_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA pgstac TO pgstac_read;
 
+-- The caches maintained by where_stats, search_query and format_item.
+GRANT SELECT, INSERT, UPDATE ON search_wheres TO pgstac_read;
+GRANT SELECT, INSERT, UPDATE ON searches TO pgstac_read;
+GRANT SELECT, INSERT, UPDATE ON format_item_cache TO pgstac_read;
+
 
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgstac to pgstac_ingest;
 GRANT ALL ON ALL TABLES IN SCHEMA pgstac to pgstac_ingest;
@@ -120,7 +127,38 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
 
+-- PostgreSQL grants EXECUTE to PUBLIC on every new function, so each definer
+-- is revoked and granted back to the roles that need it. Keep in step with the
+-- ALTER FUNCTION ... SECURITY DEFINER statements above; the pgtap suite fails
+-- if a definer is left PUBLIC executable.
+REVOKE ALL PRIVILEGES ON FUNCTION
+    drop_table_constraints,
+    create_table_constraints,
+    check_partition,
+    repartition,
+    maintain_index,
+    delete_collection
+FROM public;
+
+GRANT EXECUTE ON FUNCTION
+    drop_table_constraints,
+    create_table_constraints,
+    check_partition,
+    repartition,
+    maintain_index,
+    delete_collection
+TO pgstac_ingest;
+
 RESET ROLE;
 
 SET ROLE pgstac_ingest;
-SELECT update_partition_stats_q(partition) FROM partitions_view;
+
+-- Search finds partitions through partition_stats, so this must be synchronous
+-- rather than queued.
+SELECT sync_partition_stats();
+
+-- Repairs observed ranges and CHECK constraints for every partition, ordered
+-- by partition as every other writer of these rows is. The most expensive part
+-- of an install on a large catalog: run with pgstac.use_queue on (pypgstac
+-- --usequeue) and drain with pypgstac runqueue to keep it off the migration.
+SELECT update_partition_stats_q(partition) FROM partitions_view ORDER BY partition;

@@ -55,10 +55,18 @@ DECLARE
     mind timestamptz;
     maxd timestamptz;
     extent jsonb;
+    _partition text;
 BEGIN
     IF runupdate THEN
-        PERFORM update_partition_stats_q(partition)
-        FROM partitions_view WHERE collection=_collection;
+        -- Not queued: the aggregate below reads what this writes. Ordered by
+        -- partition, as every other multi-partition writer is.
+        FOR _partition IN
+            SELECT partition FROM partition_stats
+            WHERE collection=_collection
+            ORDER BY partition
+        LOOP
+            PERFORM update_partition_stats(_partition, false, true);
+        END LOOP;
     END IF;
     SELECT
         min(lower(dtrange)),
@@ -68,7 +76,7 @@ BEGIN
         mind,
         maxd,
         geom_extent
-    FROM partitions_view
+    FROM partition_stats
     WHERE collection=_collection;
 
     IF geom_extent IS NOT NULL AND mind IS NOT NULL AND maxd IS NOT NULL THEN
@@ -85,3 +93,34 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
+
+
+-- Reconcile partition_stats against the partition tree: an identity row for
+-- every partition, and no rows for partitions that are gone. dtrange, edtrange
+-- and spatial are left alone; update_partition_stats maintains those. Used by
+-- the idempotent install and as a repair path.
+CREATE OR REPLACE FUNCTION sync_partition_stats() RETURNS VOID AS $$
+BEGIN
+    -- Ordered by partition, as every other writer of these rows is.
+    INSERT INTO partition_stats (partition, collection, partition_dtrange)
+        SELECT partition, collection, partition_dtrange FROM partitions_view
+        ORDER BY partition
+        ON CONFLICT (partition) DO UPDATE
+            SET collection = EXCLUDED.collection,
+                partition_dtrange = EXCLUDED.partition_dtrange
+            WHERE
+                partition_stats.collection IS DISTINCT FROM EXCLUDED.collection
+                OR partition_stats.partition_dtrange IS DISTINCT FROM EXCLUDED.partition_dtrange
+    ;
+
+    DELETE FROM partition_stats ps
+    WHERE ps.partition IN (
+        SELECT partition FROM partition_stats stale
+        WHERE NOT EXISTS (
+            SELECT 1 FROM partitions_view pv WHERE pv.partition = stale.partition
+        )
+        ORDER BY partition
+        FOR UPDATE
+    );
+END;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;

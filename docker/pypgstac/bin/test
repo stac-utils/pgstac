@@ -241,6 +241,46 @@ EOSQL
     echo "pg_dump/pg_restore test PASSED!"
 }
 
+function test_migrations_with_data(){
+    # test_migrations starts from an empty 0.3.0 database, so nothing there
+    # exercises migrating a database that already holds collections, items and
+    # partitions -- which is what every real upgrade is.
+    local _prev_pgdatabase="${PGDATABASE:-}"
+    psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
+DROP DATABASE IF EXISTS pgstac_test_migration_data WITH (force);
+CREATE DATABASE pgstac_test_migration_data;
+ALTER DATABASE pgstac_test_migration_data SET search_path to pgstac, public;
+ALTER DATABASE pgstac_test_migration_data SET client_min_messages to $CLIENTMESSAGES;
+EOSQL
+    export PGDATABASE=pgstac_test_migration_data
+
+    local PREVIOUS
+    PREVIOUS=$(find $SRCDIR/pgstac/migrations -name "pgstac.*.sql" \
+        | sed -En 's/^.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' \
+        | sort -Vr | head -1)
+    echo "Populating a $PREVIOUS database, then migrating it."
+
+    psql -X -q -v ON_ERROR_STOP=1 -f $SRCDIR/pgstac/migrations/pgstac.$PREVIOUS.sql >/dev/null
+    psql -X -q -v ON_ERROR_STOP=1 -f $SRCDIR/pgstac/tests/migration/snapshot.sql
+
+    cd $SRCDIR/pypgstac
+    source venv/bin/activate
+    pypgstac migrate
+    pypgstac --version
+
+    echo "Verifying nothing was lost."
+    psql -X -q -v ON_ERROR_STOP=1 -f $SRCDIR/pgstac/tests/migration/verify.sql
+    local _rc=$?
+
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_migration_data WITH (force);" postgres
+    export PGDATABASE="${_prev_pgdatabase}"
+    if [ $_rc -ne 0 ]; then
+        echo "***MIGRATION WITH DATA FAILED***"
+        return 1
+    fi
+    echo "Migration with data PASSED!"
+}
+
 function test_migrations(){
     psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_migration WITH (force);
@@ -383,6 +423,7 @@ fi
 [ $BASICSQL -eq 1 ] && test_basicsql
 [ $PYPGSTAC -eq 1 ] && test_pypgstac
 [ $MIGRATIONS -eq 1 ] && test_migrations
+[ $MIGRATIONS -eq 1 ] && test_migrations_with_data
 [ $PGDUMP -eq 1 ] && test_pgdump
 
 exit 0

@@ -28,6 +28,14 @@ To grant pgstac permissions to a current postgresql user:
 GRANT pgstac_read TO <user>;
 ```
 
+#### PostGIS must be installed in `public`
+
+PgSTAC references PostGIS functions without schema qualification and pins its own
+`search_path` to `pgstac, public`, so the postgis extension has to be reachable from
+there. Installing PostGIS into its own schema (`CREATE EXTENSION postgis SCHEMA postgis`)
+is not supported. Installing PgSTAC against such a database now fails immediately with
+a clear error rather than producing a partially created schema.
+
 #### PgSTAC Search Path
 The search_path can be set at the database level or role level or by setting within the current session. The search_path is already set if you are directly using one of the pgstac users. If you are not logging in directly as one of the pgstac users, you will need to set the search_path by adding it to the search_path of the user you are using:
 ```sql
@@ -188,6 +196,26 @@ SELECT cron.schedule('0 * * * *', 'CALL validate_constraints();');
 SELECT cron.schedule('10, * * * *', 'CALL analyze_items();');
 ```
 
+#### Migrating a large catalog
+
+The last step of every install and migration recalculates statistics and CHECK
+constraints for every partition. On a catalog with many partitions this is the most
+expensive part of the migration and it holds locks while it runs.
+
+To keep that work off the migration itself, migrate with the queue enabled and drain it
+afterwards:
+
+```bash
+pypgstac --usequeue migrate
+pypgstac runqueue   # repeat until it reports nothing left to do
+```
+
+`--usequeue` is a global flag, so it goes before the subcommand. Search is correct as
+soon as the migration commits — partition visibility is always written synchronously —
+but until the queue is drained the observed datetime ranges and the CHECK constraints
+used for partition pruning are stale. `check_pgstac_settings()` warns while anything is
+still queued, and `runqueue` must be run as a role with `pgstac_admin`.
+
 ### System Checks
 
 #### System and pgSTAC Settings
@@ -260,7 +288,7 @@ ALTER DATABASE target_database SET search_path TO pgstac, public;
 - Always use `--schema=pgstac` on `pg_dump` to capture only the pgstac schema.
 - Do **not** use `pg_restore` directly — use `pgstac_restore` instead to handle the search_path issue.
 - After restoring, you may want to run `ANALYZE` on the restored database to update planner statistics.
-- Materialized views (`partitions`, `partition_steps`) are included in the dump. If you need to refresh them after restore, run `REFRESH MATERIALIZED VIEW pgstac.partitions; REFRESH MATERIALIZED VIEW pgstac.partition_steps;`.
+- Partition metadata lives in the `partition_stats` table and is included in the dump. If partitions and `partition_stats` ever get out of sync, `SELECT pgstac.sync_partition_stats();` reconciles them against the partition tree.
 
 ### Notification Triggers
 

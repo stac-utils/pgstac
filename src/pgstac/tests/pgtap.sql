@@ -17,12 +17,13 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
-SELECT plan(229);
+SELECT plan(241);
 --SELECT * FROM no_plan();
 
 -- Run the tests.
 
 -- Core
+\i tests/pgtap/000_security.sql
 \i tests/pgtap/001_core.sql
 \i tests/pgtap/001a_jsonutils.sql
 \i tests/pgtap/001b_cursorutils.sql

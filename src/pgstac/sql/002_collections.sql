@@ -49,13 +49,16 @@ CREATE OR REPLACE FUNCTION upsert_collection(data jsonb) RETURNS VOID AS $$
 $$ LANGUAGE SQL SET SEARCH_PATH TO pgstac,public;
 
 
+-- SECURITY DEFINER: the delete trigger drops partition tables, which are owned
+-- by pgstac_admin.
 CREATE OR REPLACE FUNCTION delete_collection(_id text) RETURNS VOID AS $$
-DECLARE
-    out collections%ROWTYPE;
 BEGIN
-    DELETE FROM collections WHERE id = _id RETURNING * INTO STRICT out;
+    DELETE FROM collections WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Collection % does not exist', _id USING ERRCODE = 'no_data_found';
+    END IF;
 END;
-$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac,public;
 
 
 CREATE OR REPLACE FUNCTION get_collection(id text) RETURNS jsonb AS $$
@@ -73,15 +76,14 @@ CREATE OR REPLACE FUNCTION collection_delete_trigger_func() RETURNS TRIGGER AS $
 DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
 BEGIN
+    -- Tables before rows: check_partition takes these locks in the same order,
+    -- and the reverse deadlocks against a concurrent partition create.
     EXECUTE format($q$
-        DELETE FROM partition_stats WHERE partition IN (
-            SELECT partition FROM partition_sys_meta
-            WHERE collection=%L
-        );
         DROP TABLE IF EXISTS %I CASCADE;
+        DELETE FROM partition_stats WHERE collection=%L;
         $q$,
-        OLD.id,
-        collection_base_partition
+        collection_base_partition,
+        OLD.id
     );
     RETURN OLD;
 END;

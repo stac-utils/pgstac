@@ -28,13 +28,18 @@ SELECT lives_ok(
 );
 
 RESET pgstac.context;
-SELECT is_definer('update_partition_stats');
-SELECT is_definer('partition_after_triggerfunc');
 SELECT is_definer('drop_table_constraints');
 SELECT is_definer('create_table_constraints');
 SELECT is_definer('check_partition');
 SELECT is_definer('repartition');
-SELECT is_definer('where_stats');
-SELECT is_definer('search_query');
-SELECT is_definer('format_item');
 SELECT is_definer('maintain_index');
+SELECT is_definer('delete_collection');
+
+-- Everything that does not need ownership of pgstac_admin's objects runs as
+-- the invoker and relies on table privileges instead.
+SELECT isnt_definer('update_partition_stats');
+SELECT isnt_definer('partition_after_triggerfunc');
+SELECT isnt_definer('sync_partition_stats');
+SELECT isnt_definer('where_stats');
+SELECT isnt_definer('search_query');
+SELECT isnt_definer('format_item');

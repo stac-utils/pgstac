@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [v0.9.12]
+
+### Fixed
+- Ingest and search contending on the partition materialized views, which every write
+  refreshed and every search read.
+- Deadlocks between concurrent writers, and between writers and collection deletes.
+- Searches serializing on the statistics cache whenever `context` is enabled.
+- Privilege handling across the `SECURITY DEFINER` functions. Only the operations that
+  need ownership of pgstac's own objects are still elevated; those are no longer
+  executable by `PUBLIC`, no longer run SQL supplied by their caller, and act only on
+  partitions of `items`.
+- `delete_collection` failing for `pgstac_ingest`.
+- Partitions widened through `items_staging` losing the CHECK constraints used for
+  partition pruning.
+- `update_collection_extents()` overwriting a valid extent, and deriving it from sampled
+  statistics rather than from the data.
+
+### Changed
+- Partition metadata is tracked on `partition_stats` instead of being derived by walking
+  the partition tree on the write path. `partition_steps` is removed and `partitions` is
+  now a plain view.
+- `update_partition_stats` does only the work its caller will read and no longer runs
+  `ANALYZE`; planner statistics come from autovacuum or `analyze_items()`.
+- `pypgstac` updates partition statistics after the load transaction commits rather than
+  while it still holds the load's lock.
+- `maintain_index()` takes the identity of the index to build rather than the statement
+  to run.
+- PostGIS must be installed in the `public` schema; the install now fails clearly if it
+  is not.
+
+### Added
+- Concurrency tests covering both ingest paths — the SQL staging tables and the
+  `pypgstac` loader — asserting on the server's deadlock counter rather than on raised
+  exceptions, which the loader's retries would otherwise hide.
+- Security tests asserting which functions are elevated, who may execute them, and that
+  they act only on partitions of `items`.
+- Tests for the partition metadata search relies on, and for the CHECK constraints that
+  make partition pruning work.
+- A migration test that populates a database on the previous release, migrates it, and
+  verifies nothing was lost and that ingest and search still behave.
+
 ## [v0.9.11]
 
 ### Fixed
@@ -616,6 +657,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.9.12]: https://github.com/stac-utils/pgstac/compare/v0.9.11...v0.9.12
 [v0.9.11]: https://github.com/stac-utils/pgstac/compare/v0.9.10...v0.9.11
 [v0.9.10]: https://github.com/stac-utils/pgstac/compare/v0.9.9...v0.9.10
 [v0.9.9]: https://github.com/stac-utils/pgstac/compare/v0.9.8...v0.9.9

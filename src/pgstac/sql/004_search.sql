@@ -23,7 +23,16 @@ BEGIN
             ) j
     ),
     parts AS (
-        SELECT sdate, edate FROM t JOIN partition_steps ON (t.p = name)
+        -- = ANY(array) uses the partition_stats primary key; the planner
+        -- cannot estimate jsonb_path_query, so a join plans as a full scan.
+        SELECT
+            date_trunc('month', lower(partition_dtrange)) as sdate,
+            date_trunc('month', upper(partition_dtrange)) + '1 month'::interval as edate
+        FROM partition_stats
+        WHERE
+            partition = ANY (ARRAY(SELECT p FROM t))
+            AND partition_dtrange IS NOT NULL
+            AND partition_dtrange != 'empty'::tstzrange
     ),
     times AS (
         SELECT sdate FROM parts
@@ -542,7 +551,6 @@ DECLARE
     t timestamptz;
     i interval;
     explain_json jsonb;
-    partitions text[];
     sw search_wheres%ROWTYPE;
     inwhere_hash text := md5(inwhere);
     _context text := lower(context(conf));
@@ -563,34 +571,52 @@ BEGIN
         RETURN sw;
     END IF;
 
-    -- Get any stats that we have.
-    IF NOT ro THEN
-        -- If there is a lock where another process is
-        -- updating the stats, wait so that we don't end up calculating a bunch of times.
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
-    ELSE
-        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
-    END IF;
+    -- Unlocked read. A fresh hit only bumps bookkeeping counters, and that is
+    -- the common case when identical searches run concurrently.
+    SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash;
 
-    -- If there is a cached row, figure out if we need to update
+    -- Within ttl: bump usage counters and return. The bump skips locked rows so
+    -- identical searches do not serialize; a missed increment is harmless.
+    -- sw.id, not "sw IS NOT NULL": a composite is only IS NOT NULL when every
+    -- field is, and search_wheres.partitions is never populated.
     IF
-        sw IS NOT NULL
+        sw.id IS NOT NULL
         AND sw.statslastupdated IS NOT NULL
         AND sw.total_count IS NOT NULL
         AND now() - sw.statslastupdated <= _stats_ttl
     THEN
-        -- we have a cached row with data that is within our ttl
         RAISE DEBUG 'Stats present in table and lastupdated within ttl: %', sw;
         IF NOT ro THEN
-            RAISE DEBUG 'Updating search_wheres only bumping lastused and usecount';
+            UPDATE search_wheres SET
+                lastused = now(),
+                usecount = search_wheres.usecount + 1
+            WHERE id = (
+                SELECT id FROM search_wheres
+                WHERE md5(_where) = inwhere_hash
+                FOR UPDATE SKIP LOCKED
+            );
+        END IF;
+        RAISE DEBUG 'Returning cached counts. %', sw;
+        RETURN sw;
+    END IF;
+
+    -- Missing or stale, so lock the row to compute once, then re-check
+    -- freshness in case another session finished while we waited.
+    IF NOT ro THEN
+        SELECT * INTO sw FROM search_wheres WHERE md5(_where)=inwhere_hash FOR UPDATE;
+        IF
+            sw.statslastupdated IS NOT NULL
+            AND sw.total_count IS NOT NULL
+            AND now() - sw.statslastupdated <= _stats_ttl
+        THEN
+            RAISE DEBUG 'Another process refreshed stats while we waited: %', sw;
             UPDATE search_wheres SET
                 lastused = now(),
                 usecount = search_wheres.usecount + 1
             WHERE md5(_where) = inwhere_hash
             RETURNING * INTO sw;
+            RETURN sw;
         END IF;
-        RAISE DEBUG 'Returning cached counts. %', sw;
-        RETURN sw;
     END IF;
 
     -- Calculate estimated cost and rows
@@ -603,8 +629,8 @@ BEGIN
         RAISE DEBUG 'Time for just the explain: %', clock_timestamp() - t;
         i := clock_timestamp() - t;
 
-        sw.estimated_count := explain_json->0->'Plan'->'Plan Rows';
-        sw.estimated_cost := explain_json->0->'Plan'->'Total Cost';
+        sw.estimated_count := (explain_json->0->'Plan'->>'Plan Rows')::bigint;
+        sw.estimated_cost := (explain_json->0->'Plan'->>'Total Cost')::float;
         sw.time_to_estimate := extract(epoch from i);
     END IF;
 

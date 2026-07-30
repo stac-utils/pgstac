@@ -29,9 +29,6 @@ SELECT 5
 CREATE TEMP TABLE sp_partitions_view AS
 SELECT * FROM partitions_view WHERE collection='pgstactest-searchpath' ORDER BY partition;
 SELECT 5
-CREATE TEMP TABLE sp_partition_steps AS
-SELECT * FROM partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta) ORDER BY name;
-SELECT 5
 -- Verify we have data
 SELECT count(*) > 0 AS has_partition_sys_meta FROM sp_partition_sys_meta;
  t
@@ -43,9 +40,6 @@ SELECT count(*) > 0 AS has_partitions FROM sp_partitions;
  t
 
 SELECT count(*) > 0 AS has_partitions_view FROM sp_partitions_view;
- t
-
-SELECT count(*) > 0 AS has_partition_steps FROM sp_partition_steps;
  t
 
 -- Now remove pgstac from search_path
@@ -124,25 +118,6 @@ SELECT count(*) = 0 AS partitions_view_data_match FROM (
     (SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM sp_partitions_view
      EXCEPT
      SELECT partition, collection, partition_dtrange, constraint_dtrange, constraint_edtrange, dtrange, edtrange FROM pgstac.partitions_view WHERE collection='pgstactest-searchpath')
-) diff;
- t
-
--- partition_steps: compare counts and key columns
-SELECT (
-    SELECT count(*) FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta)
-) = (
-    SELECT count(*) FROM sp_partition_steps
-) AS partition_steps_count_match;
- t
-
-SELECT count(*) = 0 AS partition_steps_data_match FROM (
-    (SELECT name, sdate, edate FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta)
-     EXCEPT
-     SELECT name, sdate, edate FROM sp_partition_steps)
-    UNION ALL
-    (SELECT name, sdate, edate FROM sp_partition_steps
-     EXCEPT
-     SELECT name, sdate, edate FROM pgstac.partition_steps WHERE name IN (SELECT partition FROM sp_partition_sys_meta))
 ) diff;
  t
 
