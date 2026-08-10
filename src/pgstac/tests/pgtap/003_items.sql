@@ -861,3 +861,201 @@ SELECT results_eq(
 );
 
 SELECT delete_item('pgstac-test-range-datetime', 'pgstac-test-collection');
+
+-- Partition statistics must stay conservative on the latency-sensitive SQL
+-- write path. After an exact tighten, items_staging does not provide a batch
+-- spatial envelope, so a later write must invalidate the exact extent rather
+-- than leave a too-small bound that partition_bounds() can prune.
+INSERT INTO collections (content)
+VALUES ('{"id":"pgstac-test-partition-stats-write"}'::jsonb)
+ON CONFLICT DO NOTHING;
+
+SELECT create_item('{
+  "id": "pgstac-test-partition-stats-base",
+  "collection": "pgstac-test-partition-stats-write",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [0, 0]},
+  "bbox": [0, 0, 0, 0],
+  "links": [], "assets": {},
+  "properties": {"datetime": "2020-01-01T00:00:00Z"}
+}'::jsonb);
+
+SELECT tighten_partition_stats((
+    SELECT partition FROM partition_sys_meta
+    WHERE collection = 'pgstac-test-partition-stats-write'
+));
+
+SELECT create_item('{
+  "id": "pgstac-test-partition-stats-east",
+  "collection": "pgstac-test-partition-stats-write",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [40, 10]},
+  "bbox": [40, 10, 40, 10],
+  "links": [], "assets": {},
+  "properties": {"datetime": "2020-01-01T00:00:00Z"}
+}'::jsonb);
+
+SELECT ok(
+    (SELECT spatial IS NULL FROM partition_stats
+     WHERE collection = 'pgstac-test-partition-stats-write'),
+    'SQL insert invalidates an exact spatial bound when the batch extent is unknown'
+);
+
+SELECT tighten_partition_stats((
+    SELECT partition FROM partition_sys_meta
+    WHERE collection = 'pgstac-test-partition-stats-write'
+));
+
+SELECT update_item('{
+  "id": "pgstac-test-partition-stats-base",
+  "collection": "pgstac-test-partition-stats-write",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [-40, -10]},
+  "bbox": [-40, -10, -40, -10],
+  "links": [], "assets": {},
+  "properties": {"datetime": "2020-01-01T00:00:00Z"}
+}'::jsonb);
+
+SELECT ok(
+    (SELECT spatial IS NULL FROM partition_stats
+     WHERE collection = 'pgstac-test-partition-stats-write'),
+    'SQL update invalidates an exact spatial bound when the batch extent is unknown'
+);
+
+SELECT delete_collection('pgstac-test-partition-stats-write');
+
+-- DELETE only narrows an envelope, so it can remain off the synchronous stats
+-- path. It must still make the partition discoverable by deferred maintenance,
+-- including when the last item is removed.
+INSERT INTO collections (content)
+VALUES ('{"id":"pgstac-test-partition-stats-delete"}'::jsonb)
+ON CONFLICT DO NOTHING;
+
+SELECT create_item('{
+  "id": "pgstac-test-partition-stats-delete-only",
+  "collection": "pgstac-test-partition-stats-delete",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [1, 1]},
+  "bbox": [1, 1, 1, 1],
+  "links": [], "assets": {},
+  "properties": {"datetime": "2024-01-01T00:00:00Z"}
+}'::jsonb);
+
+SELECT tighten_partition_stats((
+    SELECT partition FROM partition_sys_meta
+    WHERE collection = 'pgstac-test-partition-stats-delete'
+));
+SELECT delete_item(
+    'pgstac-test-partition-stats-delete-only',
+    'pgstac-test-partition-stats-delete'
+);
+SELECT tighten_dirty_partition_stats(NULL);
+
+SELECT ok(
+    (
+        SELECT
+            n = 0
+            AND isempty(dtrange)
+            AND isempty(edtrange)
+            AND spatial IS NULL
+            AND NOT dirty
+            AND NOT EXISTS (
+                SELECT 1
+                FROM partition_stats_delete_queue q
+                WHERE q.partition = ps.partition
+            )
+        FROM partition_stats ps
+        WHERE ps.collection = 'pgstac-test-partition-stats-delete'
+    ),
+    'deferred tightening makes last-item DELETE partition statistics exact'
+);
+
+SELECT delete_collection('pgstac-test-partition-stats-delete');
+
+-- The Rust loader commits prepare_partition_for_load before its later
+-- binary-COPY/flush transaction. Reproduce a tightener in that window: flush
+-- must re-establish conservative metadata in its own transaction.
+INSERT INTO collections (content)
+VALUES ('{"id":"pgstac-test-partition-stats-flush"}'::jsonb)
+ON CONFLICT DO NOTHING;
+
+SELECT create_item('{
+  "id": "pgstac-test-partition-stats-flush-base",
+  "collection": "pgstac-test-partition-stats-flush",
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "geometry": {"type": "Point", "coordinates": [0, 0]},
+  "bbox": [0, 0, 0, 0],
+  "links": [], "assets": {},
+  "properties": {"datetime": "2020-01-01T00:00:00Z"}
+}'::jsonb);
+
+SELECT tighten_partition_stats((
+    SELECT partition FROM partition_sys_meta
+    WHERE collection = 'pgstac-test-partition-stats-flush'
+));
+
+SELECT * FROM prepare_partition_for_load(
+    'pgstac-test-partition-stats-flush',
+    '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z',
+    '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z',
+    40, 10, 40, 10,
+    1
+);
+
+SELECT tighten_partition_stats((
+    SELECT partition FROM partition_sys_meta
+    WHERE collection = 'pgstac-test-partition-stats-flush'
+));
+
+DO $$
+DECLARE
+    staging_table text;
+    outside_item jsonb := '{
+      "id": "pgstac-test-partition-stats-flush-outside",
+      "collection": "pgstac-test-partition-stats-flush",
+      "type": "Feature",
+      "stac_version": "1.0.0",
+      "geometry": {"type": "Point", "coordinates": [40, 10]},
+      "bbox": [40, 10, 40, 10],
+      "links": [], "assets": {},
+      "properties": {"datetime": "2025-01-01T00:00:00Z"}
+    }'::jsonb;
+BEGIN
+    staging_table := make_binary_staging();
+    EXECUTE format(
+        'INSERT INTO %I SELECT * FROM items_staging_dehydrate(ARRAY[$1])',
+        staging_table
+    ) USING outside_item;
+    PERFORM flush_items_staging_binary(staging_table, 'error');
+END;
+$$;
+
+SELECT ok(
+    (
+        SELECT
+            ps.dirty
+            AND ps.n >= actual.n
+            AND ps.dtrange @> actual.dtrange
+            AND ps.edtrange @> actual.edtrange
+            AND (ps.spatial IS NULL OR ST_Covers(ps.spatial, actual.spatial))
+        FROM partition_stats ps
+        CROSS JOIN LATERAL (
+            SELECT
+                count(*) AS n,
+                tstzrange(min(datetime), max(datetime), '[]') AS dtrange,
+                tstzrange(min(end_datetime), max(end_datetime), '[]') AS edtrange,
+                ST_SetSRID(ST_Extent(geometry)::geometry, 4326) AS spatial
+            FROM items
+            WHERE collection = 'pgstac-test-partition-stats-flush'
+        ) actual
+        WHERE ps.collection = 'pgstac-test-partition-stats-flush'
+    ),
+    'binary flush re-establishes conservative stats after intervening tightening'
+);
+
+SELECT delete_collection('pgstac-test-partition-stats-flush');

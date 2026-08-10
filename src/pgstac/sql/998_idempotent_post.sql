@@ -157,7 +157,12 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 -- envelope-narrowing direct write structurally impossible. New partitions are created SELECT-only for
 -- pgstac_ingest by check_partition; the items parent is revoked here. Staging tables (items_staging*) stay
 -- writable so the SQL-only ingest path can COPY into them.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragments FROM pgstac_ingest;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON
+    items,
+    partition_stats,
+    partition_stats_delete_queue,
+    item_fragments
+FROM pgstac_ingest;
 -- item_field_registry is the one exception to the wall: the loader WIDENS it directly with an add-only
 -- INSERT ... ON CONFLICT DO UPDATE (no SD function), so INSERT + UPDATE stay granted. DELETE/TRUNCATE remain
 -- revoked, so even a direct write cannot NARROW the registry — INV-1 (registry is a superset of the data)

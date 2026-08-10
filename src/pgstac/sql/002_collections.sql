@@ -163,12 +163,17 @@ DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
 BEGIN
     EXECUTE format($q$
+        DELETE FROM partition_stats_delete_queue WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
         DELETE FROM partition_stats WHERE partition IN (
             SELECT partition FROM partition_sys_meta
             WHERE collection=%L
         );
         DROP TABLE IF EXISTS %I CASCADE;
         $q$,
+        OLD.id,
         OLD.id,
         collection_base_partition
     );

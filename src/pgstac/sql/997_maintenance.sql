@@ -1,8 +1,10 @@
 
--- tighten_dirty_partition_stats: recompute the exact envelope + row count for dirty partitions (oldest
--- first), clearing dirty. Run off-hours (pg_cron or the maintenance CLI). Optional: a wide envelope only
--- over-includes a partition in search, so skipping it never loses rows. `_limit` caps the batch (NULL =
--- all dirty); returns the number of partitions tightened.
+-- tighten_dirty_partition_stats: recompute the exact envelope + row count for partitions widened by
+-- ingest or queued by DELETE. Choose the oldest `_limit` candidates, then acquire their advisory locks in
+-- collection/partition order so concurrent multi-partition ingest follows the same lock order. Run
+-- off-hours (pg_cron or the maintenance CLI). Optional: a wide envelope only over-includes a partition in
+-- search, so skipping it never loses rows. `_limit` caps the batch (NULL = all pending); returns the number
+-- of partitions tightened.
 --
 -- pg_cron example (operators install this themselves):
 --   SELECT cron.schedule('pgstac-tighten', '*/15 * * * *',
@@ -14,10 +16,21 @@ DECLARE
     _count int := 0;
 BEGIN
     FOR _part IN
-        SELECT partition FROM pgstac.partition_stats
-        WHERE dirty
-        ORDER BY last_updated NULLS FIRST
-        LIMIT _limit
+        SELECT candidate.partition
+        FROM (
+            SELECT ps.partition, ps.collection
+            FROM pgstac.partition_stats ps
+            WHERE
+                ps.dirty
+                OR EXISTS (
+                    SELECT 1
+                    FROM pgstac.partition_stats_delete_queue q
+                    WHERE q.partition = ps.partition
+                )
+            ORDER BY ps.last_updated NULLS FIRST
+            LIMIT _limit
+        ) candidate
+        ORDER BY candidate.collection, candidate.partition
     LOOP
         PERFORM pgstac.tighten_partition_stats(_part);
         _count := _count + 1;
@@ -407,6 +420,12 @@ BEGIN
     -- extent would be left uncovered (search would prune + miss it). Same lock check_partition uses, so
     -- tighten serializes with ingest into this partition only.
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
+
+    -- Acknowledge only DELETE work visible before the exact scan. Each concurrent DELETE appends an
+    -- independent row, so one that commits after this statement remains pending for the next sweep. If
+    -- the scan or stats write fails, this DELETE rolls back with the rest of the transaction.
+    DELETE FROM partition_stats_delete_queue
+    WHERE partition = _partition;
 
     EXECUTE format(
         $q$
