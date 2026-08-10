@@ -112,6 +112,17 @@ CREATE TABLE IF NOT EXISTS items_deleted_log (
 );
 CREATE INDEX IF NOT EXISTS items_deleted_log_deleted_at_idx ON items_deleted_log (deleted_at);
 
+-- Append-only work queue for partitions whose exact stats may have become too
+-- wide after DELETE. Keep this separate from partition_stats: the AFTER DELETE
+-- trigger already holds item-row locks, so updating/locking partition_stats
+-- here would invert the check_partition lock order used by ingest. Tightening
+-- captures and removes only queue rows visible before its exact table scan.
+CREATE TABLE IF NOT EXISTS partition_stats_delete_queue (
+    partition text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS partition_stats_delete_queue_partition_idx
+    ON partition_stats_delete_queue (partition);
+
 -- Field registry: tracks which JSON paths exist in each collection (for queryables)
 CREATE TABLE IF NOT EXISTS item_field_registry (
     collection text NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -216,22 +227,28 @@ EXECUTE FUNCTION items_touch_triggerfunc();
 
 CREATE OR REPLACE FUNCTION items_delete_log_trigger() RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO items_deleted_log (
-        item_id,
-        collection,
-        partition,
-        datetime,
-        end_datetime,
-        item_hash
+    WITH logged AS (
+        INSERT INTO items_deleted_log (
+            item_id,
+            collection,
+            partition,
+            datetime,
+            end_datetime,
+            item_hash
+        )
+        SELECT
+            old_rows.id,
+            old_rows.collection,
+            (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+            old_rows.datetime,
+            old_rows.end_datetime,
+            old_rows.item_hash
+        FROM old_rows
+        RETURNING partition
     )
-    SELECT
-        old_rows.id,
-        old_rows.collection,
-        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
-        old_rows.datetime,
-        old_rows.end_datetime,
-        old_rows.item_hash
-    FROM old_rows;
+    INSERT INTO partition_stats_delete_queue (partition)
+    SELECT DISTINCT partition
+    FROM logged;
 
     RETURN NULL;
 END;
@@ -772,7 +789,9 @@ BEGIN
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
         GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+    ) SELECT check_partition(collection, dtrange, edtrange)
+      FROM p
+      ORDER BY collection, d LOOP
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 

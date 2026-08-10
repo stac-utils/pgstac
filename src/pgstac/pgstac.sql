@@ -1268,12 +1268,17 @@ DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
 BEGIN
     EXECUTE format($q$
+        DELETE FROM partition_stats_delete_queue WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
         DELETE FROM partition_stats WHERE partition IN (
             SELECT partition FROM partition_sys_meta
             WHERE collection=%L
         );
         DROP TABLE IF EXISTS %I CASCADE;
         $q$,
+        OLD.id,
         OLD.id,
         collection_base_partition
     );
@@ -3086,6 +3091,17 @@ CREATE TABLE IF NOT EXISTS items_deleted_log (
 );
 CREATE INDEX IF NOT EXISTS items_deleted_log_deleted_at_idx ON items_deleted_log (deleted_at);
 
+-- Append-only work queue for partitions whose exact stats may have become too
+-- wide after DELETE. Keep this separate from partition_stats: the AFTER DELETE
+-- trigger already holds item-row locks, so updating/locking partition_stats
+-- here would invert the check_partition lock order used by ingest. Tightening
+-- captures and removes only queue rows visible before its exact table scan.
+CREATE TABLE IF NOT EXISTS partition_stats_delete_queue (
+    partition text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS partition_stats_delete_queue_partition_idx
+    ON partition_stats_delete_queue (partition);
+
 -- Field registry: tracks which JSON paths exist in each collection (for queryables)
 CREATE TABLE IF NOT EXISTS item_field_registry (
     collection text NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -3190,22 +3206,28 @@ EXECUTE FUNCTION items_touch_triggerfunc();
 
 CREATE OR REPLACE FUNCTION items_delete_log_trigger() RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO items_deleted_log (
-        item_id,
-        collection,
-        partition,
-        datetime,
-        end_datetime,
-        item_hash
+    WITH logged AS (
+        INSERT INTO items_deleted_log (
+            item_id,
+            collection,
+            partition,
+            datetime,
+            end_datetime,
+            item_hash
+        )
+        SELECT
+            old_rows.id,
+            old_rows.collection,
+            (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+            old_rows.datetime,
+            old_rows.end_datetime,
+            old_rows.item_hash
+        FROM old_rows
+        RETURNING partition
     )
-    SELECT
-        old_rows.id,
-        old_rows.collection,
-        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
-        old_rows.datetime,
-        old_rows.end_datetime,
-        old_rows.item_hash
-    FROM old_rows;
+    INSERT INTO partition_stats_delete_queue (partition)
+    SELECT DISTINCT partition
+    FROM logged;
 
     RETURN NULL;
 END;
@@ -3746,7 +3768,9 @@ BEGIN
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
         GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+    ) SELECT check_partition(collection, dtrange, edtrange)
+      FROM p
+      ORDER BY collection, d LOOP
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
@@ -4220,8 +4244,8 @@ $$ LANGUAGE PLPGSQL STABLE;
 --                   that can land there); a NULL-partition_trunc partition pads the batch range by
 --                   partition_stats_widen_buffer (default 1 month) each side.
 --   * end_datetime: the datetime target extended by the batch's max (end_datetime - datetime) tail.
---   * spatial     : NULL means "always a search candidate"; a spatial miss resets spatial to NULL until
---                   the tightener computes the real extent.
+--   * spatial     : an unknown batch extent or a spatial miss resets spatial to NULL ("always a search
+--                   candidate") until the tightener computes the real extent.
 -- Requires the partition_stats row to exist (check_partition seeds it); raises if it does not.
 CREATE OR REPLACE FUNCTION widen_partition_stats(
     _partition text,
@@ -4253,7 +4277,8 @@ BEGIN
 
     dt_covered  := COALESCE(cur.dtrange  @> _dtrange,  false);
     edt_covered := COALESCE(cur.edtrange @> _edtrange, false);
-    spatial_covered := cur.spatial IS NULL OR _spatial IS NULL OR ST_Covers(cur.spatial, _spatial);
+    spatial_covered := cur.spatial IS NULL
+        OR (_spatial IS NOT NULL AND ST_Covers(cur.spatial, _spatial));
     IF dt_covered AND edt_covered AND spatial_covered THEN
         RETURN; -- already covered: no write, no lock
     END IF;
@@ -4590,12 +4615,12 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 -- prepare_partition_for_load: per-partition metadata for the Rust direct / precheck load paths. ONE small
--- self-contained txn per partition, run BEFORE any COPY: create + widen the partition to cover this batch
--- (dt + edt + the real SPATIAL envelope, unlike ensure_partitions which passes NULL) and bump n, so
--- partition_stats is at least as wide as the data (golden rule) and search treats the partition as non-empty
--- before the data lands. Returns the partition name + the pre-load row count (n BEFORE the bump) so the
--- loader can choose its adaptive precheck path: empty -> skip the precheck; batch > n -> pull the partition's
--- (id,item_hash) to the client; n >= batch -> COPY the batch (id,hash) to a temp table + JOIN this partition.
+-- self-contained txn per partition, run BEFORE any COPY: create + optimistically widen the partition to
+-- cover this batch (dt + edt + the real SPATIAL envelope, unlike ensure_partitions which passes NULL).
+-- Returns the partition name + pre-load row count for adaptive duplicate prechecks. `_n_add` remains in the
+-- stable function signature, but the count update happens in flush_items_staging_binary: moving it into the
+-- same transaction as the item write prevents an intervening tightener from replacing it with an old exact
+-- count. The flush also revalidates the envelope and holds the partition lock through commit.
 CREATE OR REPLACE FUNCTION prepare_partition_for_load(
     _collection text,
     _dt_lo timestamptz, _dt_hi timestamptz,
@@ -4614,11 +4639,6 @@ BEGIN
     );
     SELECT COALESCE(n, 0) INTO pre_load_n
         FROM pgstac.partition_stats WHERE partition = partition_name;
-    -- Over-estimating n is the safe direction; the async tightener computes the exact count + extent off the
-    -- hot path. Single-row atomic UPDATE, so concurrent loads into the same partition serialize on the row.
-    UPDATE pgstac.partition_stats
-        SET n = COALESCE(n, 0) + _n_add, dirty = true, last_updated = now()
-        WHERE partition = partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -4639,8 +4659,11 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 -- flush_items_staging_binary: move fully-dehydrated rows from a TEMP staging table into `items` with the
--- conflict policy. partition_stats (extent + n + dirty) is set entirely by prepare_partition_for_load in
--- the preflight, so this writes only `items`:
+-- conflict policy. Before touching items, aggregate the staged partitions, re-check/widen their metadata,
+-- and raise n while holding each partition advisory lock through commit. This closes the transaction gap
+-- between prepare_partition_for_load and flush: a tightener may run during COPY, but cannot run after this
+-- recheck and before the items become visible. Locks are acquired in the same collection/window order as
+-- ensure_partitions and the SQL staging path:
 --        ignore  -> ON CONFLICT DO NOTHING (idempotent; orphans the old row on a cross-partition move)
 --        upsert  -> delete a changed row IN THE PARTITION IT ROUTES TO (window-pruned), then insert. A
 --                   datetime change that stays in the partition is applied; one that moves the item to a
@@ -4654,7 +4677,56 @@ CREATE OR REPLACE FUNCTION flush_items_staging_binary(
 ) RETURNS bigint AS $$
 DECLARE
     nrows bigint;
+    _partition text;
+    _collection text;
+    _dtrange tstzrange;
+    _edtrange tstzrange;
+    _spatial geometry;
+    _staged_n bigint;
 BEGIN
+    FOR _collection, _dtrange, _edtrange, _spatial, _staged_n IN EXECUTE format(
+        $q$
+            WITH grouped AS (
+                SELECT
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    ) AS window_start,
+                    tstzrange(min(s.datetime), max(s.datetime), '[]') AS dtrange,
+                    tstzrange(min(s.end_datetime), max(s.end_datetime), '[]') AS edtrange,
+                    ST_SetSRID(ST_Extent(s.geometry)::geometry, 4326) AS spatial,
+                    count(*)::bigint AS staged_n
+                FROM %I s
+                JOIN pgstac.collections c ON c.id = s.collection
+                GROUP BY
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    )
+            )
+            SELECT collection, dtrange, edtrange, spatial, staged_n
+            FROM grouped
+            ORDER BY collection, window_start
+        $q$,
+        _staging
+    ) LOOP
+        _partition := pgstac.check_partition(
+            _collection,
+            _dtrange,
+            _edtrange,
+            _spatial
+        );
+
+        -- Over-counting is safe for ignore/upsert conflicts; the deferred tightener restores exact n.
+        UPDATE pgstac.partition_stats
+        SET n = COALESCE(n, 0) + _staged_n,
+            dirty = true,
+            last_updated = now()
+        WHERE partition = _partition;
+    END LOOP;
+
     IF _policy = 'ignore' THEN
         EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
     ELSIF _policy = 'error' THEN
@@ -5634,10 +5706,12 @@ $$ LANGUAGE SQL;
 
 -- BEGIN FRAGMENT: 997_maintenance.sql
 
--- tighten_dirty_partition_stats: recompute the exact envelope + row count for dirty partitions (oldest
--- first), clearing dirty. Run off-hours (pg_cron or the maintenance CLI). Optional: a wide envelope only
--- over-includes a partition in search, so skipping it never loses rows. `_limit` caps the batch (NULL =
--- all dirty); returns the number of partitions tightened.
+-- tighten_dirty_partition_stats: recompute the exact envelope + row count for partitions widened by
+-- ingest or queued by DELETE. Choose the oldest `_limit` candidates, then acquire their advisory locks in
+-- collection/partition order so concurrent multi-partition ingest follows the same lock order. Run
+-- off-hours (pg_cron or the maintenance CLI). Optional: a wide envelope only over-includes a partition in
+-- search, so skipping it never loses rows. `_limit` caps the batch (NULL = all pending); returns the number
+-- of partitions tightened.
 --
 -- pg_cron example (operators install this themselves):
 --   SELECT cron.schedule('pgstac-tighten', '*/15 * * * *',
@@ -5649,10 +5723,21 @@ DECLARE
     _count int := 0;
 BEGIN
     FOR _part IN
-        SELECT partition FROM pgstac.partition_stats
-        WHERE dirty
-        ORDER BY last_updated NULLS FIRST
-        LIMIT _limit
+        SELECT candidate.partition
+        FROM (
+            SELECT ps.partition, ps.collection
+            FROM pgstac.partition_stats ps
+            WHERE
+                ps.dirty
+                OR EXISTS (
+                    SELECT 1
+                    FROM pgstac.partition_stats_delete_queue q
+                    WHERE q.partition = ps.partition
+                )
+            ORDER BY ps.last_updated NULLS FIRST
+            LIMIT _limit
+        ) candidate
+        ORDER BY candidate.collection, candidate.partition
     LOOP
         PERFORM pgstac.tighten_partition_stats(_part);
         _count := _count + 1;
@@ -6043,6 +6128,12 @@ BEGIN
     -- tighten serializes with ingest into this partition only.
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
 
+    -- Acknowledge only DELETE work visible before the exact scan. Each concurrent DELETE appends an
+    -- independent row, so one that commits after this statement remains pending for the next sweep. If
+    -- the scan or stats write fails, this DELETE rolls back with the rest of the transaction.
+    DELETE FROM partition_stats_delete_queue
+    WHERE partition = _partition;
+
     EXECUTE format(
         $q$
             SELECT count(*), min(datetime), max(datetime), min(end_datetime), max(end_datetime),
@@ -6240,7 +6331,12 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 -- envelope-narrowing direct write structurally impossible. New partitions are created SELECT-only for
 -- pgstac_ingest by check_partition; the items parent is revoked here. Staging tables (items_staging*) stay
 -- writable so the SQL-only ingest path can COPY into them.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragments FROM pgstac_ingest;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON
+    items,
+    partition_stats,
+    partition_stats_delete_queue,
+    item_fragments
+FROM pgstac_ingest;
 -- item_field_registry is the one exception to the wall: the loader WIDENS it directly with an add-only
 -- INSERT ... ON CONFLICT DO UPDATE (no SD function), so INSERT + UPDATE stay granted. DELETE/TRUNCATE remain
 -- revoked, so even a direct write cannot NARROW the registry — INV-1 (registry is a superset of the data)

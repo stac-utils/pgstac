@@ -107,12 +107,12 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 -- prepare_partition_for_load: per-partition metadata for the Rust direct / precheck load paths. ONE small
--- self-contained txn per partition, run BEFORE any COPY: create + widen the partition to cover this batch
--- (dt + edt + the real SPATIAL envelope, unlike ensure_partitions which passes NULL) and bump n, so
--- partition_stats is at least as wide as the data (golden rule) and search treats the partition as non-empty
--- before the data lands. Returns the partition name + the pre-load row count (n BEFORE the bump) so the
--- loader can choose its adaptive precheck path: empty -> skip the precheck; batch > n -> pull the partition's
--- (id,item_hash) to the client; n >= batch -> COPY the batch (id,hash) to a temp table + JOIN this partition.
+-- self-contained txn per partition, run BEFORE any COPY: create + optimistically widen the partition to
+-- cover this batch (dt + edt + the real SPATIAL envelope, unlike ensure_partitions which passes NULL).
+-- Returns the partition name + pre-load row count for adaptive duplicate prechecks. `_n_add` remains in the
+-- stable function signature, but the count update happens in flush_items_staging_binary: moving it into the
+-- same transaction as the item write prevents an intervening tightener from replacing it with an old exact
+-- count. The flush also revalidates the envelope and holds the partition lock through commit.
 CREATE OR REPLACE FUNCTION prepare_partition_for_load(
     _collection text,
     _dt_lo timestamptz, _dt_hi timestamptz,
@@ -131,11 +131,6 @@ BEGIN
     );
     SELECT COALESCE(n, 0) INTO pre_load_n
         FROM pgstac.partition_stats WHERE partition = partition_name;
-    -- Over-estimating n is the safe direction; the async tightener computes the exact count + extent off the
-    -- hot path. Single-row atomic UPDATE, so concurrent loads into the same partition serialize on the row.
-    UPDATE pgstac.partition_stats
-        SET n = COALESCE(n, 0) + _n_add, dirty = true, last_updated = now()
-        WHERE partition = partition_name;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
@@ -156,8 +151,11 @@ $$ LANGUAGE PLPGSQL SECURITY DEFINER;
 
 
 -- flush_items_staging_binary: move fully-dehydrated rows from a TEMP staging table into `items` with the
--- conflict policy. partition_stats (extent + n + dirty) is set entirely by prepare_partition_for_load in
--- the preflight, so this writes only `items`:
+-- conflict policy. Before touching items, aggregate the staged partitions, re-check/widen their metadata,
+-- and raise n while holding each partition advisory lock through commit. This closes the transaction gap
+-- between prepare_partition_for_load and flush: a tightener may run during COPY, but cannot run after this
+-- recheck and before the items become visible. Locks are acquired in the same collection/window order as
+-- ensure_partitions and the SQL staging path:
 --        ignore  -> ON CONFLICT DO NOTHING (idempotent; orphans the old row on a cross-partition move)
 --        upsert  -> delete a changed row IN THE PARTITION IT ROUTES TO (window-pruned), then insert. A
 --                   datetime change that stays in the partition is applied; one that moves the item to a
@@ -171,7 +169,56 @@ CREATE OR REPLACE FUNCTION flush_items_staging_binary(
 ) RETURNS bigint AS $$
 DECLARE
     nrows bigint;
+    _partition text;
+    _collection text;
+    _dtrange tstzrange;
+    _edtrange tstzrange;
+    _spatial geometry;
+    _staged_n bigint;
 BEGIN
+    FOR _collection, _dtrange, _edtrange, _spatial, _staged_n IN EXECUTE format(
+        $q$
+            WITH grouped AS (
+                SELECT
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    ) AS window_start,
+                    tstzrange(min(s.datetime), max(s.datetime), '[]') AS dtrange,
+                    tstzrange(min(s.end_datetime), max(s.end_datetime), '[]') AS edtrange,
+                    ST_SetSRID(ST_Extent(s.geometry)::geometry, 4326) AS spatial,
+                    count(*)::bigint AS staged_n
+                FROM %I s
+                JOIN pgstac.collections c ON c.id = s.collection
+                GROUP BY
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    )
+            )
+            SELECT collection, dtrange, edtrange, spatial, staged_n
+            FROM grouped
+            ORDER BY collection, window_start
+        $q$,
+        _staging
+    ) LOOP
+        _partition := pgstac.check_partition(
+            _collection,
+            _dtrange,
+            _edtrange,
+            _spatial
+        );
+
+        -- Over-counting is safe for ignore/upsert conflicts; the deferred tightener restores exact n.
+        UPDATE pgstac.partition_stats
+        SET n = COALESCE(n, 0) + _staged_n,
+            dirty = true,
+            last_updated = now()
+        WHERE partition = _partition;
+    END LOOP;
+
     IF _policy = 'ignore' THEN
         EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
     ELSIF _policy = 'error' THEN

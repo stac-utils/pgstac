@@ -20,3 +20,12 @@ SELECT ok(
     NOT has_table_privilege('pgstac_ingest', 'pgstac.item_fragments', 'DELETE'),
     'pgstac_ingest may not directly DELETE item_fragments (privilege wall)'
 );
+
+SELECT ok(
+    NOT has_table_privilege(
+        'pgstac_ingest',
+        'pgstac.partition_stats_delete_queue',
+        'INSERT'
+    ),
+    'pgstac_ingest may not directly enqueue partition-stat DELETE work (privilege wall)'
+);

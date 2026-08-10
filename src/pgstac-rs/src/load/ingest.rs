@@ -208,9 +208,10 @@ impl ConflictPolicy {
 ///
 /// For each item: dehydrate it; for a collection with a `fragment_config`, split out the shared fragment
 /// (upserted + deduped via `ensure_fragments`) and strip the fragment-owned keys from the row; ensure its
-/// partition exists and its stats cover it (`ensure_partitions`, committed up front); then
-/// binary-COPY all rows into a session-local staging table and `flush_items_staging_binary` them into
-/// `items` resolving id collisions by `policy`. Matches `items_staging_dehydrate` for both the no-fragment
+/// partition exists and optimistically widen its stats in a committed preflight; then binary-COPY all rows
+/// into a session-local staging table and `flush_items_staging_binary` them into `items` resolving id
+/// collisions by `policy`. The flush revalidates stats and raises the row-count estimate under the partition
+/// lock in the same transaction as the item write. Matches `items_staging_dehydrate` for both the no-fragment
 /// and fragment paths. Returns the number of rows flushed. Collections must already exist.
 pub async fn load_items(
     client: &mut tokio_postgres::Client,
@@ -256,9 +257,10 @@ pub async fn load_items(
     // Create + widen every partition the batch lands in BEFORE the load. Bucket client-side
     // by (collection, partition window) and call prepare_partition_for_load once per partition — per-partition
     // metadata, O(#partitions), NOT the per-item batch-length arrays the old `ensure_partitions` shipped just
-    // to group them server-side. Each call widens dt/edt + the real SPATIAL envelope (`ensure_partitions`
-    // passed NULL) AND bumps n by this partition's staged count, so the flush writes only `items`, never
-    // partition_stats. Over-counting n is safe (ignore/upsert may insert fewer); the async tightener resets it.
+    // to group them server-side. Each call creates the partition and optimistically widens dt/edt + the real
+    // SPATIAL envelope (`ensure_partitions` passed NULL). `flush_items_staging_binary` repeats the cheap
+    // coverage guard and raises n under the same transaction/partition lock as the item write, so a tightener
+    // between preflight and flush cannot leave clean, undersized stats.
     let mut seen_collections: HashSet<&str> = HashSet::new();
     let distinct_collections: Vec<&str> = rows
         .iter()

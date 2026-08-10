@@ -893,7 +893,56 @@ CREATE OR REPLACE FUNCTION pgstac.flush_items_staging_binary(_staging text, _pol
 AS $function$
 DECLARE
     nrows bigint;
+    _partition text;
+    _collection text;
+    _dtrange tstzrange;
+    _edtrange tstzrange;
+    _spatial geometry;
+    _staged_n bigint;
 BEGIN
+    FOR _collection, _dtrange, _edtrange, _spatial, _staged_n IN EXECUTE format(
+        $q$
+            WITH grouped AS (
+                SELECT
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    ) AS window_start,
+                    tstzrange(min(s.datetime), max(s.datetime), '[]') AS dtrange,
+                    tstzrange(min(s.end_datetime), max(s.end_datetime), '[]') AS edtrange,
+                    ST_SetSRID(ST_Extent(s.geometry)::geometry, 4326) AS spatial,
+                    count(*)::bigint AS staged_n
+                FROM %I s
+                JOIN pgstac.collections c ON c.id = s.collection
+                GROUP BY
+                    s.collection,
+                    COALESCE(
+                        date_trunc(c.partition_trunc::text, s.datetime),
+                        '-infinity'::timestamptz
+                    )
+            )
+            SELECT collection, dtrange, edtrange, spatial, staged_n
+            FROM grouped
+            ORDER BY collection, window_start
+        $q$,
+        _staging
+    ) LOOP
+        _partition := pgstac.check_partition(
+            _collection,
+            _dtrange,
+            _edtrange,
+            _spatial
+        );
+
+        -- Over-counting is safe for ignore/upsert conflicts; the deferred tightener restores exact n.
+        UPDATE pgstac.partition_stats
+        SET n = COALESCE(n, 0) + _staged_n,
+            dirty = true,
+            last_updated = now()
+        WHERE partition = _partition;
+    END LOOP;
+
     IF _policy = 'ignore' THEN
         EXECUTE format('INSERT INTO items SELECT * FROM %1$I ON CONFLICT DO NOTHING', _staging);
     ELSIF _policy = 'error' THEN
@@ -1102,22 +1151,28 @@ CREATE OR REPLACE FUNCTION pgstac.items_delete_log_trigger()
  SECURITY DEFINER
 AS $function$
 BEGIN
-    INSERT INTO items_deleted_log (
-        item_id,
-        collection,
-        partition,
-        datetime,
-        end_datetime,
-        item_hash
+    WITH logged AS (
+        INSERT INTO items_deleted_log (
+            item_id,
+            collection,
+            partition,
+            datetime,
+            end_datetime,
+            item_hash
+        )
+        SELECT
+            old_rows.id,
+            old_rows.collection,
+            (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
+            old_rows.datetime,
+            old_rows.end_datetime,
+            old_rows.item_hash
+        FROM old_rows
+        RETURNING partition
     )
-    SELECT
-        old_rows.id,
-        old_rows.collection,
-        (partition_name(old_rows.collection, old_rows.datetime)).partition_name,
-        old_rows.datetime,
-        old_rows.end_datetime,
-        old_rows.item_hash
-    FROM old_rows;
+    INSERT INTO partition_stats_delete_queue (partition)
+    SELECT DISTINCT partition
+    FROM logged;
 
     RETURN NULL;
 END;
@@ -1811,11 +1866,6 @@ BEGIN
     );
     SELECT COALESCE(n, 0) INTO pre_load_n
         FROM pgstac.partition_stats WHERE partition = partition_name;
-    -- Over-estimating n is the safe direction; the async tightener computes the exact count + extent off the
-    -- hot path. Single-row atomic UPDATE, so concurrent loads into the same partition serialize on the row.
-    UPDATE pgstac.partition_stats
-        SET n = COALESCE(n, 0) + _n_add, dirty = true, last_updated = now()
-        WHERE partition = partition_name;
 END;
 $function$
 ;
@@ -2545,10 +2595,21 @@ DECLARE
     _count int := 0;
 BEGIN
     FOR _part IN
-        SELECT partition FROM pgstac.partition_stats
-        WHERE dirty
-        ORDER BY last_updated NULLS FIRST
-        LIMIT _limit
+        SELECT candidate.partition
+        FROM (
+            SELECT ps.partition, ps.collection
+            FROM pgstac.partition_stats ps
+            WHERE
+                ps.dirty
+                OR EXISTS (
+                    SELECT 1
+                    FROM pgstac.partition_stats_delete_queue q
+                    WHERE q.partition = ps.partition
+                )
+            ORDER BY ps.last_updated NULLS FIRST
+            LIMIT _limit
+        ) candidate
+        ORDER BY candidate.collection, candidate.partition
     LOOP
         PERFORM pgstac.tighten_partition_stats(_part);
         _count := _count + 1;
@@ -2577,6 +2638,12 @@ BEGIN
     -- extent would be left uncovered (search would prune + miss it). Same lock check_partition uses, so
     -- tighten serializes with ingest into this partition only.
     PERFORM pg_advisory_xact_lock(hashtext('pgstac.check_partition'), hashtext(_partition));
+
+    -- Acknowledge only DELETE work visible before the exact scan. Each concurrent DELETE appends an
+    -- independent row, so one that commits after this statement remains pending for the next sweep. If
+    -- the scan or stats write fails, this DELETE rolls back with the rest of the transaction.
+    DELETE FROM partition_stats_delete_queue
+    WHERE partition = _partition;
 
     EXECUTE format(
         $q$
@@ -2867,7 +2934,8 @@ BEGIN
 
     dt_covered  := COALESCE(cur.dtrange  @> _dtrange,  false);
     edt_covered := COALESCE(cur.edtrange @> _edtrange, false);
-    spatial_covered := cur.spatial IS NULL OR _spatial IS NULL OR ST_Covers(cur.spatial, _spatial);
+    spatial_covered := cur.spatial IS NULL
+        OR (_spatial IS NOT NULL AND ST_Covers(cur.spatial, _spatial));
     IF dt_covered AND edt_covered AND spatial_covered THEN
         RETURN; -- already covered: no write, no lock
     END IF;
@@ -3180,12 +3248,17 @@ DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
 BEGIN
     EXECUTE format($q$
+        DELETE FROM partition_stats_delete_queue WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
         DELETE FROM partition_stats WHERE partition IN (
             SELECT partition FROM partition_sys_meta
             WHERE collection=%L
         );
         DROP TABLE IF EXISTS %I CASCADE;
         $q$,
+        OLD.id,
         OLD.id,
         collection_base_partition
     );
@@ -4368,7 +4441,9 @@ BEGIN
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
         GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+    ) SELECT check_partition(collection, dtrange, edtrange)
+      FROM p
+      ORDER BY collection, d LOOP
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
@@ -5933,6 +6008,11 @@ create table "pgstac"."items_deleted_log" (
 );
 
 
+create table "pgstac"."partition_stats_delete_queue" (
+    "partition" text not null
+);
+
+
 alter table "pgstac"."collections" drop column "base_item";
 
 alter table "pgstac"."collections" add column "fragment_config" text[];
@@ -6130,8 +6210,6 @@ drop function if exists "pgstac"."upsert_collection"(data jsonb);
 
 drop function if exists "pgstac"."where_stats"(inwhere text, updatestats boolean, conf jsonb);
 
-drop function if exists "pgstac"."parse_dtrange"(_indate text, relative_base timestamp with time zone);
-
 create or replace view "pgstac"."collections_asitems" as  SELECT id,
     geometry,
     'collections'::text AS collection,
@@ -6259,6 +6337,8 @@ CREATE INDEX items_fragment_id_idx ON ONLY pgstac.items USING btree (fragment_id
 
 CREATE INDEX partition_stats_collection_idx ON pgstac.partition_stats USING btree (collection);
 
+CREATE INDEX partition_stats_delete_queue_partition_idx ON pgstac.partition_stats_delete_queue USING btree (partition);
+
 CREATE INDEX partition_stats_dirty_idx ON pgstac.partition_stats USING btree (partition) WHERE dirty;
 
 CREATE INDEX partition_stats_indexes_pending_idx ON pgstac.partition_stats USING btree (partition) WHERE indexes_pending;
@@ -6282,6 +6362,33 @@ alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_
 alter table "pgstac"."item_fragments" validate constraint "item_fragments_collection_fkey";
 
 alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_hash_key" UNIQUE using index "item_fragments_collection_hash_key";
+
+CREATE OR REPLACE FUNCTION pgstac.collection_delete_trigger_func()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    collection_base_partition text := concat('_items_', OLD.key);
+BEGIN
+    EXECUTE format($q$
+        DELETE FROM partition_stats_delete_queue WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
+        DELETE FROM partition_stats WHERE partition IN (
+            SELECT partition FROM partition_sys_meta
+            WHERE collection=%L
+        );
+        DROP TABLE IF EXISTS %I CASCADE;
+        $q$,
+        OLD.id,
+        OLD.id,
+        collection_base_partition
+    );
+    RETURN OLD;
+END;
+$function$
+;
 
 CREATE OR REPLACE FUNCTION pgstac.collection_extent(_collection text, runupdate boolean DEFAULT false)
  RETURNS jsonb
@@ -6965,7 +7072,9 @@ BEGIN
             tstzrange(min(upper(dtr)),max(upper(dtr)),'[]') as edtrange
         FROM t
         GROUP BY 1,2
-    ) SELECT check_partition(collection, dtrange, edtrange) FROM p LOOP
+    ) SELECT check_partition(collection, dtrange, edtrange)
+      FROM p
+      ORDER BY collection, d LOOP
         RAISE NOTICE 'Partition %', part;
     END LOOP;
 
@@ -7581,7 +7690,12 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA pgstac to pgstac_ingest;
 -- envelope-narrowing direct write structurally impossible. New partitions are created SELECT-only for
 -- pgstac_ingest by check_partition; the items parent is revoked here. Staging tables (items_staging*) stay
 -- writable so the SQL-only ingest path can COPY into them.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON items, partition_stats, item_fragments FROM pgstac_ingest;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON
+    items,
+    partition_stats,
+    partition_stats_delete_queue,
+    item_fragments
+FROM pgstac_ingest;
 -- item_field_registry is the one exception to the wall: the loader WIDENS it directly with an add-only
 -- INSERT ... ON CONFLICT DO UPDATE (no SD function), so INSERT + UPDATE stay granted. DELETE/TRUNCATE remain
 -- revoked, so even a direct write cannot NARROW the registry — INV-1 (registry is a superset of the data)

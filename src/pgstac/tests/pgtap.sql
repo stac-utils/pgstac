@@ -17,7 +17,9 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SET SEARCH_PATH TO pgstac, pgtap, public;
 
 -- Plan the tests.
-SELECT plan(371);
+-- The upstream count was six high; this branch adds five assertions and
+-- corrects the stale plan so pg_prove sees a complete 370-test run.
+SELECT plan(370);
 --SELECT * FROM no_plan();
 
 -- Run the tests.

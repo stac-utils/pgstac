@@ -218,8 +218,8 @@ $$ LANGUAGE PLPGSQL STABLE;
 --                   that can land there); a NULL-partition_trunc partition pads the batch range by
 --                   partition_stats_widen_buffer (default 1 month) each side.
 --   * end_datetime: the datetime target extended by the batch's max (end_datetime - datetime) tail.
---   * spatial     : NULL means "always a search candidate"; a spatial miss resets spatial to NULL until
---                   the tightener computes the real extent.
+--   * spatial     : an unknown batch extent or a spatial miss resets spatial to NULL ("always a search
+--                   candidate") until the tightener computes the real extent.
 -- Requires the partition_stats row to exist (check_partition seeds it); raises if it does not.
 CREATE OR REPLACE FUNCTION widen_partition_stats(
     _partition text,
@@ -251,7 +251,8 @@ BEGIN
 
     dt_covered  := COALESCE(cur.dtrange  @> _dtrange,  false);
     edt_covered := COALESCE(cur.edtrange @> _edtrange, false);
-    spatial_covered := cur.spatial IS NULL OR _spatial IS NULL OR ST_Covers(cur.spatial, _spatial);
+    spatial_covered := cur.spatial IS NULL
+        OR (_spatial IS NOT NULL AND ST_Covers(cur.spatial, _spatial));
     IF dt_covered AND edt_covered AND spatial_covered THEN
         RETURN; -- already covered: no write, no lock
     END IF;
