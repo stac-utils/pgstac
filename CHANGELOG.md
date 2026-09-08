@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Update the PostgreSQL container base from Debian Bullseye to Trixie so downstream
+  images can install additional packages from supported Debian repositories.
+
 
 ## [v0.9.12]
 
