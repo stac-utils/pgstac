@@ -2,7 +2,7 @@ ARG PG_MAJOR=17
 ARG POSTGIS_MAJOR=3
 
 # Base postgres image that pgstac can be installed onto
-FROM postgres:${PG_MAJOR}-bullseye AS pgstacbase
+FROM postgres:${PG_MAJOR}-trixie AS pgstacbase
 ARG POSTGIS_MAJOR
 ARG PG_MAJOR
 RUN  \
