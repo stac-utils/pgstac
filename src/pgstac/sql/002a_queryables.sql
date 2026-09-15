@@ -120,6 +120,24 @@ CREATE OR REPLACE FUNCTION queryable_uses_native_path(path text) RETURNS boolean
     SELECT path ~ '^[a-zA-Z_][a-zA-Z0-9_]*$';
 $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 
+-- properties_index_expression: Builds the properties->'a'->'b' jsonb path for a
+-- (possibly dotted) queryable name, so a nested name like 'foo:detail.value'
+-- indexes the real nested value instead of a flat, always-NULL key. Matches
+-- Postgres's own deparse form for chained '->' so queryable_indexes()'s
+-- indexdef diff doesn't perpetually flag a "change".
+CREATE OR REPLACE FUNCTION properties_index_expression(name text) RETURNS text AS $$
+DECLARE
+    segs text[] := string_to_array(name, '.');
+    result text := repeat('(', cardinality(segs)) || 'properties';
+    seg text;
+BEGIN
+    FOREACH seg IN ARRAY segs LOOP
+        result := result || format(' -> %L::text)', seg);
+    END LOOP;
+    RETURN result;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE STRICT PARALLEL SAFE;
+
 
 
 
@@ -259,15 +277,36 @@ CREATE OR REPLACE FUNCTION indexdef(q queryables) RETURNS text AS $$
                 q.property_path
             );
         ELSE
-            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            out := format($q$CREATE INDEX ON %%I USING %s (%s(%s))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
                 lower(COALESCE(q.property_wrapper, 'to_text')),
-                q.name
+                properties_index_expression(q.name)
             );
         END IF;
         RETURN btrim(out, ' \n\t');
     END;
 $$ LANGUAGE PLPGSQL IMMUTABLE;
+
+-- indexdef_field: Reconstructs the STAC property name (dotted for nested paths)
+-- from a deparsed pg_indexes.indexdef string. Shared by pgstac_indexes,
+-- pgstac_indexes_stats, and queryable_indexes() to avoid tripling this regex.
+-- Excludes the datetime case; callers COALESCE this with their own CASE for that.
+CREATE OR REPLACE FUNCTION indexdef_field(indexdef text) RETURNS text AS $$
+    SELECT COALESCE(
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        (
+            SELECT string_agg(replace(seg, $esc$''$esc$, $esc$'$esc$), '.')
+            FROM (
+                SELECT (regexp_matches(
+                    substring(indexdef FROM $re1$\(+properties(?:\s*->\s*'(?:[^']|'')*'::text\))+$re1$),
+                    $re2$'((?:[^']|'')*)'::text$re2$,
+                    'g'
+                ))[1] AS seg
+            ) s
+        ),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([^'']+)''::text')
+    );
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 DROP VIEW IF EXISTS pgstac_indexes;
 CREATE VIEW pgstac_indexes AS
@@ -277,8 +316,7 @@ SELECT
     i.indexname,
     regexp_replace(btrim(replace(replace(indexdef, i.indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as idx,
     COALESCE(
-        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
-        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
+        indexdef_field(indexdef),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -295,8 +333,7 @@ SELECT
     i.indexname,
     indexdef,
     COALESCE(
-        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
-        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'),
+        indexdef_field(indexdef),
         CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime_end_datetime' ELSE NULL END
     ) AS field,
     pg_table_size(i.indexname::text) as index_size,
@@ -341,8 +378,7 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
-                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
+                indexdef_field(indexdef),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM

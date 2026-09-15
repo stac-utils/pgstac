@@ -245,9 +245,26 @@ drop view if exists "pgstac"."partition_sys_meta";
 
 drop view if exists "pgstac"."partitions_view";
 
+alter table "pgstac"."items" drop constraint "items_collections_fk";
+
+create sequence "pgstac"."item_fragments_id_seq" as bigint increment by 1 minvalue 1 maxvalue 9223372036854775807 start with 1 cache 1 no cycle;
+
+drop trigger if exists "items_after_delete_trigger" on "pgstac"."items";
+
+drop trigger if exists "items_after_insert_trigger" on "pgstac"."items";
+
+drop trigger if exists "items_after_update_trigger" on "pgstac"."items";
+
 alter table "pgstac"."format_item_cache" drop constraint "format_item_cache_pkey";
 
 alter table "pgstac"."search_wheres" drop constraint "search_wheres_pkey";
+
+create type "pgstac"."pred_envelope" as (
+    "colls" _text,
+    "dt" tstzmultirange,
+    "edt" tstzmultirange,
+    "geom" geometry
+);
 
 drop index if exists "pgstac"."partitions_partition_idx";
 
@@ -260,21 +277,6 @@ drop index if exists "pgstac"."search_wheres_partitions";
 drop index if exists "pgstac"."search_wheres_pkey";
 
 drop index if exists "pgstac"."search_wheres_where";
-
-create sequence "pgstac"."item_fragments_id_seq";
-
-drop trigger if exists "items_after_delete_trigger" on "pgstac"."items";
-
-drop trigger if exists "items_after_insert_trigger" on "pgstac"."items";
-
-drop trigger if exists "items_after_update_trigger" on "pgstac"."items";
-
-create type "pgstac"."pred_envelope" as (
-    "colls" _text,
-    "dt" tstzmultirange,
-    "edt" tstzmultirange,
-    "geom" geometry
-);
 
 set check_function_bodies = off;
 
@@ -1042,6 +1044,28 @@ AS $function$
     SELECT collection, count(*)::int
     FROM deleted
     GROUP BY collection;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.indexdef_field(indexdef text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+    SELECT COALESCE(
+        substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
+        (
+            SELECT string_agg(replace(seg, $esc$''$esc$, $esc$'$esc$), '.')
+            FROM (
+                SELECT (regexp_matches(
+                    substring(indexdef FROM $re1$\(+properties(?:\s*->\s*'(?:[^']|'')*'::text\))+$re1$),
+                    $re2$'((?:[^']|'')*)'::text$re2$,
+                    'g'
+                ))[1] AS seg
+            ) s
+        ),
+        substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([^'']+)''::text')
+    );
 $function$
 ;
 
@@ -1943,6 +1967,24 @@ AS $function$
         UNION ALL
         SELECT p.name, p.definition, p.property_path, NULL::text
         FROM promoted_item_property_defs() p;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION pgstac.properties_index_expression(name text)
+ RETURNS text
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE STRICT
+AS $function$
+DECLARE
+    segs text[] := string_to_array(name, '.');
+    result text := repeat('(', cardinality(segs)) || 'properties';
+    seg text;
+BEGIN
+    FOREACH seg IN ARRAY segs LOOP
+        result := result || format(' -> %L::text)', seg);
+    END LOOP;
+    RETURN result;
+END;
 $function$
 ;
 
@@ -4299,10 +4341,10 @@ AS $function$
                 q.property_path
             );
         ELSE
-            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            out := format($q$CREATE INDEX ON %%I USING %s (%s(%s))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
                 lower(COALESCE(q.property_wrapper, 'to_text')),
-                q.name
+                properties_index_expression(q.name)
             );
         END IF;
         RETURN btrim(out, ' \n\t');
@@ -5092,8 +5134,7 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
-                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
+                indexdef_field(indexdef),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM
@@ -6130,7 +6171,7 @@ drop function if exists "pgstac"."upsert_collection"(data jsonb);
 
 drop function if exists "pgstac"."where_stats"(inwhere text, updatestats boolean, conf jsonb);
 
-drop function if exists "pgstac"."parse_dtrange"(_indate text, relative_base timestamp with time zone);
+drop function if exists "pgstac"."parse_dtrange"(_indate jsonb, relative_base timestamp with time zone);
 
 create or replace view "pgstac"."collections_asitems" as  SELECT id,
     geometry,
@@ -6205,7 +6246,7 @@ create or replace view "pgstac"."pgstac_indexes" as  SELECT schemaname,
     tablename,
     indexname,
     regexp_replace(btrim(replace(replace(indexdef, indexname::text, ''::text), 'pgstac.'::text, ''::text), ' \t\n'::text), '[ ]+'::text, ' '::text, 'g'::text) AS idx,
-    COALESCE("substring"(indexdef, '\(([a-zA-Z0-9_]+)\)'::text), "substring"(indexdef, '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'::text),
+    COALESCE(indexdef_field(indexdef),
         CASE
             WHEN indexdef ~* '\(datetime desc, end_datetime\)'::text THEN 'datetime'::text
             ELSE NULL::text
@@ -6220,7 +6261,7 @@ create or replace view "pgstac"."pgstac_indexes_stats" as  SELECT i.schemaname,
     i.tablename,
     i.indexname,
     i.indexdef,
-    COALESCE("substring"(i.indexdef, '\(([a-zA-Z0-9_]+)\)'::text), "substring"(i.indexdef, '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_]+)''::text'::text),
+    COALESCE(indexdef_field(i.indexdef),
         CASE
             WHEN i.indexdef ~* '\(datetime desc, end_datetime\)'::text THEN 'datetime_end_datetime'::text
             ELSE NULL::text
@@ -6273,6 +6314,8 @@ alter table "pgstac"."item_fragments" add constraint "item_fragments_pkey" PRIMA
 
 alter table "pgstac"."items_deleted_log" add constraint "items_deleted_log_pkey" PRIMARY KEY using index "items_deleted_log_pkey";
 
+alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_hash_key" UNIQUE using index "item_fragments_collection_hash_key";
+
 alter table "pgstac"."item_field_registry" add constraint "item_field_registry_collection_fkey" FOREIGN KEY ("collection") REFERENCES "pgstac"."collections"("id") ON DELETE CASCADE NOT VALID;
 
 alter table "pgstac"."item_field_registry" validate constraint "item_field_registry_collection_fkey";
@@ -6281,7 +6324,9 @@ alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_
 
 alter table "pgstac"."item_fragments" validate constraint "item_fragments_collection_fkey";
 
-alter table "pgstac"."item_fragments" add constraint "item_fragments_collection_hash_key" UNIQUE using index "item_fragments_collection_hash_key";
+alter table "pgstac"."items" add constraint "items_collections_fk" FOREIGN KEY ("collection") REFERENCES "pgstac"."collections"("id") ON DELETE CASCADE DEFERRABLE NOT VALID;
+
+alter table "pgstac"."items" validate constraint "items_collections_fk";
 
 CREATE OR REPLACE FUNCTION pgstac.collection_extent(_collection text, runupdate boolean DEFAULT false)
  RETURNS jsonb
@@ -6911,10 +6956,10 @@ AS $function$
                 q.property_path
             );
         ELSE
-            out := format($q$CREATE INDEX ON %%I USING %s (%s(((content -> 'properties'::text) -> %L::text)))$q$,
+            out := format($q$CREATE INDEX ON %%I USING %s (%s(%s))$q$,
                 lower(COALESCE(q.property_index_type, 'BTREE')),
                 lower(COALESCE(q.property_wrapper, 'to_text')),
-                q.name
+                properties_index_expression(q.name)
             );
         END IF;
         RETURN btrim(out, ' \n\t');
@@ -7289,8 +7334,7 @@ WITH p AS (
             indexname,
             regexp_replace(btrim(replace(replace(indexdef, indexname, ''),'pgstac.',''),' \t\n'), '[ ]+', ' ', 'g') as iidx,
             COALESCE(
-                substring(indexdef FROM '\(([a-zA-Z0-9_]+)\)'),
-                substring(indexdef FROM '\(content -> ''properties''::text\) -> ''([a-zA-Z0-9\:\_-]+)''::text'),
+                indexdef_field(indexdef),
                 CASE WHEN indexdef ~* '\(datetime desc, end_datetime\)' THEN 'datetime' ELSE NULL END
             ) AS field
         FROM
