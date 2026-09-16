@@ -39,6 +39,41 @@ SELECT lives_ok(
     'Search works with readonly mode set to off in readwrite mode.'
 );
 
+-- PGTap runs inside a transaction, so exercise the transactional queue runner.
+-- Both queue runners keep the same error variable across loop iterations.
+
+DELETE FROM query_queue;
+DELETE FROM query_queue_history;
+INSERT INTO query_queue (query, added) VALUES
+    ('SELECT 1 /* queue error reset success */', '2000-01-01 00:00:00+00'),
+    ('SELECT 1 / 0 /* queue error reset failure */', '2000-01-02 00:00:00+00');
+
+SELECT is(
+    run_queued_queries_intransaction(),
+    2,
+    'run_queued_queries_intransaction processes both queued statements'
+);
+SELECT is(
+    (
+        SELECT count(*)::integer
+        FROM query_queue_history
+        WHERE query LIKE '%queue error reset%'
+    ),
+    2,
+    'queue history records both statements'
+);
+SELECT is(
+    (
+        SELECT count(*)::integer
+        FROM query_queue_history
+        WHERE query LIKE '%queue error reset%'
+          AND error IS NOT NULL
+    ),
+    1,
+    'a successful statement after a failure has no inherited error'
+);
+DELETE FROM query_queue_history WHERE query LIKE '%queue error reset%';
+
 RESET pgstac.context;
 SELECT is_definer('widen_partition_stats');
 SELECT is_definer('tighten_partition_stats');

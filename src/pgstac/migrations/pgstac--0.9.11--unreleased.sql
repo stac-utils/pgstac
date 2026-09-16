@@ -5340,6 +5340,7 @@ BEGIN
             EXIT;
         END IF;
         cnt := cnt + 1;
+        error := NULL;
         BEGIN
             RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
             EXECUTE qitem.query;
@@ -5371,6 +5372,7 @@ BEGIN
             RETURN cnt;
         END IF;
         cnt := cnt + 1;
+        error := NULL;
         BEGIN
             qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
             RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
