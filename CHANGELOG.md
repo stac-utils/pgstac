@@ -141,6 +141,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `flake8`, `black`, and `mypy` removed from dev dependencies.
 
 ### Fixed
+- Reset queued-query error state per item so successful statements after a failure are recorded without an inherited error.
 - Explicit search stats refresh now propagates through cached and uncached search paths when `updatestats` is requested, keeping `numberMatched`/context counts current.
 - `scripts/container-scripts/test` now refreshes collation metadata for the
   `postgres` database during setup to avoid noisy warning output.
