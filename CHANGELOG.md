@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [UNRELEASED]
+
+### Added
+- Base item versioning. Editing a collection no longer changes how already loaded items
+  hydrate: items written after an edit carry a `pgstac:base_item` tag and hydrate against
+  the base item they were dehydrated from. Every base item a collection has had since its
+  first edit is kept in the new `base_items` table.
+- `current_base_item(cid)`: returns the collection's current base item and its
+  `base_items` id.
+
+### Changed
+- `collection_base_item(text)` is replaced by
+  `collection_base_item(text, int DEFAULT NULL)`. The one-argument call form still works
+  and now returns the base item that untagged items of the collection were dehydrated
+  against.
+- Minor version bump, so pypgstac's existing major/minor `check_version` refuses any
+  loader and database pair that straddles this change.
+- Docker images move from Debian bullseye to Debian trixie; plrust is no longer installed
+  in the pgstac image.
+
+### Removed
+- `content_hydrate(items, collections, jsonb)` is removed; use
+  `content_hydrate(items, jsonb)`.
+
+### Fixed
+- Performance (pre-existing, fixed alongside): ingest evaluates `content_dehydrate` once
+  per row instead of once per output column.
+- Performance (pre-existing, fixed alongside): tile search no longer hydrates every row
+  twice.
+- Incremental migrations no longer drop `run_or_queue`, `update_partition_stats_q` and
+  `queryable_indexes` without re-creating them.
+
 ## [v0.9.12]
 
 ### Fixed

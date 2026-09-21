@@ -20,9 +20,34 @@ CREATE TABLE IF NOT EXISTS collections (
     partition_trunc text CHECK (partition_trunc IN ('year', 'month'))
 );
 
-CREATE OR REPLACE FUNCTION collection_base_item(cid text) RETURNS jsonb AS $$
-    SELECT pgstac.collection_base_item(content) FROM pgstac.collections WHERE id = cid LIMIT 1;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+-- Base items a collection has had since its first edit; none until then.
+CREATE TABLE IF NOT EXISTS base_items (
+    collection text NOT NULL,
+    id int GENERATED ALWAYS AS IDENTITY,
+    base_item jsonb NOT NULL,
+    PRIMARY KEY (collection, id)
+);
+
+CREATE OR REPLACE FUNCTION collection_base_item(cid text, _base_item_id int DEFAULT NULL) RETURNS jsonb AS $$
+    SELECT CASE
+        WHEN _base_item_id IS NOT NULL THEN
+            (SELECT base_item FROM pgstac.base_items WHERE collection = cid AND id = _base_item_id)
+        ELSE coalesce(
+            (SELECT base_item FROM pgstac.base_items WHERE collection = cid ORDER BY id ASC LIMIT 1),
+            (SELECT base_item FROM pgstac.collections WHERE id = cid)
+        )
+    END;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
+
+-- The collection's current base item and its base_items id (NULL if never edited).
+CREATE OR REPLACE FUNCTION current_base_item(cid text, OUT base_item_id int, OUT base_item jsonb) AS $$
+    SELECT b.id, c.base_item
+    FROM pgstac.collections c
+    LEFT JOIN LATERAL (
+        SELECT id FROM pgstac.base_items WHERE collection = c.id ORDER BY id DESC LIMIT 1
+    ) b ON TRUE
+    WHERE c.id = cid;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 
 CREATE OR REPLACE FUNCTION create_collection(data jsonb) RETURNS VOID AS $$
@@ -76,6 +101,8 @@ CREATE OR REPLACE FUNCTION collection_delete_trigger_func() RETURNS TRIGGER AS $
 DECLARE
     collection_base_partition text := concat('_items_', OLD.key);
 BEGIN
+    -- A recreated collection id must not inherit these rows.
+    DELETE FROM base_items WHERE collection = OLD.id;
     -- Tables before rows: check_partition takes these locks in the same order,
     -- and the reverse deadlocks against a concurrent partition create.
     EXECUTE format($q$

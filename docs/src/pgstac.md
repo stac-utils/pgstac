@@ -100,6 +100,23 @@ The nohydrate conf item returns an unhydrated item bypassing the CPU intensive s
 SELECT search('{"conf":{"nohydrate"=true}}');
 ```
 
+#### Base Item Versioning
+
+Items are stored dehydrated: any value that matches the collection's base item (`type`, `stac_version`, `collection` and the assets built from the collection's `item_assets`) is stripped on write and merged back on read. Editing a collection's `item_assets` or `stac_version` therefore used to change what every already loaded item of that collection looked like.
+
+PgSTAC keeps every base item a collection has had since its first edit in the `base_items` table and records on each item which one it was dehydrated against:
+
+- A collection whose base item has never changed has no `base_items` rows, and its items carry no tag. Nothing behaves differently from earlier versions.
+- When an update of `collections` changes the base item, the trigger records the old base item (only on the first edit, since that is what all untagged items were dehydrated against) and then the new one. The lowest id for a collection is always its initial base item, the highest always equals `collections.base_item`.
+- An item is dehydrated against the collection's current base item and tagged with the reserved top-level key `pgstac:base_item`, whose value is that `base_items` id. Any `pgstac:base_item` key on an incoming item is discarded.
+- Reading resolves the base item through `collection_base_item(cid text, _base_item_id int DEFAULT NULL)`. With a tag it returns exactly that row; a tag naming no row returns NULL and hydration raises rather than returning stripped content. Without a tag it returns the collection's initial base item, so the one-argument call form stays correct for older API code.
+- The tag is removed before the merge, so it never appears in hydrated output.
+- With `conf.nohydrate` the tag is part of the stored content and appears as a top-level key on exactly those features that have one. An API that hydrates itself must fetch the base item with `collection_base_item(collection_id, base_item_id)` when the key is present and with `collection_base_item(collection_id)` when it is not, and must remove the key before returning the feature.
+
+Order of operations when upgrading: deploy every API instance that hydrates client-side onto a release that understands the tag, upgrade loaders together with the database (a pypgstac loader and a database on different minor versions refuse to work together), and only then edit `item_assets` or `stac_version` on a collection that already has items. Until the first such edit nothing behaves differently. A role that updates `collections` but is not a member of `pgstac_ingest` needs `GRANT INSERT ON pgstac.base_items` after migrating.
+
+A dehydrated export, such as one produced by `pg_dump` or `COPY` and reloaded with `pypgstac load items --dehydrated`, is only loadable into a database that also has the source's `base_items` rows — normally the same database. Item content in such an export is specific to the base items it was stripped against, and a tag that resolves to no row fails loudly on read.
+
 #### PgSTAC Partitioning
 By default PgSTAC partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
 ```sql

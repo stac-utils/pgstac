@@ -11,14 +11,13 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import (
+    IO,
     Any,
-    BinaryIO,
     Dict,
     Generator,
     Iterable,
     Iterator,
     Optional,
-    TextIO,
     Tuple,
     Union,
 )
@@ -99,7 +98,7 @@ def open_std(
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
-    fh: Union[TextIO, BinaryIO]
+    fh: IO[Any]
     if (
         filename is None
         or filename == "-"
@@ -187,14 +186,20 @@ class Loader:
                 )
 
     @lru_cache(maxsize=128)
-    def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
-        """Get collection."""
+    def collection_json(
+        self,
+        collection_id: str,
+    ) -> Tuple[Dict[str, Any], int, str, Optional[int]]:
+        """Get collection, base item, and base item row id (None if never edited)."""
         res = self.db.query_one(
-            "SELECT base_item, key, partition_trunc FROM collections WHERE id=%s",
+            """
+            SELECT b.base_item, c.key, c.partition_trunc, b.base_item_id
+            FROM collections c, current_base_item(c.id) b WHERE c.id=%s
+            """,
             (collection_id,),
         )
         if isinstance(res, tuple):
-            base_item, key, partition_trunc = res
+            base_item, key, partition_trunc, base_item_id = res
         else:
             raise Exception(f"Error getting info for {collection_id}.")
         if key is None:
@@ -202,7 +207,7 @@ class Loader:
                 f"Collection {collection_id} is not present in the database",
             )
         logger.debug(f"Found {collection_id} with base_item {base_item}")
-        return base_item, key, partition_trunc
+        return base_item, key, partition_trunc, base_item_id
 
     def load_collections(
         self,
@@ -268,6 +273,9 @@ class Loader:
                         "Available modes are insert, ignore, and upsert."
                         f"You entered {insert_mode}.",
                     )
+
+        # Cached collection info may now be stale.
+        self.collection_json.cache_clear()  # type: ignore[attr-defined]
 
     @retry(
         stop=stop_after_attempt(10),
@@ -503,7 +511,7 @@ class Loader:
         """
         p = item.get("partition", None)
         if p is None:
-            _, key, partition_trunc = self.collection_json(item["collection"])
+            _, key, partition_trunc, _ = self.collection_json(item["collection"])
             if partition_trunc == "year":
                 pd = item["datetime"].replace("-", "")[:4]
                 p = f"_items_{key}_{pd}"
@@ -669,7 +677,9 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc = self.collection_json(item["collection"])
+        base_item, key, partition_trunc, base_item_id = self.collection_json(
+            item["collection"],
+        )
 
         out["id"] = item.get("id")
         out["collection"] = item.get("collection")
@@ -721,6 +731,10 @@ class Loader:
         content.pop("id", None)
         content.pop("collection", None)
         content.pop("geometry", None)
+
+        content.pop("pgstac:base_item", None)
+        if base_item_id is not None:
+            content["pgstac:base_item"] = base_item_id
 
         if (private := content.pop("private", None)) is not None:
             out["private"] = orjson.dumps(private).decode()

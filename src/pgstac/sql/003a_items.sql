@@ -59,8 +59,11 @@ EXECUTE FUNCTION partition_after_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+    SELECT (strip_jsonb(_item - '{id,geometry,collection,type,pgstac:base_item}'::text[], b.base_item)
+                - '{id,geometry,collection,type}'::text[])
+           || jsonb_strip_nulls(jsonb_build_object('pgstac:base_item', b.base_item_id))
+    FROM current_base_item(_item->>'collection') b;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
@@ -125,29 +128,30 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
-    output jsonb;
     content jsonb;
-    base_item jsonb := _collection.base_item;
+    base_item jsonb;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
-    output := content_hydrate(
-        jsonb_build_object(
-            'id', _item.id,
-            'geometry', geom,
-            'collection', _item.collection,
-            'type', 'Feature'
-        ) || _item.content,
-        _collection.base_item,
-        fields
+    base_item := collection_base_item(
+        _item.collection,
+        (_item.content->>'pgstac:base_item')::int
     );
-
-    RETURN output;
+    IF base_item IS NULL THEN
+        RAISE EXCEPTION 'Item % in collection % is tagged with base item %, which does not exist.',
+            _item.id, _item.collection, _item.content->>'pgstac:base_item';
+    END IF;
+    content := jsonb_build_object(
+        'id', _item.id,
+        'geometry', geom,
+        'collection', _item.collection,
+        'type', 'Feature'
+    ) || (_item.content - 'pgstac:base_item');
+    RETURN content_hydrate(content, base_item, fields);
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
@@ -172,15 +176,6 @@ BEGIN
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT content_hydrate(
-        _item,
-        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
-        fields
-    );
-$$ LANGUAGE SQL STABLE;
-
 
 CREATE UNLOGGED TABLE items_staging (
     content JSONB NOT NULL
@@ -223,10 +218,9 @@ BEGIN
 
     RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
     DROP TABLE IF EXISTS tmpdata;
+    -- LATERAL so content_dehydrate runs once per row.
     CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
-    SELECT
-        (content_dehydrate(content)).*
-    FROM newdata;
+    SELECT d.* FROM newdata n, LATERAL content_dehydrate(n.content) d;
     GET DIAGNOSTICS nrows = ROW_COUNT;
     RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
 

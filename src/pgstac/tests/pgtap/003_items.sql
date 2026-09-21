@@ -52,3 +52,189 @@ SELECT results_eq($$
     $$,
     'Test delete_item function'
 );
+
+
+-- Base item versioning: items keep hydrating against the base item they were dehydrated from.
+
+SELECT create_collection('{"id": "pgstac-test-baseitems", "type": "Collection", "stac_version": "1.0.0", "description": "base item versioning", "license": "proprietary", "links": [], "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [["2011-01-01T00:00:00Z", "2011-12-31T00:00:00Z"]]}}, "item_assets": {"image": {"type": "image/tiff", "title": "Image"}, "thumbnail": {"type": "image/jpeg", "title": "Thumbnail"}}}');
+
+SELECT is_empty($$
+    SELECT * FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,
+    'A collection that has never been edited has no base_items rows'
+);
+
+SELECT create_item('{"id": "pgstac-test-baseitem-a", "type": "Feature", "stac_version": "1.0.0", "collection": "pgstac-test-baseitems", "bbox": [0, 0, 1, 1], "links": [], "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}, "assets": {"image": {"href": "https://example.com/a.tif", "type": "image/tiff", "title": "Image"}, "thumbnail": {"href": "https://example.com/a.jpg", "type": "image/jpeg", "title": "Thumbnail"}}, "properties": {"datetime": "2011-06-01T00:00:00Z"}, "stac_extensions": []}');
+
+CREATE TEMP TABLE baseitem_snapshot AS
+SELECT get_item('pgstac-test-baseitem-a', 'pgstac-test-baseitems') AS snapshot;
+
+SELECT results_eq($$
+    SELECT content ? 'pgstac:base_item' FROM items WHERE id='pgstac-test-baseitem-a';
+    $$,$$
+    SELECT false;
+    $$,
+    'An item loaded before any edit is stored without a tag'
+);
+
+SELECT update_collection(jsonb_set(content, '{extent,temporal,interval,0,1}', '"2012-12-31T00:00:00Z"'))
+FROM collections WHERE id='pgstac-test-baseitems';
+
+SELECT is_empty($$
+    SELECT * FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,
+    'An update that does not change the base item creates no base_items rows'
+);
+
+-- One edit that changes an item_assets value, adds a key and removes an asset.
+SELECT update_collection(content || '{"item_assets": {"image": {"type": "image/tiff", "title": "Image (changed)", "roles": ["data"]}}}'::jsonb)
+FROM collections WHERE id='pgstac-test-baseitems';
+
+SELECT results_eq($$
+    SELECT count(*) FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,$$
+    SELECT 2::bigint;
+    $$,
+    'The first base item edit records the old and the new base item'
+);
+
+SELECT results_eq($$
+    SELECT base_item FROM base_items WHERE collection='pgstac-test-baseitems' ORDER BY id DESC LIMIT 1;
+    $$,$$
+    SELECT base_item FROM collections WHERE id='pgstac-test-baseitems';
+    $$,
+    'The highest base_items id holds the collection current base item'
+);
+
+SELECT results_eq($$
+    SELECT get_item('pgstac-test-baseitem-a', 'pgstac-test-baseitems');
+    $$,$$
+    SELECT snapshot FROM baseitem_snapshot;
+    $$,
+    'Editing a collection does not change how an already loaded item hydrates'
+);
+
+SELECT create_item('{"id": "pgstac-test-baseitem-b", "type": "Feature", "stac_version": "1.0.0", "collection": "pgstac-test-baseitems", "bbox": [0, 0, 1, 1], "links": [], "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}, "assets": {"image": {"href": "https://example.com/a.tif", "type": "image/tiff", "title": "Image"}, "thumbnail": {"href": "https://example.com/a.jpg", "type": "image/jpeg", "title": "Thumbnail"}}, "properties": {"datetime": "2011-06-01T00:00:00Z"}, "stac_extensions": []}');
+
+SELECT results_eq($$
+    SELECT (content->>'pgstac:base_item')::int FROM items WHERE id='pgstac-test-baseitem-b';
+    $$,$$
+    SELECT id FROM base_items WHERE collection='pgstac-test-baseitems' ORDER BY id DESC LIMIT 1;
+    $$,
+    'An item loaded after an edit is tagged with the current base item'
+);
+
+SELECT results_eq($$
+    SELECT get_item('pgstac-test-baseitem-b', 'pgstac-test-baseitems') - 'id';
+    $$,$$
+    SELECT snapshot - 'id' FROM baseitem_snapshot;
+    $$,
+    'An item loaded after an edit hydrates to the same content as one loaded before'
+);
+
+SELECT results_eq($$
+    SELECT count(*) FROM jsonb_array_elements(
+        search('{"collections": ["pgstac-test-baseitems"]}')->'features'
+    ) f WHERE f - 'id' = (SELECT snapshot - 'id' FROM baseitem_snapshot);
+    $$,$$
+    SELECT 2::bigint;
+    $$,
+    'Hydrated search returns both items correctly'
+);
+
+SELECT results_eq($$
+    SELECT bool_and(
+        CASE f->>'id'
+            WHEN 'pgstac-test-baseitem-a' THEN NOT f ? 'pgstac:base_item'
+            ELSE (f->>'pgstac:base_item')::int = (
+                SELECT id FROM base_items
+                WHERE collection='pgstac-test-baseitems' ORDER BY id DESC LIMIT 1
+            )
+        END
+    ) FROM jsonb_array_elements(
+        search('{"collections": ["pgstac-test-baseitems"], "conf": {"nohydrate": true}}')->'features'
+    ) f;
+    $$,$$
+    SELECT true;
+    $$,
+    'A nohydrate search carries the tag on the tagged item only'
+);
+
+SELECT results_eq($$
+    SELECT collection_base_item('pgstac-test-baseitems');
+    $$,$$
+    SELECT base_item FROM base_items WHERE collection='pgstac-test-baseitems' ORDER BY id ASC LIMIT 1;
+    $$,
+    'The one argument call form returns the initial base item'
+);
+
+SELECT results_eq($$
+    SELECT collection_base_item(
+        'pgstac-test-baseitems',
+        (SELECT id FROM base_items WHERE collection='pgstac-test-baseitems' ORDER BY id DESC LIMIT 1)
+    );
+    $$,$$
+    SELECT base_item FROM collections WHERE id='pgstac-test-baseitems';
+    $$,
+    'The two argument call form returns the base item the tag names'
+);
+
+SELECT update_collection(jsonb_set(content, '{stac_version}', '"1.1.0"'))
+FROM collections WHERE id='pgstac-test-baseitems';
+
+SELECT results_eq($$
+    SELECT count(*) FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,$$
+    SELECT 3::bigint;
+    $$,
+    'A second base item edit records only the new base item'
+);
+
+SELECT create_item('{"id": "pgstac-test-baseitem-d", "type": "Feature", "stac_version": "1.0.0", "collection": "pgstac-test-baseitems", "pgstac:base_item": 42, "bbox": [0, 0, 1, 1], "links": [], "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}, "assets": {"image": {"href": "https://example.com/a.tif", "type": "image/tiff", "title": "Image"}}, "properties": {"datetime": "2011-06-01T00:00:00Z"}, "stac_extensions": []}');
+
+SELECT results_eq($$
+    SELECT (content->>'pgstac:base_item')::int FROM items WHERE id='pgstac-test-baseitem-d';
+    $$,$$
+    SELECT id FROM base_items WHERE collection='pgstac-test-baseitems' ORDER BY id DESC LIMIT 1;
+    $$,
+    'A tag supplied by the caller is discarded and replaced'
+);
+
+UPDATE items SET content = content || '{"pgstac:base_item": 999999}'::jsonb
+WHERE id='pgstac-test-baseitem-d' AND collection='pgstac-test-baseitems';
+
+SELECT throws_ok(
+    $$ SELECT get_item('pgstac-test-baseitem-d', 'pgstac-test-baseitems') $$,
+    'P0001',
+    NULL,
+    'An item tagged with a base item that does not exist fails loudly'
+);
+
+UPDATE items SET content = content || '{"pgstac:base_item": "notanint"}'::jsonb
+WHERE id='pgstac-test-baseitem-d' AND collection='pgstac-test-baseitems';
+
+SELECT throws_ok(
+    $$ SELECT get_item('pgstac-test-baseitem-d', 'pgstac-test-baseitems') $$,
+    '22P02',
+    NULL,
+    'An item whose tag is not an integer fails on the cast'
+);
+
+SELECT delete_collection('pgstac-test-baseitems');
+
+SELECT is_empty($$
+    SELECT * FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,
+    'Deleting a collection removes its base_items rows'
+);
+
+SELECT create_collection('{"id": "pgstac-test-baseitems", "type": "Collection", "stac_version": "1.0.0", "description": "base item versioning", "license": "proprietary", "links": [], "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [["2011-01-01T00:00:00Z", "2011-12-31T00:00:00Z"]]}}, "item_assets": {"image": {"type": "image/tiff", "title": "Image"}}}');
+
+SELECT is_empty($$
+    SELECT * FROM base_items WHERE collection='pgstac-test-baseitems';
+    $$,
+    'Recreating a collection leaves no base_items rows behind'
+);
+
+SELECT delete_collection('pgstac-test-baseitems');
+DROP TABLE baseitem_snapshot;

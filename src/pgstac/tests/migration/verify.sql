@@ -12,6 +12,7 @@ DECLARE
     now_items_per jsonb;
     now_search_per jsonb;
     now_temporal_per jsonb;
+    now_flat_features jsonb;
     missing bigint;
     orphans bigint;
     unconstrained bigint;
@@ -43,6 +44,10 @@ BEGIN
         FROM unnest(ARRAY['mig-flat','mig-month','mig-year']) c
     ) z;
 
+    SELECT search(jsonb_build_object(
+        'collections', jsonb_build_array('mig-flat'), 'limit', 500
+    ))->'features' INTO now_flat_features;
+
     -- Nothing may be lost.
     IF now_items <> s.items THEN
         RAISE EXCEPTION 'items changed across migration: % -> %', s.items, now_items;
@@ -66,6 +71,10 @@ BEGIN
     IF now_temporal_per IS DISTINCT FROM s.temporal_search_per_collection THEN
         RAISE EXCEPTION 'temporal search results changed: % -> %',
             s.temporal_search_per_collection, now_temporal_per;
+    END IF;
+
+    IF now_flat_features IS DISTINCT FROM s.flat_features THEN
+        RAISE EXCEPTION 'hydrated items changed across migration';
     END IF;
 
     -- A valid extent must never be replaced, in particular not with JSON null.
@@ -125,6 +134,40 @@ BEGIN
         RAISE EXCEPTION 'item ingested after migration is not searchable (found %)', found;
     END IF;
     RAISE NOTICE 'post-migration ingest verified';
+END;
+$$;
+
+-- Editing a collection's base item after migrating must not change existing items' hydration.
+UPDATE collections SET content = jsonb_set(
+    content, '{item_assets}',
+    '{"data":{"type":"image/png","title":"Changed"},"thumbnail":{"type":"image/png"}}'::jsonb
+) WHERE id = 'mig-flat';
+
+DO $$
+DECLARE
+    nrows int;
+    now_flat_features jsonb;
+    tagged int;
+BEGIN
+    SELECT count(*) INTO nrows FROM base_items WHERE collection = 'mig-flat';
+    IF nrows <> 2 THEN
+        RAISE EXCEPTION 'first base item edit recorded % rows, expected 2', nrows;
+    END IF;
+
+    SELECT search(jsonb_build_object(
+        'collections', jsonb_build_array('mig-flat'), 'limit', 500
+    ))->'features' INTO now_flat_features;
+    IF now_flat_features IS DISTINCT FROM
+        (SELECT flat_features FROM public.migration_snapshot)
+    THEN
+        RAISE EXCEPTION 'collection edit changed how already loaded items hydrate';
+    END IF;
+
+    SELECT count(*) INTO tagged FROM jsonb_array_elements(now_flat_features) f
+    WHERE f ? 'pgstac:base_item';
+    IF tagged > 0 THEN
+        RAISE EXCEPTION '% hydrated items leak the pgstac:base_item key', tagged;
+    END IF;
 END;
 $$;
 

@@ -176,11 +176,8 @@ $$;
 
 -- Return type or argument list differs from an earlier release, which
 -- CREATE OR REPLACE cannot change.
-DROP FUNCTION IF EXISTS run_or_queue(text);
-DROP FUNCTION IF EXISTS update_partition_stats_q(text, boolean);
 DROP FUNCTION IF EXISTS update_partition_stats(text, boolean);
 DROP FUNCTION IF EXISTS maintain_index(text, text, boolean, boolean, boolean);
-DROP FUNCTION IF EXISTS queryable_indexes(text, boolean);
 
 -- Install these idempotently as migrations do not put them before trying to modify the collections table
 

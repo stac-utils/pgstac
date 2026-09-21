@@ -163,6 +163,12 @@ ALTER DATABASE pgstac_test_dump_src SET client_min_messages to $CLIENTMESSAGES;
 \connect pgstac_test_dump_src
 \copy collections (content) FROM '$PGSTACDIR/tests/testdata/collections.ndjson';
 \copy items_staging (content) FROM '$PGSTACDIR/tests/testdata/items.ndjson'
+-- Exercise base_items rows, an untagged item and a tagged one in the dump.
+UPDATE collections SET content = jsonb_set(
+    content, '{item_assets}', '{"thumbnail":{"type":"image/png"}}'::jsonb
+) WHERE id = 'pgstac-test-collection';
+SELECT create_item(get_item(id, collection) || '{"id":"pgdump-post-edit"}'::jsonb)
+FROM items WHERE collection = 'pgstac-test-collection' LIMIT 1;
 EOSQL
 
     # Capture counts from source
@@ -170,7 +176,9 @@ EOSQL
     SRC_ITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.items;" pgstac_test_dump_src)
     SRC_SEARCH=$(psql -X -t -A -c "SELECT count(*) FROM (SELECT * FROM pgstac.search('{}')) s;" pgstac_test_dump_src)
     SRC_VERSION=$(psql -X -t -A -c "SELECT pgstac.get_version();" pgstac_test_dump_src)
-    echo "Source: ${SRC_COLLECTIONS} collections, ${SRC_ITEMS} items, ${SRC_SEARCH} search results, version ${SRC_VERSION}"
+    SRC_BASEITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.base_items;" pgstac_test_dump_src)
+    SRC_HYDRATED=$(psql -X -t -A -c "SELECT md5(string_agg(pgstac.get_item(id, collection)::text, '' ORDER BY collection ASC, id ASC)) FROM pgstac.items;" pgstac_test_dump_src)
+    echo "Source: ${SRC_COLLECTIONS} collections, ${SRC_ITEMS} items, ${SRC_SEARCH} search results, version ${SRC_VERSION}, ${SRC_BASEITEMS} base items, hydrated ${SRC_HYDRATED}"
 
     # Dump with custom format
     echo "Running pg_dump -Fc ..."
@@ -205,7 +213,9 @@ EOSQL
     DST_ITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.items;" pgstac_test_dump_dst)
     DST_SEARCH=$(psql -X -t -A -c "SELECT count(*) FROM (SELECT * FROM pgstac.search('{}')) s;" pgstac_test_dump_dst)
     DST_VERSION=$(psql -X -t -A -c "SELECT pgstac.get_version();" pgstac_test_dump_dst)
-    echo "Restored: ${DST_COLLECTIONS} collections, ${DST_ITEMS} items, ${DST_SEARCH} search results, version ${DST_VERSION}"
+    DST_BASEITEMS=$(psql -X -t -A -c "SELECT count(*) FROM pgstac.base_items;" pgstac_test_dump_dst)
+    DST_HYDRATED=$(psql -X -t -A -c "SELECT md5(string_agg(pgstac.get_item(id, collection)::text, '' ORDER BY collection ASC, id ASC)) FROM pgstac.items;" pgstac_test_dump_dst)
+    echo "Restored: ${DST_COLLECTIONS} collections, ${DST_ITEMS} items, ${DST_SEARCH} search results, version ${DST_VERSION}, ${DST_BASEITEMS} base items, hydrated ${DST_HYDRATED}"
 
     FAILED=0
     if [ "$SRC_COLLECTIONS" != "$DST_COLLECTIONS" ]; then
@@ -224,8 +234,20 @@ EOSQL
         echo "***FAIL: version mismatch: source=${SRC_VERSION} restored=${DST_VERSION}***"
         FAILED=1
     fi
+    if [ "$SRC_BASEITEMS" != "$DST_BASEITEMS" ]; then
+        echo "***FAIL: base_items count mismatch: source=${SRC_BASEITEMS} restored=${DST_BASEITEMS}***"
+        FAILED=1
+    fi
+    if [ "$SRC_HYDRATED" != "$DST_HYDRATED" ]; then
+        echo "***FAIL: hydrated item content mismatch: source=${SRC_HYDRATED} restored=${DST_HYDRATED}***"
+        FAILED=1
+    fi
     if [ "$DST_ITEMS" -eq 0 ]; then
         echo "***FAIL: restored database has 0 items***"
+        FAILED=1
+    fi
+    if [ "$DST_BASEITEMS" -eq 0 ]; then
+        echo "***FAIL: restored database has 0 base items***"
         FAILED=1
     fi
 

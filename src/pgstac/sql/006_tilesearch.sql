@@ -83,7 +83,6 @@ BEGIN
 
                 RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             END IF;
-            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
             INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
 
             IF counter >= _limit

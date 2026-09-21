@@ -109,3 +109,5 @@ Rehydration is the process of adding the stripped attributes back to the STAC it
 PgSTAC, a versatile tool, is designed to seamlessly integrate with PyPgSTAC or alternative backends. This flexibility allows for direct calls for both rehydration and dehydration, giving developers and technical users a sense of control over the process.
 
 Hydration and dehydration are de-facto settings that users can not opt out of. In the future, we may provide a configuration for use cases where the size benefits do not justify the added complexity.
+
+Which attributes are stripped depends on the collection's base item, and a collection can be edited. PgSTAC therefore keeps every base item a collection has had and tags each item with the one it was dehydrated against, so an edit no longer changes items that were already loaded. The rules, and what they mean for a backend that hydrates outside the database, are documented under [Base Item Versioning](https://stac-utils.github.io/pgstac/pgstac/#base-item-versioning).
