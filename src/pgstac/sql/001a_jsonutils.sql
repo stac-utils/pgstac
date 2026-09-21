@@ -48,7 +48,7 @@ SELECT CASE jsonb_array_length(_bbox)
     ),4326)
     ELSE null END;
 ;
-$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE SET search_path TO postgis, public;
 
 CREATE OR REPLACE FUNCTION geom_bbox(_geom geometry) RETURNS jsonb AS $$
     SELECT jsonb_build_array(
@@ -57,7 +57,7 @@ CREATE OR REPLACE FUNCTION geom_bbox(_geom geometry) RETURNS jsonb AS $$
         st_xmax(_geom),
         st_ymax(_geom)
     );
-$$ LANGUAGE SQL IMMUTABLE STRICT;
+$$ LANGUAGE SQL IMMUTABLE STRICT SET search_path TO postgis, public;
 
 CREATE OR REPLACE FUNCTION flip_jsonb_array(j jsonb) RETURNS jsonb AS $$
     SELECT jsonb_agg(value) FROM (SELECT value FROM jsonb_array_elements(j) WITH ORDINALITY ORDER BY ordinality DESC) as t;

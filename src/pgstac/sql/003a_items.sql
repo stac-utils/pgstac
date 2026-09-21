@@ -968,7 +968,7 @@ BEGIN
     IF result = '{}'::jsonb THEN RETURN NULL; END IF;
     RETURN result;
 END;
-$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE SET search_path TO pgstac;
 
 -- pgstac_hash_fragment: Hash a fragment payload for dedup. Returns the raw
 -- 32-byte sha256 (bytea), stored directly in item_fragments.hash. The fragment
