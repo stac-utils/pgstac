@@ -11,7 +11,7 @@ SELECT
             ELSE NULL
         END as geometry
 ;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET search_path TO postgis, public;
 
 
 
@@ -51,11 +51,11 @@ $$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
 
 CREATE OR REPLACE FUNCTION stac_datetime(value jsonb) RETURNS timestamptz AS $$
     SELECT lower(stac_daterange(value));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC' SET search_path TO pgstac;
 
 CREATE OR REPLACE FUNCTION stac_end_datetime(value jsonb) RETURNS timestamptz AS $$
     SELECT upper(stac_daterange(value));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC';
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET TIMEZONE='UTC' SET search_path TO pgstac;
 
 CREATE TABLE IF NOT EXISTS stac_extensions(
     url text PRIMARY KEY,

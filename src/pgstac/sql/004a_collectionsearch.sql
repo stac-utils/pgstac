@@ -136,4 +136,4 @@ BEGIN
         'links', links
     );
 END;
-$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE SET search_path TO pgstac, postgis, public;

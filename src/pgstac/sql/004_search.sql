@@ -8,12 +8,12 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
 -- search_hash_from_where: produce a deterministic hash from a WHERE clause and optional metadata.
 CREATE OR REPLACE FUNCTION search_hash_from_where(_where text, _metadata jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
     SELECT pgstac_hash(format('%s|%s', _where, coalesce(_metadata, '{}'::jsonb)::text));
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET search_path TO pgstac;
 
 -- search_hash: produce a deterministic hash from a STAC search JSON.
 CREATE OR REPLACE FUNCTION search_hash(_search jsonb, _metadata jsonb DEFAULT '{}'::jsonb) RETURNS text AS $$
     SELECT search_hash_from_where(stac_search_to_where(_search), _metadata);
-$$ LANGUAGE SQL STABLE PARALLEL SAFE;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE SET search_path TO pgstac, postgis, public;
 
 -- Searches cache table stores derived search metadata (WHERE clause, ORDER BY,
 -- hash) so that repeated equivalent queries re-use the cached context count.
@@ -456,7 +456,7 @@ BEGIN
     END IF;
     RETURN out;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET search_path TO pgstac;
 
 -- search_plan: client-streaming entry point
 CREATE OR REPLACE FUNCTION search_plan(
