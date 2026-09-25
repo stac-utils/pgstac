@@ -65,7 +65,7 @@ Example for updating the pgstac_settings table with a new value:
 ```sql
 INSERT INTO pgstac_settings (name, value)
 VALUES
-    ('default-filter-lang', 'cql-json'),
+    ('default_filter_lang', 'cql-json'),
     ('context', 'on')
 
 ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;
@@ -97,7 +97,7 @@ Runtime configuration is available for **context**, **context_estimated_count**,
 
 The nohydrate conf item returns an unhydrated item bypassing the CPU intensive step of rehydrating data with data from the collection metadata. When using the nohydrate conf, the only fields that are respected in the fields extension are geometry and bbox.
 ```sql
-SELECT search('{"conf":{"nohydrate"=true}}');
+SELECT search('{"conf":{"nohydrate":true}}');
 ```
 
 #### Base Item Versioning
@@ -218,7 +218,7 @@ The `datetime` argument of `search()` is separate from CQL2: it means the item's
 These are procedures that should be run periodically to make sure that statistics and constraints are kept up-to-date and validated. These can be made to run regularly using the pg_cron extension if available.
 ```sql
 SELECT cron.schedule('0 * * * *', 'CALL validate_constraints();');
-SELECT cron.schedule('10, * * * *', 'CALL analyze_items();');
+SELECT cron.schedule('10 * * * *', 'CALL analyze_items();');
 ```
 
 #### Migrating a large catalog
