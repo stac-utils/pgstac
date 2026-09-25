@@ -266,7 +266,7 @@ $$ LANGUAGE PLPGSQL;
 -- its effects are visible in this transaction.
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS boolean AS $$
 DECLARE
-    use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+    use_queue boolean := get_setting_bool('use_queue');
 BEGIN
     IF get_setting_bool('debug') THEN
         RAISE NOTICE '%', query;

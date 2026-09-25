@@ -173,3 +173,4 @@ SELECT sync_partition_stats();
 -- failure. pypgstac migrate drains the queue once the schema change has committed.
 SET pgstac.use_queue TO TRUE;
 SELECT update_partition_stats_q(partition) FROM partitions_view ORDER BY partition;
+RESET pgstac.use_queue;

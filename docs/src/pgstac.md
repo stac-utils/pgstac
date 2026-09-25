@@ -202,19 +202,24 @@ The last step of every install and migration recalculates statistics and CHECK
 constraints for every partition. On a catalog with many partitions this is the most
 expensive part of the migration and it holds locks while it runs.
 
-To keep that work off the migration itself, migrate with the queue enabled and drain it
-afterwards:
+That work is queued rather than run inside the migration, and `pypgstac migrate` drains
+the queue once the schema change has committed. Run inline it would hold a `SHARE UPDATE
+EXCLUSIVE` lock on every partition until the migration committed — the same lock `ANALYZE`
+takes — and deadlock against autovacuum on a busy catalog.
+
+Search is correct as soon as the migration commits, because partition visibility is always
+written synchronously; until the queue drains, the observed datetime ranges and the CHECK
+constraints used for partition pruning are stale. `check_pgstac_settings()` warns while
+anything is still queued.
+
+A queued statement that fails is retried `pgstac.queue_retries` times (default 3) before it
+is given up on, so a statement that lost a deadlock is not lost with it. Every attempt is
+recorded in `query_queue_history` with the error that stopped it. `pypgstac migrate` reports
+statements it could not run; `pypgstac runqueue` exits non-zero and names them:
 
 ```bash
-pypgstac --usequeue migrate
-pypgstac runqueue   # repeat until it reports nothing left to do
+pypgstac runqueue   # as a role with pgstac_admin
 ```
-
-`--usequeue` is a global flag, so it goes before the subcommand. Search is correct as
-soon as the migration commits — partition visibility is always written synchronously —
-but until the queue is drained the observed datetime ranges and the CHECK constraints
-used for partition pruning are stale. `check_pgstac_settings()` warns while anything is
-still queued, and `runqueue` must be run as a role with `pgstac_admin`.
 
 ### System Checks
 

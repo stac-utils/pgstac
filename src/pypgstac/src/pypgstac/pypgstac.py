@@ -77,6 +77,7 @@ class PgstacCLI:
             loader.load_items(file, method, dehydrated, chunksize)
 
     def runqueue(self) -> str:
+        """Drain the query queue, reporting anything that could not be run."""
         return self._db.run_queued()
 
     def loadextensions(self) -> None:
