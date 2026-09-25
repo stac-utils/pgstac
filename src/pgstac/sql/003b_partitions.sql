@@ -14,8 +14,14 @@ CREATE TABLE partition_stats (
 ) WITH (FILLFACTOR=90);
 
 CREATE INDEX partition_stats_collection_idx ON partition_stats (collection);
+-- GiST so partition_name's containment lookup is an index condition on both columns; range
+-- containment is not a btree operator. btree_gist is required by 000_idempotent_pre.
+CREATE INDEX IF NOT EXISTS partition_stats_collection_dtrange_idx
+    ON partition_stats USING GIST (collection, partition_dtrange);
 
 
+-- Reads what partition_bound_expr renders, which is pinned to ISO. Any other spelling
+-- returns NULL, which callers read as unbounded.
 CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS $$
     WITH t AS (
         SELECT regexp_matches(
@@ -25,6 +31,10 @@ CREATE OR REPLACE FUNCTION constraint_tstzrange(expr text) RETURNS tstzrange AS 
     ) SELECT tstzrange(m[1]::timestamptz, m[2]::timestamptz) FROM t
     ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE STRICT;
+
+CREATE OR REPLACE FUNCTION partition_bound(_oid oid) RETURNS tstzrange AS $$
+    SELECT pgstac.constraint_tstzrange(pgstac.partition_bound_expr(_oid));
+$$ LANGUAGE SQL STABLE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION get_tstz_constraint(reloid oid, colname text) RETURNS tstzrange AS $$
 DECLARE
@@ -70,7 +80,7 @@ BEGIN
     RAISE DEBUG 'Constraint % for %: % %', colname, reloid::regclass, ts_lower, ts_upper;
     RETURN tstzrange(ts_lower, ts_upper, lower_inclusive || upper_inclusive);
 END;
-$$ LANGUAGE plpgsql STRICT STABLE;
+$$ LANGUAGE plpgsql STRICT STABLE SET DateStyle TO 'ISO, YMD';
 
 CREATE OR REPLACE FUNCTION get_partition_name(relid regclass) RETURNS text AS $$
     SELECT (parse_ident(relid::text))[cardinality(parse_ident(relid::text))];
@@ -100,7 +110,7 @@ RETURNS TABLE (
 DECLARE
     _oid oid;
     _parent oid;
-    _expr text;
+    _collection text;
     _inf tstzrange := tstzrange('-infinity', 'infinity', '[]');
     _dtrange tstzrange;
 BEGIN
@@ -130,19 +140,13 @@ BEGIN
     -- A partition of a sub-partitioned collection carries a datetime range
     -- bound; its collection is on the parent. A direct partition of items
     -- carries the collection itself.
-    IF _parent = 'pgstac.items'::regclass THEN
-        SELECT pg_get_expr(relpartbound, oid) INTO _expr FROM pg_class WHERE oid = _oid;
-    ELSE
-        SELECT pg_get_expr(relpartbound, oid) INTO _expr FROM pg_class WHERE oid = _parent;
-    END IF;
-
-    SELECT COALESCE(
-        constraint_tstzrange(pg_get_expr(relpartbound, oid)),
-        _inf
-    ) INTO _dtrange FROM pg_class WHERE oid = _oid;
+    _collection := partition_collection(
+        CASE WHEN _parent = 'pgstac.items'::regclass THEN _oid ELSE _parent END
+    );
+    _dtrange := COALESCE(partition_bound(_oid), _inf);
 
     RETURN QUERY SELECT
-        replace(replace(_expr, 'FOR VALUES IN (''', ''), ''')', ''),
+        _collection,
         _dtrange,
         COALESCE(get_tstz_constraint(_oid, 'datetime'), _dtrange, _inf),
         COALESCE(get_tstz_constraint(_oid, 'end_datetime'), _inf);
@@ -153,15 +157,11 @@ $$ LANGUAGE PLPGSQL STABLE;
 CREATE OR REPLACE VIEW partition_sys_meta AS
 SELECT
     partition,
-    replace(
-        replace(
-            CASE WHEN level = 1 THEN partition_expr ELSE parent_partition_expr END,
-            'FOR VALUES IN (''',
-            ''
-        ),
-        ''')',
-        ''
-    ) AS collection,
+    -- pg_class.relpartbound is declared COLLATE "C" and the old inline pg_get_expr inherited
+    -- it. Reading it through a function taking oid does not, and CREATE OR REPLACE VIEW
+    -- cannot change a column's collation.
+    partition_collection(CASE WHEN level = 1 THEN c.oid ELSE parent.oid END)
+        COLLATE "C" AS collection,
     level,
     c.reltuples,
     c.relhastriggers,
@@ -180,10 +180,8 @@ FROM
     JOIN pg_class c ON (relid::regclass = c.oid)
     JOIN pg_class parent ON (parentrelid::regclass = parent.oid AND isleaf)
     JOIN LATERAL get_partition_name(relid) AS partition ON TRUE
-    JOIN LATERAL pg_get_expr(c.relpartbound, c.oid) as partition_expr ON TRUE
-    JOIN LATERAL pg_get_expr(parent.relpartbound, parent.oid) as parent_partition_expr ON TRUE
     JOIN LATERAL tstzrange('-infinity', 'infinity','[]') as inf_range ON TRUE
-    JOIN LATERAL COALESCE(constraint_tstzrange(pg_get_expr(c.relpartbound, c.oid)), inf_range) as partition_dtrange ON TRUE
+    JOIN LATERAL COALESCE(partition_bound(c.oid), inf_range) as partition_dtrange ON TRUE
 WHERE isleaf
 ;
 
@@ -352,12 +350,25 @@ DECLARE
     c RECORD;
     parent_name text;
 BEGIN
+    -- check_partition records collection and partition_dtrange synchronously, so one indexed
+    -- lookup answers every ingest into an existing partition. It also settles alignment: a
+    -- catalog partitioned by a non-UTC session keeps the bounds it already has.
+    SELECT ps.partition, ps.partition_dtrange
+    INTO partition_name, partition_range
+    FROM pgstac.partition_stats ps
+    WHERE ps.collection = partition_name.collection
+        AND ps.partition_dtrange @> dt
+    LIMIT 1;
+    IF partition_name IS NOT NULL THEN
+        RETURN;
+    END IF;
+
+    -- Only when no partition covers it, which is the path that goes on to create one.
     SELECT * INTO c FROM pgstac.collections WHERE id=collection;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Collection % does not exist', collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
     parent_name := format('_items_%s', c.key);
-
 
     IF c.partition_trunc = 'year' THEN
         partition_name := format('%s_%s', parent_name, to_char(dt,'YYYY'));
@@ -376,7 +387,8 @@ BEGIN
     RETURN;
 
 END;
-$$ LANGUAGE PLPGSQL STABLE;
+-- UTC so a new partition's boundary does not depend on who loaded the item.
+$$ LANGUAGE PLPGSQL STABLE SET TIME ZONE 'UTC';
 
 
 CREATE OR REPLACE FUNCTION drop_table_constraints(t text) RETURNS text AS $$
@@ -524,27 +536,14 @@ BEGIN
         RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
 
-    IF c.partition_trunc IS NOT NULL THEN
-        _partition_dtrange := tstzrange(
-            date_trunc(c.partition_trunc, lower(_dtrange)),
-            date_trunc(c.partition_trunc, lower(_dtrange)) + (concat('1 ', c.partition_trunc))::interval,
-            '[)'
-        );
-    ELSE
-        _partition_dtrange :=  '[-infinity, infinity]'::tstzrange;
-    END IF;
+    -- Through partition_name rather than repeating its arithmetic: it buckets in UTC and returns
+    -- an existing partition with the bounds it actually has.
+    SELECT p.partition_name, p.partition_range
+    INTO _partition_name, _partition_dtrange
+    FROM pgstac.partition_name(_collection, lower(_dtrange)) p;
 
     IF NOT _partition_dtrange @> _dtrange THEN
         RAISE EXCEPTION 'dtrange % is greater than the partition size % for collection %', _dtrange, c.partition_trunc, _collection;
-    END IF;
-
-
-    IF c.partition_trunc = 'year' THEN
-        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYY'));
-    ELSIF c.partition_trunc = 'month' THEN
-        _partition_name := format('_items_%s_%s', c.key, to_char(lower(_partition_dtrange),'YYYYMM'));
-    ELSE
-        _partition_name := format('_items_%s', c.key);
     END IF;
 
     -- Constraint ranges are maintained asynchronously, so they come from the
@@ -714,16 +713,11 @@ BEGIN
     END IF;
     RETURN _collection;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
+-- UTC: a repartition rebuilds every partition of the collection, so it is the one point where an
+-- existing catalog's alignment can be corrected without rewriting anything unasked for.
+$$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public SET TIME ZONE 'UTC';
 
 CREATE OR REPLACE FUNCTION collections_trigger_func() RETURNS TRIGGER AS $$
-DECLARE
-    q text;
-    partition_name text := format('_items_%s', NEW.key);
-    partition_exists boolean := false;
-    partition_empty boolean := true;
-    err_context text;
-    loadtemp boolean := FALSE;
 BEGIN
     RAISE DEBUG 'Collection Trigger. % %', NEW.id, NEW.key;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN

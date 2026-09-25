@@ -387,3 +387,20 @@ BEGIN
 
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET CLIENT_MIN_MESSAGES TO NOTICE;
+
+
+-- pg_get_expr renders timestamps under the READER's DateStyle, so this is the only place
+-- pgstac deparses a partition bound. ISO text then parses the same under any DateStyle.
+CREATE OR REPLACE FUNCTION partition_bound_expr(_oid oid) RETURNS text AS $$
+    SELECT pg_get_expr(relpartbound, oid) FROM pg_class WHERE oid = _oid;
+$$ LANGUAGE SQL STABLE STRICT PARALLEL SAFE SET DateStyle TO 'ISO, YMD';
+
+-- The collection of a LIST partition. The bound is a SQL literal, so quotes inside an id are
+-- doubled; undoing that once keeps an id containing a quote matchable.
+CREATE OR REPLACE FUNCTION partition_collection(_oid oid) RETURNS text AS $$
+    SELECT replace(
+        substring(pgstac.partition_bound_expr(_oid), '^FOR VALUES IN \(''(.*)''\)$'),
+        '''''',
+        ''''
+    );
+$$ LANGUAGE SQL STABLE STRICT PARALLEL SAFE;
