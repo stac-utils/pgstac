@@ -176,6 +176,8 @@ To upsert any records, adding anything new and replacing anything with the same 
 pypgstac load items --method upsert
 ```
 
+The loader dehydrates each item against the collection's base item as it stands at load time and tags the item with that base item, so the item keeps hydrating the way it was loaded even if the collection is edited later (see [Base Item Versioning](pgstac.md#base-item-versioning)). A loader and a database on different major/minor versions refuse to work together. Input read with `--dehydrated` carries those tags, so it can only be loaded into a database that holds the same `base_items` rows as the database it came from.
+
 ### Loading Queryables
 
 Queryables are a mechanism that allows clients to discover what terms are available for use when writing filter expressions in a STAC API. The Filter Extension enables clients to filter collections and items based on their properties using the Common Query Language (CQL2).
@@ -248,7 +250,7 @@ The JSON file should follow the queryables schema as described in the [STAC API 
 }
 ```
 
-The command will extract the properties from the JSON file and create queryables in the database. It will also determine the appropriate property wrapper based on the type of each property and create the necessary indexes.
+The command extracts the properties from the JSON file and writes each one through `upsert_queryable`, so it replaces any queryable of the same name it would conflict with — a global one, or a per-collection one whose collections overlap. It leaves `property_wrapper` NULL so the database infers it from the definition, and indexes are built only for `--index_fields`.
 
 ### Automated Collection Extent Updates
 

@@ -1,4 +1,5 @@
 """Fixtures for pypgstac tests."""
+
 import os
 from typing import Generator
 

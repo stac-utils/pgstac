@@ -13,13 +13,11 @@ from pathlib import Path
 from typing import (
     IO,
     Any,
-    BinaryIO,
     Dict,
     Generator,
     Iterable,
     Iterator,
     Optional,
-    TextIO,
     Tuple,
     Union,
 )
@@ -44,6 +42,23 @@ from .hydration import dehydrate
 from .version import __version__
 
 logger = logging.getLogger(__name__)
+
+DT_MIN = datetime.min.replace(tzinfo=timezone.utc)
+DT_MAX = datetime.max.replace(tzinfo=timezone.utc)
+
+
+def as_utc(value: str) -> Optional[datetime]:
+    """An RFC 3339 timestamp as an aware UTC datetime, or None if unreadable here.
+
+    datetime.fromisoformat is stricter than PostgreSQL's parser before Python
+    3.11, and this package supports 3.8, so a value it cannot read is left to
+    the database rather than refused here.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def _normalize_version_for_parse(version: str) -> str:
@@ -188,14 +203,20 @@ class Loader:
                 )
 
     @lru_cache(maxsize=128)
-    def collection_json(self, collection_id: str) -> Tuple[Dict[str, Any], int, str]:
-        """Get collection."""
+    def collection_json(
+        self,
+        collection_id: str,
+    ) -> Tuple[Dict[str, Any], int, str, Optional[int]]:
+        """Get collection, base item, and base item row id (None if never edited)."""
         res = self.db.query_one(
-            "SELECT base_item, key, partition_trunc FROM collections WHERE id=%s",
+            """
+            SELECT b.base_item, c.key, c.partition_trunc, b.base_item_id
+            FROM collections c, current_base_item(c.id) b WHERE c.id=%s
+            """,
             (collection_id,),
         )
         if isinstance(res, tuple):
-            base_item, key, partition_trunc = res
+            base_item, key, partition_trunc, base_item_id = res
         else:
             raise Exception(f"Error getting info for {collection_id}.")
         if key is None:
@@ -203,7 +224,7 @@ class Loader:
                 f"Collection {collection_id} is not present in the database",
             )
         logger.debug(f"Found {collection_id} with base_item {base_item}")
-        return base_item, key, partition_trunc
+        return base_item, key, partition_trunc, base_item_id
 
     def load_collections(
         self,
@@ -269,6 +290,9 @@ class Loader:
                         "Available modes are insert, ignore, and upsert."
                         f"You entered {insert_mode}.",
                     )
+
+        # Cached collection info may now be stale.
+        self.collection_json.cache_clear()  # type: ignore[attr-defined]
 
     @retry(
         stop=stop_after_attempt(10),
@@ -377,8 +401,8 @@ class Loader:
                     cur.execute(
                         """
                         DROP TABLE IF EXISTS items_ingest_temp;
-                        CREATE TEMP TABLE items_ingest_temp
-                        ON COMMIT DROP AS SELECT * FROM items LIMIT 0;
+                        CREATE TEMP TABLE items_ingest_temp (LIKE items)
+                        ON COMMIT DROP;
                         """,
                     )
                     with cur.copy(
@@ -448,26 +472,23 @@ class Loader:
                         logger.debug(cur.statusmessage)
                         logger.debug(f"Rows affected: {cur.rowcount}")
                     elif insert_mode == Methods.delsert:
+                        # Deleting from the parent removes an item that moved to
+                        # another date sub-partition. The collection bound prunes
+                        # the scan to one collection's sub-tree, which is wider
+                        # than the single partition locked above: two loaders on
+                        # different months of one collection can still deadlock
+                        # here, which the retry decorator absorbs.
+                        cur.execute(
+                            """
+                            DELETE FROM items i USING items_ingest_temp s
+                            WHERE i.collection = %s
+                                AND i.id = s.id AND i.collection = s.collection;
+                            """,
+                            (partition.collection,),
+                        )
                         cur.execute(
                             sql.SQL(
-                                """
-                                WITH deletes AS (
-                                    DELETE FROM items i USING items_ingest_temp s
-                                        WHERE
-                                            i.id = s.id
-                                            AND i.collection = s.collection
-                                )
-                                INSERT INTO {} AS t SELECT * FROM items_ingest_temp
-                                ON CONFLICT (id) DO UPDATE
-                                SET
-                                    datetime = EXCLUDED.datetime,
-                                    end_datetime = EXCLUDED.end_datetime,
-                                    geometry = EXCLUDED.geometry,
-                                    collection = EXCLUDED.collection,
-                                    content = EXCLUDED.content
-                                WHERE t IS DISTINCT FROM EXCLUDED
-                                ;
-                                """,
+                                "INSERT INTO {} SELECT * FROM items_ingest_temp;",
                             ).format(sql.Identifier(partition.name)),
                         )
                         logger.debug(cur.statusmessage)
@@ -504,7 +525,7 @@ class Loader:
         """
         p = item.get("partition", None)
         if p is None:
-            _, key, partition_trunc = self.collection_json(item["collection"])
+            _, key, partition_trunc, _ = self.collection_json(item["collection"])
             if partition_trunc == "year":
                 pd = item["datetime"].replace("-", "")[:4]
                 p = f"_items_{key}_{pd}"
@@ -670,7 +691,9 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc = self.collection_json(item["collection"])
+        base_item, key, partition_trunc, base_item_id = self.collection_json(
+            item["collection"],
+        )
 
         out["id"] = item.get("id")
         out["collection"] = item.get("collection")
@@ -683,6 +706,15 @@ class Loader:
         if edt is not None and sdt is not None:
             out["datetime"] = sdt
             out["end_datetime"] = edt
+            # The rule stac_daterange enforces on the create_item path, which
+            # this path does not take: it writes items.datetime and
+            # items.end_datetime directly. A range that runs backwards can never
+            # match a temporal search, because every temporal predicate needs
+            # datetime <= high AND end_datetime >= low, so such an item would
+            # load and then be unfindable.
+            start, end = as_utc(sdt), as_utc(edt)
+            if start is not None and end is not None and start > end:
+                raise Exception("start_datetime must be < end_datetime")
         elif dt is not None:
             out["datetime"] = dt
             out["end_datetime"] = dt
@@ -722,6 +754,10 @@ class Loader:
         content.pop("id", None)
         content.pop("collection", None)
         content.pop("geometry", None)
+
+        content.pop("pgstac:base_item", None)
+        if base_item_id is not None:
+            content["pgstac:base_item"] = base_item_id
 
         if (private := content.pop("private", None)) is not None:
             out["private"] = orjson.dumps(private).decode()
