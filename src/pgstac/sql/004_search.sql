@@ -62,7 +62,7 @@ BEGIN
 IF _where IS NULL OR trim(_where) = '' THEN
     _where = ' TRUE ';
 END IF;
-RAISE NOTICE 'Getting chunks for % %', _where, _orderby;
+RAISE DEBUG 'Getting chunks for % %', _where, _orderby;
 IF _orderby ILIKE 'datetime d%' THEN
     FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 DESC LOOP
         RETURN NEXT format($q$
@@ -457,7 +457,7 @@ BEGIN
         WHERE _row <= (SELECT min(_row) FROM s1 WHERE _isid)
     LOOP
         orfilter := NULL;
-        RAISE NOTICE 'SORT: %', sort;
+        RAISE DEBUG 'SORT: %', sort;
         IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
             orfilter := format($f$(
                 (%s %s %s) OR (%s IS NULL)
@@ -468,10 +468,10 @@ BEGIN
             sort._val
             );
         ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
-            RAISE NOTICE '< but null';
+            RAISE DEBUG '< but null';
             orfilter := format('%s IS NOT NULL', sort._field);
         ELSIF sort._val IS NULL THEN
-            RAISE NOTICE '> but null';
+            RAISE DEBUG '> but null';
         ELSE
             orfilter := format($f$(
                 (%s %s %s) OR (%s IS NULL)
@@ -482,7 +482,7 @@ BEGIN
             sort._field
             );
         END IF;
-        RAISE NOTICE 'ORFILTER: %', orfilter;
+        RAISE DEBUG 'ORFILTER: %', orfilter;
 
         IF orfilter IS NOT NULL THEN
             IF sort._row = 1 THEN
@@ -682,13 +682,13 @@ BEGIN
 
     -- Calculate Actual Count
     t := clock_timestamp();
-    RAISE NOTICE 'Calculating actual count...';
+    RAISE DEBUG 'Calculating actual count...';
     EXECUTE format(
         'SELECT count(*) FROM items WHERE %s',
         inwhere
     ) INTO sw.total_count;
     i := clock_timestamp() - t;
-    RAISE NOTICE 'Actual Count: % -- %', sw.total_count, i;
+    RAISE DEBUG 'Actual Count: % -- %', sw.total_count, i;
     sw.time_to_count := extract(epoch FROM i);
 
     IF NOT ro THEN
@@ -816,7 +816,7 @@ BEGIN
 IF _where IS NULL OR trim(_where) = '' THEN
     _where = ' TRUE ';
 END IF;
-RAISE NOTICE 'Getting chunks for % %', _where, _orderby;
+RAISE DEBUG 'Getting chunks for % %', _where, _orderby;
 
 base_query := $q$
     SELECT * FROM items
@@ -829,7 +829,7 @@ $q$;
 
 IF _orderby ILIKE 'datetime d%' THEN
     FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 DESC LOOP
-        RAISE NOTICE 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
+        RAISE DEBUG 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
         query := format(
             base_query,
             sdate,
@@ -844,16 +844,16 @@ IF _orderby ILIKE 'datetime d%' THEN
 
         GET DIAGNOSTICS n = ROW_COUNT;
         records_left := records_left - n;
-        RAISE NOTICE 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
+        RAISE DEBUG 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
         timer := clock_timestamp();
         IF records_left <= 0 THEN
-            RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
+            RAISE DEBUG 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
             RETURN;
         END IF;
     END LOOP;
 ELSIF _orderby ILIKE 'datetime a%' THEN
     FOR sdate, edate IN SELECT * FROM chunker(_where) ORDER BY 1 ASC LOOP
-        RAISE NOTICE 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
+        RAISE DEBUG 'Running Query for % to %. %', sdate, edate, age_ms(full_timer);
         query := format(
             base_query,
             sdate,
@@ -868,10 +868,10 @@ ELSIF _orderby ILIKE 'datetime a%' THEN
 
         GET DIAGNOSTICS n = ROW_COUNT;
         records_left := records_left - n;
-        RAISE NOTICE 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
+        RAISE DEBUG 'Returned %/% Rows From % to %. % to go. Time: %ms', n, _limit, sdate, edate, records_left, age_ms(timer);
         timer := clock_timestamp();
         IF records_left <= 0 THEN
-            RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
+            RAISE DEBUG 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
             RETURN;
         END IF;
     END LOOP;
@@ -886,9 +886,9 @@ ELSE
     RAISE DEBUG 'QUERY: %', query;
     timer := clock_timestamp();
     RETURN QUERY EXECUTE query;
-    RAISE NOTICE 'FULL QUERY TOOK %ms', age_ms(timer);
+    RAISE DEBUG 'FULL QUERY TOOK %ms', age_ms(timer);
 END IF;
-RAISE NOTICE 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
+RAISE DEBUG 'SEARCH_ROWS TOOK %ms', age_ms(full_timer);
 RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
@@ -972,7 +972,7 @@ BEGIN
     orderby := searches.orderby;
     search_where := where_stats(_where);
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
-    RAISE NOTICE 'SEARCH:TOKEN: %', _search->>'token';
+    RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
     RAISE NOTICE '***TOKEN: %', token;
     _querylimit := _limit + 1;
@@ -996,17 +996,17 @@ BEGIN
     END IF;
 
     full_where := concat_ws(' AND ', _where, token_where);
-    RAISE NOTICE 'FULL WHERE CLAUSE: %', full_where;
-    RAISE NOTICE 'Time to get counts and build query %', age_ms(timer);
+    RAISE DEBUG 'FULL WHERE CLAUSE: %', full_where;
+    RAISE DEBUG 'Time to get counts and build query %', age_ms(timer);
     timer := clock_timestamp();
 
     IF hydrate THEN
-        RAISE NOTICE 'Getting hydrated data.';
+        RAISE DEBUG 'Getting hydrated data.';
     ELSE
-        RAISE NOTICE 'Getting non-hydrated data.';
+        RAISE DEBUG 'Getting non-hydrated data.';
     END IF;
-    RAISE NOTICE 'CACHE SET TO %', get_setting_bool('format_cache');
-    RAISE NOTICE 'Time to set hydration/formatting %', age_ms(timer);
+    RAISE DEBUG 'CACHE SET TO %', get_setting_bool('format_cache');
+    RAISE DEBUG 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
     SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
     FROM search_rows(
@@ -1016,7 +1016,7 @@ BEGIN
         _querylimit
     ) as i;
 
-    RAISE NOTICE 'Time to fetch rows %', age_ms(timer);
+    RAISE DEBUG 'Time to fetch rows %', age_ms(timer);
     timer := clock_timestamp();
 
 
@@ -1024,7 +1024,7 @@ BEGIN
         out_records := flip_jsonb_array(out_records);
     END IF;
 
-    RAISE NOTICE 'Query returned % records.', jsonb_array_length(out_records);
+    RAISE DEBUG 'Query returned % records.', jsonb_array_length(out_records);
     RAISE DEBUG 'TOKEN:   % %', token_item.id, token_item.collection;
     RAISE DEBUG 'RECORD_1: % %', out_records->0->>'id', out_records->0->>'collection';
     RAISE DEBUG 'RECORD-1: % %', out_records->-1->>'id', out_records->-1->>'collection';
@@ -1081,7 +1081,7 @@ BEGIN
         );
     END IF;
 
-    RAISE NOTICE 'Time to get prev/next %', age_ms(timer);
+    RAISE DEBUG 'Time to get prev/next %', age_ms(timer);
     timer := clock_timestamp();
 
 
@@ -1108,11 +1108,11 @@ BEGIN
         collection = collection || jsonb_build_object('timing', age_ms(init_ts));
     END IF;
 
-    RAISE NOTICE 'Time to build final json %', age_ms(timer);
+    RAISE DEBUG 'Time to build final json %', age_ms(timer);
     timer := clock_timestamp();
 
-    RAISE NOTICE 'Total Time: %', age_ms(current_timestamp);
-    RAISE NOTICE 'RETURNING % records. NEXT: %. PREV: %', collection->>'numberReturned', collection->>'next', collection->>'prev';
+    RAISE DEBUG 'Total Time: %', age_ms(current_timestamp);
+    RAISE DEBUG 'RETURNING % records. NEXT: %. PREV: %', collection->>'numberReturned', collection->>'next', collection->>'prev';
     RETURN collection;
 END;
 $$ LANGUAGE PLPGSQL;

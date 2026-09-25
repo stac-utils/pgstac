@@ -22,7 +22,7 @@ DECLARE
     p text;
     t timestamptz := clock_timestamp();
 BEGIN
-    RAISE NOTICE 'Updating partition stats %', t;
+    RAISE DEBUG 'Updating partition stats %', t;
     -- Ordered: each iteration holds a partition_stats row lock until commit.
     FOR p IN SELECT DISTINCT partition
         FROM newdata n JOIN partition_stats p
@@ -34,7 +34,7 @@ BEGIN
     IF TG_OP IN ('DELETE','UPDATE') THEN
         DELETE FROM format_item_cache c USING newdata n WHERE c.collection = n.collection AND c.id = n.id;
     END IF;
-    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
+    RAISE DEBUG 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
@@ -198,7 +198,7 @@ DECLARE
     ts timestamptz := clock_timestamp();
     nrows int;
 BEGIN
-    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Creating Partitions. %', clock_timestamp() - ts;
 
     FOR part IN WITH t AS (
         SELECT
@@ -218,30 +218,30 @@ BEGIN
     ) SELECT check_partition(collection, dtrange, edtrange) FROM (
         SELECT * FROM p ORDER BY collection, d
     ) ordered LOOP
-        RAISE NOTICE 'Partition %', part;
+        RAISE DEBUG 'Partition %', part;
     END LOOP;
 
-    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Creating temp table with data to be added. %', clock_timestamp() - ts;
     DROP TABLE IF EXISTS tmpdata;
     CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
     SELECT
         (content_dehydrate(content)).*
     FROM newdata;
     GET DIAGNOSTICS nrows = ROW_COUNT;
-    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
+    RAISE DEBUG 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
 
-    RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
         INSERT INTO items
         SELECT * FROM tmpdata;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
         SELECT * FROM tmpdata
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         -- Locked in a fixed order first, so concurrent upserts over an
         -- overlapping id set cannot deadlock. A bare DELETE gives no ordering;
@@ -259,17 +259,17 @@ BEGIN
         WHERE i.collection = l.collection AND i.id = l.id
         ;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
         INSERT INTO items AS t
         SELECT * FROM tmpdata
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
-    RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Deleting data from staging table. %', clock_timestamp() - ts;
     EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
-    RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
 

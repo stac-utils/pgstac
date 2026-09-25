@@ -12,7 +12,7 @@ BEGIN
         IF NOT FOUND THEN
             EXIT;
         END IF;
-        RAISE NOTICE '%', q;
+        RAISE DEBUG '%', q;
         EXECUTE q;
         COMMIT;
     END LOOP;
@@ -41,7 +41,7 @@ BEGIN
     WHERE convalidated = FALSE AND contype in ('c','f')
     AND nsp.nspname = 'pgstac'
     LOOP
-        RAISE NOTICE '%', q;
+        RAISE DEBUG '%', q;
         PERFORM run_or_queue(q);
         COMMIT;
     END LOOP;

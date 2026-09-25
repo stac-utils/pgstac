@@ -42,7 +42,7 @@ BEGIN
         edt := props->>'datetime';
     END IF;
     IF dt is NULL OR edt IS NULL THEN
-        RAISE NOTICE 'DT: %, EDT: %', dt, edt;
+        RAISE DEBUG 'DT: %, EDT: %', dt, edt;
         RAISE EXCEPTION 'Either datetime (%) or both start_datetime (%) and end_datetime (%) must be set.', props->>'datetime',props->>'start_datetime',props->>'end_datetime';
     END IF;
     RETURN tstzrange(dt, edt, '[]');

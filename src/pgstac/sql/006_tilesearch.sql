@@ -36,7 +36,7 @@ BEGIN
 
     -- If the passed in geometry is not an area set exitwhenfull and skipcovered to false
     IF ST_GeometryType(geom) !~* 'polygon' THEN
-        RAISE NOTICE 'GEOMETRY IS NOT AN AREA';
+        RAISE DEBUG 'GEOMETRY IS NOT AN AREA';
         skipcovered = FALSE;
         exitwhenfull = FALSE;
     END IF;
@@ -48,17 +48,13 @@ BEGIN
 
     search := search_fromhash(queryhash);
 
-    IF search IS NULL THEN
-        RAISE EXCEPTION 'Search with Query Hash % Not Found', queryhash;
-    END IF;
-
     tilearea := st_area(geom);
     _where := format('%s AND st_intersects(geometry, %L::geometry)', search._where, geom);
 
 
     FOR query IN SELECT * FROM partition_queries(_where, search.orderby) LOOP
         query := format('%s LIMIT %L', query, remaining_limit);
-        RAISE NOTICE '%', query;
+        RAISE DEBUG '%', query;
         OPEN curs FOR EXECUTE query;
         LOOP
             FETCH curs INTO iter_record;
@@ -81,9 +77,8 @@ BEGIN
 
                 prev_area := unionedgeom_area;
 
-                RAISE NOTICE '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
+                RAISE DEBUG '% % % %', unionedgeom_area/tilearea, counter, scancounter, ftime();
             END IF;
-            RAISE NOTICE '% %', iter_record, content_hydrate(iter_record, fields);
             INSERT INTO pgstac_results (content) VALUES (content_hydrate(iter_record, fields));
 
             IF counter >= _limit

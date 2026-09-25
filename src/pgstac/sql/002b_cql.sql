@@ -125,7 +125,7 @@ DECLARE
     j jsonb := args->1;
 BEGIN
     op := lower(op);
-    RAISE NOTICE 'Constructing spatial query OP: %, ARGS: %', op, args;
+    RAISE DEBUG 'Constructing spatial query OP: %, ARGS: %', op, args;
     IF op NOT IN ('s_equals','s_disjoint','s_touches','s_within','s_overlaps','s_crosses','s_intersects','intersects','s_contains') THEN
         RAISE EXCEPTION 'Spatial Operator % Not Supported', op;
     END IF;
@@ -179,7 +179,7 @@ DECLARE
     args jsonb;
     ret jsonb;
 BEGIN
-    RAISE NOTICE 'CQL1_TO_CQL2: %', j;
+    RAISE DEBUG 'CQL1_TO_CQL2: %', j;
     IF j ? 'filter' THEN
         RETURN cql1_to_cql2(j->'filter');
     END IF;
@@ -338,7 +338,7 @@ BEGIN
     IF op = 'in' THEN
         RAISE NOTICE 'IN : % % %', args, jsonb_build_array(args->0), args->1;
         args := jsonb_build_array(args->0) || (args->1);
-        RAISE NOTICE 'IN2 : %', args;
+        RAISE DEBUG 'IN2 : %', args;
     END IF;
 
 
@@ -386,7 +386,7 @@ BEGIN
             INTO args
         FROM jsonb_array_elements(args) a;
     END IF;
-    RAISE NOTICE 'ARGS: %', args;
+    RAISE DEBUG 'ARGS: %', args;
 
     IF op IN ('and', 'or') THEN
         RETURN
@@ -397,7 +397,7 @@ BEGIN
     END IF;
 
     IF op = 'in' THEN
-        RAISE NOTICE 'IN --  % %', args->0, to_text(args->0);
+        RAISE DEBUG 'IN --  % %', args->0, to_text(args->0);
         RETURN format(
             '%s IN (%s)',
             to_text(args->0),

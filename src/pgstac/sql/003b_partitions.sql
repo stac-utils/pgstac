@@ -236,7 +236,7 @@ BEGIN
     IF _partition IS NULL OR istrigger IS NULL THEN
         RETURN;
     END IF;
-    RAISE NOTICE 'Updating stats for %.', _partition;
+    RAISE DEBUG 'Updating stats for %.', _partition;
 
     SELECT m.collection, m.partition_dtrange, m.constraint_dtrange, m.constraint_edtrange
         INTO collection, pdtrange, cdtrange, cedtrange
@@ -309,24 +309,24 @@ BEGIN
         ;
     END IF;
 
-    RAISE NOTICE 'Checking if we need to modify constraints...';
-    RAISE NOTICE 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
+    RAISE DEBUG 'Checking if we need to modify constraints...';
+    RAISE DEBUG 'cdtrange: % dtrange: % cedtrange: % edtrange: %',cdtrange, dtrange, cedtrange, edtrange;
     IF
         (cdtrange IS DISTINCT FROM dtrange OR edtrange IS DISTINCT FROM cedtrange)
         AND NOT istrigger
     THEN
-        RAISE NOTICE 'Modifying Constraints';
-        RAISE NOTICE 'Existing % %', cdtrange, cedtrange;
-        RAISE NOTICE 'New      % %', dtrange, edtrange;
+        RAISE DEBUG 'Modifying Constraints';
+        RAISE DEBUG 'Existing % %', cdtrange, cedtrange;
+        RAISE DEBUG 'New      % %', dtrange, edtrange;
         PERFORM drop_table_constraints(_partition);
         PERFORM create_table_constraints(_partition, dtrange, edtrange);
     END IF;
     -- auto_extent, not do_extent: a caller that passed _extent aggregates the
     -- extent itself, and update_collection_extents would then be updating
     -- collections from inside its own UPDATE of collections.
-    RAISE NOTICE 'Checking if we need to update collection extents.';
+    RAISE DEBUG 'Checking if we need to update collection extents.';
     IF auto_extent THEN
-        RAISE NOTICE 'updating collection extent for %', collection;
+        RAISE DEBUG 'updating collection extent for %', collection;
         PERFORM run_or_queue(format($q$
             UPDATE collections
             SET content = jsonb_set_lax(
@@ -339,7 +339,7 @@ BEGIN
             ;
         $q$, collection, collection));
     ELSE
-        RAISE NOTICE 'Not updating collection extent for %', collection;
+        RAISE DEBUG 'Not updating collection extent for %', collection;
     END IF;
 
 END;
@@ -426,7 +426,7 @@ BEGIN
     -- Reduce to the bare name so the ALTER statements below quote it correctly
     -- even when the caller passed a schema qualified name.
     t := get_partition_name(_oid);
-    RAISE NOTICE 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
+    RAISE DEBUG 'Creating Table Constraints for % % %', t, _dtrange, _edtrange;
     IF _dtrange = 'empty' AND _edtrange = 'empty' THEN
         q :=format(
             $q$
@@ -556,7 +556,7 @@ BEGIN
     WHERE ps.collection = _collection AND ps.partition_dtrange @> _dtrange
     LIMIT 1;
     IF FOUND THEN
-        RAISE NOTICE '% % %', _edtrange, _dtrange, pm;
+        RAISE DEBUG '% % %', _edtrange, _dtrange, pm;
         _constraint_edtrange :=
             tstzrange(
                 least(
@@ -591,8 +591,8 @@ BEGIN
         _constraint_edtrange := _edtrange;
         _constraint_dtrange := _dtrange;
     END IF;
-    RAISE NOTICE 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
-    RAISE NOTICE 'Creating partition % %', _partition_name, _partition_dtrange;
+    RAISE DEBUG 'EXISTING CONSTRAINTS % %, NEW % %', pm.constraint_dtrange, pm.constraint_edtrange, _constraint_dtrange, _constraint_edtrange;
+    RAISE DEBUG 'Creating partition % %', _partition_name, _partition_dtrange;
     IF c.partition_trunc IS NULL THEN
         q := format(
             $q$
@@ -630,7 +630,7 @@ BEGIN
         EXECUTE q;
     EXCEPTION
         WHEN duplicate_table THEN
-            RAISE NOTICE 'Partition % already exists.', _partition_name;
+            RAISE DEBUG 'Partition % already exists.', _partition_name;
         WHEN others THEN
             GET STACKED DIAGNOSTICS err_context = PG_EXCEPTION_CONTEXT;
             RAISE INFO 'Error Name:%',SQLERRM;
@@ -675,9 +675,9 @@ BEGIN
         RAISE EXCEPTION 'Collection % does not exist', _collection USING ERRCODE = 'foreign_key_violation', HINT = 'Make sure collection exists before adding items';
     END IF;
     IF triggered THEN
-        RAISE NOTICE 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
+        RAISE DEBUG 'Converting % to % partitioning via Trigger', _collection, _partition_trunc;
     ELSE
-        RAISE NOTICE 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
+        RAISE DEBUG 'Converting % from using % to % partitioning', _collection, c.partition_trunc, _partition_trunc;
         IF c.partition_trunc IS NOT DISTINCT FROM _partition_trunc THEN
             RAISE NOTICE 'Collection % already set to use partition by %', _collection, _partition_trunc;
             RETURN _collection;
@@ -725,7 +725,7 @@ DECLARE
     err_context text;
     loadtemp boolean := FALSE;
 BEGIN
-    RAISE NOTICE 'Collection Trigger. % %', NEW.id, NEW.key;
+    RAISE DEBUG 'Collection Trigger. % %', NEW.id, NEW.key;
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN
         PERFORM repartition(NEW.id, NEW.partition_trunc, TRUE);
     END IF;
