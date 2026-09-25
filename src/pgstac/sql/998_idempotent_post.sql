@@ -38,6 +38,7 @@ INSERT INTO pgstac_settings (name, value) VALUES
   ('additional_properties', 'true'),
   ('use_queue', 'false'),
   ('queue_timeout', '10 minutes'),
+  ('queue_retries', '3'),
   ('update_collection_extent', 'false'),
   ('format_cache', 'false'),
   ('readonly', 'false')
@@ -165,7 +166,10 @@ SET ROLE pgstac_ingest;
 SELECT sync_partition_stats();
 
 -- Repairs observed ranges and CHECK constraints for every partition, ordered
--- by partition as every other writer of these rows is. The most expensive part
--- of an install on a large catalog: run with pgstac.use_queue on (pypgstac
--- --usequeue) and drain with pypgstac runqueue to keep it off the migration.
+-- by partition as every other writer of these rows is. Queued whatever use_queue
+-- says: run inline, each partition's SHARE UPDATE EXCLUSIVE lock is held to the
+-- end of the migration, where it deadlocks against autovacuum's ANALYZE and takes
+-- the whole upgrade with it. Queued, each is its own short transaction, retried on
+-- failure. pypgstac migrate drains the queue once the schema change has committed.
+SET pgstac.use_queue TO TRUE;
 SELECT update_partition_stats_q(partition) FROM partitions_view ORDER BY partition;

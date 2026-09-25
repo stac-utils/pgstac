@@ -84,3 +84,18 @@ SELECT is_empty(
     $$ SELECT * FROM pgstac.partition_catalog_meta('queryables') $$,
     'partition_catalog_meta rejects queryables'
 );
+
+-- The queue runners are admin-only; retire_queued_queries deletes from the queue and has to
+-- be held to the same line, or any role could drop pending maintenance.
+SELECT is(
+    has_function_privilege('pgstac_read', 'pgstac.retire_queued_queries()', 'EXECUTE'),
+    false,
+    'pgstac_read cannot execute retire_queued_queries'
+);
+SELECT results_eq(
+    $$ SELECT has_function_privilege(r, 'pgstac.retire_queued_queries()', 'EXECUTE')
+       FROM unnest(ARRAY['pgstac_read', 'pgstac_ingest', 'pgstac_admin']) r ORDER BY r $$,
+    $$ SELECT has_function_privilege(r, 'pgstac.run_queued_query()', 'EXECUTE')
+       FROM unnest(ARRAY['pgstac_read', 'pgstac_ingest', 'pgstac_admin']) r ORDER BY r $$,
+    'retire_queued_queries is executable by exactly the roles that can run the queue'
+);
