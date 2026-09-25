@@ -7,10 +7,11 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import (
+    IO,
     Any,
     BinaryIO,
     Dict,
@@ -99,7 +100,7 @@ def open_std(
     **kwargs: Any,
 ) -> Generator[Any, None, None]:
     """Open files and i/o streams transparently."""
-    fh: Union[TextIO, BinaryIO]
+    fh: IO[Any]
     if (
         filename is None
         or filename == "-"
@@ -538,10 +539,10 @@ class Loader:
                 ),
             )
             if db_rows:
-                datetime_range_min: datetime = db_rows[0][0] or datetime.min
-                datetime_range_max: datetime = db_rows[0][1] or datetime.max
-                end_datetime_range_min: datetime = db_rows[0][2] or datetime.min
-                end_datetime_range_max: datetime = db_rows[0][3] or datetime.max
+                datetime_range_min: datetime = db_rows[0][0] or DT_MIN
+                datetime_range_max: datetime = db_rows[0][1] or DT_MAX
+                end_datetime_range_min: datetime = db_rows[0][2] or DT_MIN
+                end_datetime_range_max: datetime = db_rows[0][3] or DT_MAX
 
                 partition = Partition(
                     name=partition_name,

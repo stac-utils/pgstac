@@ -280,9 +280,11 @@ class PgstacDB:
         if isinstance(version, str):
             if int(version) < 130000:
                 major, minor, patch = tuple(
-                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                    map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
-                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
+                raise Exception(
+                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}",  # noqa: E501
+                )
             return version
         else:
             if self.connection is not None:

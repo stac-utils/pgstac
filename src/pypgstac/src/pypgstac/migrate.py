@@ -89,9 +89,9 @@ class MigrationPath:
             return [f"pgstac.{path[0]}.sql"]
         files = []
         for idx in range(len(path) - 1):
-            f = f"pgstac.{path[idx]}-{path[idx+1]}.sql"
+            f = f"pgstac.{path[idx]}-{path[idx + 1]}.sql"
             f = f.replace("--init", "")
-            files.append(f"pgstac.{path[idx]}-{path[idx+1]}.sql")
+            files.append(f"pgstac.{path[idx]}-{path[idx + 1]}.sql")
         return files
 
 

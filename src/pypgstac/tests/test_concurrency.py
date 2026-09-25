@@ -634,8 +634,7 @@ def test_loader_widening_partition_keeps_check_constraints(db: PgstacDB) -> None
         [partition],
     )
     assert validated == 1, (
-        f"{partition} has {validated} validated CHECK constraints after a "
-        "widening load"
+        f"{partition} has {validated} validated CHECK constraints after a widening load"
     )
 
     dtrange, edtrange = constraint_ranges(db, partition)

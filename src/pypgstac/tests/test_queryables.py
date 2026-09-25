@@ -425,7 +425,8 @@ def test_load_queryables_delete_missing(db: PgstacDB) -> None:
 
 
 def test_load_queryables_delete_missing_with_collections(
-    db: PgstacDB, loader: Loader,
+    db: PgstacDB,
+    loader: Loader,
 ) -> None:
     """Test loading queryables with delete_missing=True and specific collections."""
     # Load test collections first
