@@ -80,4 +80,13 @@ SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0030","sortby":[
 SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0054","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
 
 SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1}');
-SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1, "token": "next:pgstac-test-item-0001"}');
+SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1}'::jsonb
+    || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0001')));
+
+SELECT search('{"filter":{"op":"gte", "args":[{"property":"start_datetime"},"2011-08-16T00:00:00Z"]}, "fields":{"include":["id"]}, "sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}], "limit": 1}');
+
+SELECT search('{"filter":{"op":"t_overlaps", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"filter":{"op":"t_overlappedby", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"filter":{"op":"t_intersects", "args":[{"property":"test:created"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');

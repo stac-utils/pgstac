@@ -243,7 +243,8 @@ BEGIN
         sdate := lower(dtrange);
         edate := upper(dtrange);
 
-        where_segments := where_segments || format(' datetime <= %L::timestamptz AND end_datetime >= %L::timestamptz ',
+        where_segments := where_segments || format(' datetime %s %L::timestamptz AND end_datetime >= %L::timestamptz ',
+            CASE WHEN upper_inc(dtrange) THEN '<=' ELSE '<' END,
             edate,
             sdate
         );
