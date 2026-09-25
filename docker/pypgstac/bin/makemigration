@@ -87,7 +87,17 @@ else
  echo "Creating $MIGRATIONSQL"
 fi
 
-pg_isready -t 10
+# A freshly created volume has to finish initdb and load pgstac.sql first, which takes
+# longer than one pg_isready timeout. Wait for it, and stop rather than run psql at a
+# server that is not there.
+for _ in $(seq 1 30); do
+  pg_isready -q -t 10 && break
+  sleep 2
+done
+if ! pg_isready -q -t 10; then
+  echo "Database never became ready" >&2
+  exit 1
+fi
 # Create Databases to inspect to create migration
 psql -q >/dev/null 2>&1 <<-'EOSQL'
     DROP DATABASE IF EXISTS migra_from;
@@ -131,7 +141,11 @@ fi
 
 # Append wrapper around created migration with idempotent and transaction statements
 
-echo "SET client_min_messages TO WARNING;" >$MIGRATIONSQL
+# BEGIN/COMMIT so a bare psql -f is atomic. pypgstac strips them before executing, because it
+# runs every file of a chain on one connection and an embedded COMMIT would end its transaction,
+# leaving earlier files committed when a later one fails.
+echo "BEGIN;" >$MIGRATIONSQL
+echo "SET client_min_messages TO WARNING;" >>$MIGRATIONSQL
 echo "SET SEARCH_PATH to pgstac, public;" >>$MIGRATIONSQL
 cat $SQLDIR/000_idempotent_pre.sql >>$MIGRATIONSQL
 echo "-- BEGIN migra calculated SQL" >>$MIGRATIONSQL
@@ -139,6 +153,7 @@ cat $MIGRATION >>$MIGRATIONSQL
 echo "-- END migra calculated SQL" >>$MIGRATIONSQL
 cat $SQLDIR/998_idempotent_post.sql >>$MIGRATIONSQL
 echo "SELECT set_version('${TO}');" >>$MIGRATIONSQL
+echo "COMMIT;" >>$MIGRATIONSQL
 
 echo "Migration created at $MIGRATIONSQL."
 exit 0

@@ -127,7 +127,13 @@ for SQLFILE in tests/basic/*.sql; do
         -c "ROLLBACK;" \
         | sed -e '/^ROLLBACK/d' -e '/^BEGIN/d' >"$TMPFILE"
 
-    diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
+    # In create mode TMPFILE is the output file itself, so there is nothing to compare
+    # against: say what happened rather than diff a file with itself and report a pass.
+    if [[ "$TMPFILE" == "$SQLOUTFILE" ]]; then
+        echo "CREATED $SQLOUTFILE -- review it before committing"
+    else
+        diff -Z -b -w -B --strip-trailing-cr --suppress-blank-empty -C 1 "$TMPFILE" $SQLOUTFILE && echo "TEST $SQLFILE PASSED" || { echo "***TEST FOR $SQLFILE FAILED***"; exit 1; }
+    fi
 
 done
 psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_basicsql WITH (force);";

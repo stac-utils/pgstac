@@ -1,3 +1,12 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-$SCRIPT_DIR/runinpypgstac --build test "$@"
+
+# --basicsql-createout writes the .sql.out files it generates. The suite runs against a copy
+# of the source inside the container, so without --cpfiles those files stay there and are
+# lost when it exits.
+CPFILES=()
+for ARG in "$@"; do
+    [[ $ARG == "--basicsql-createout" ]] && CPFILES=(--cpfiles)
+done
+
+$SCRIPT_DIR/runinpypgstac --build "${CPFILES[@]}" test "$@"
