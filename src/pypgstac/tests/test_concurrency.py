@@ -698,3 +698,30 @@ def test_loader_does_not_starve_readers(db: PgstacDB) -> None:
         f"a search waited {max(waits):.1f}s while the loader ran; readers are "
         "being blocked by the loader's locks"
     )
+
+
+def test_concurrent_upsert_queryable_leaves_one_row(db: PgstacDB) -> None:
+    """Two sessions upserting the same queryable name at once.
+
+    upsert_queryable deletes the conflicting rows and inserts its own; without
+    the per-property advisory lock neither session sees the other's row, so the
+    second to commit fails on the deferred queryables constraint trigger. With
+    it the later call waits and replaces the first row. Each holds its
+    transaction open long enough to overlap.
+    """
+
+    def upsert(wrapper: str) -> Callable[[psycopg.Connection], None]:
+        def run(conn: psycopg.Connection) -> None:
+            with conn.transaction():
+                conn.execute(
+                    "SELECT upsert_queryable('race:name', property_wrapper => %s);",
+                    [wrapper],
+                )
+                time.sleep(1)
+
+        return run
+
+    run_concurrently([upsert("to_int"), upsert("to_float")])
+
+    rows = db.query_one("SELECT count(*) FROM queryables WHERE name = 'race:name';")
+    assert rows == 1

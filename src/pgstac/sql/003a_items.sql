@@ -13,6 +13,11 @@ PARTITION BY LIST (collection)
 CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
+-- Never written: it carries the reference index of every indexed queryable, the copies of the
+-- indexes above and the unique id index among them (see 002a_queryables).
+CREATE TABLE IF NOT EXISTS queryable_index_template (LIKE items INCLUDING INDEXES);
+CREATE UNIQUE INDEX IF NOT EXISTS queryable_index_template_id_idx ON queryable_index_template (id);
+
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;

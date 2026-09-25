@@ -208,3 +208,44 @@ RETURNS timestamptz AS $$
         END
     ;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
+
+-- The keys a content->'a'->'b' chain names, in order, NULL for anything else; a doubled quote
+-- stands for one quote in a key. Read by the conversion below and dropped with it, so it never
+-- joins the schema the diff that follows is calculated against. A path this cannot read becomes
+-- NULL, and those rows are named in the NOTICE below before anything is converted.
+CREATE OR REPLACE FUNCTION content_keys(_path text) RETURNS text[] AS $fn$
+    SELECT array_agg(replace(m[1], '''''', '''') ORDER BY o)
+    FROM regexp_matches(_path, $re$->\s*'((?:[^']|'')*)'$re$, 'g') WITH ORDINALITY AS u(m, o)
+    WHERE _path ~ $re$^\s*content(\s*->\s*'(?:[^']|'')*')+\s*$$re$;
+$fn$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+-- property_path held the SQL path expression a queryable was read through; it now holds the keys
+-- that expression named. The plain cast the migration makes of the column fails on a legacy value,
+-- so convert here, before it runs. A value content_keys cannot read names keys that cannot be
+-- recovered and becomes NULL, falling the queryable back to those of its name.
+DO $conv$
+  DECLARE
+    _lost text;
+  BEGIN
+    -- Guarded because a plain ALTER fails on the second run, and because content_keys takes the
+    -- column's old type: once converted, the name no longer resolves.
+    IF EXISTS (
+      SELECT FROM pg_attribute
+      WHERE attrelid = to_regclass('pgstac.queryables')
+        AND attname = 'property_path'
+        AND atttypid = 'text'::regtype
+    ) THEN
+      -- A value this cannot read becomes NULL, which re-points the queryable at the keys of its
+      -- own name -- a different member of the item. Name those rows rather than losing them
+      -- quietly.
+      SELECT string_agg(format('%s (%s)', name, property_path), ', ' ORDER BY id) INTO _lost
+      FROM queryables
+      WHERE property_path IS NOT NULL AND content_keys(property_path) IS NULL;
+      IF _lost IS NOT NULL THEN
+        RAISE NOTICE 'property_path could not be read for: %. These queryables now read the keys of their own name.', _lost;
+      END IF;
+      ALTER TABLE queryables ALTER COLUMN property_path TYPE text[] USING content_keys(property_path);
+    END IF;
+  END
+$conv$;
+DROP FUNCTION content_keys(text);

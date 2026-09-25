@@ -131,7 +131,8 @@ The `queryables` table controls the indexes that PgSTAC will build as well as th
 | `name`                | The name of the property                                                 | text       | `eo:cloud_cover`                                                                                                   |
 | `collection_ids`      | The collection ids that this queryable applies to                        | text[]     | `{sentinel-2-l2a,landsat-c2-l2,aster-l1t}` or `NULL`                                                               |
 | `definition`          | The queryable definition of the property                                 | jsonb      | `{"title": "Cloud Cover", "type": "number", "minimum": 0, "maximum": 100}`                                         |
-| `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | One of `to_int`, `to_float`, `to_tstz`, `to_text` or `NULL`                                                        |
+| `property_path`       | The keys under `content` to read, when they are not those of the name    | text[]     | `{properties,"eo:cloud cover"}` or `NULL`                                                                          |
+| `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | A name registered in `queryable_wrappers`, or `NULL` to infer one from `definition`                                |
 | `property_index_type` | The index type to use for the property                                   | text       | `BTREE`, `NULL` or other valid [PostgreSQL index type](https://www.postgresql.org/docs/current/indexes-types.html) |
 
 Each record in the queryables table references a single property but can apply to any number of collections. If the `collection_ids` field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single queryable record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
@@ -189,11 +190,16 @@ The `queryables` table is also used to specify which item `properties` attribute
 To add a new global index across all collection partitions:
 
 ```sql
-INSERT INTO pgstac.queryables (name, property_wrapper, property_index_type)
-VALUES (<property name>, <property wrapper>, <index type>);
+SELECT upsert_queryable(
+    name => '<property name>',
+    property_wrapper => '<property wrapper>',
+    property_index_type => '<index type>'
+);
 ```
 
-Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, or `to_text`. The index type should almost always be `BTREE`, but can be any PostgreSQL index type valid for the data type.
+`upsert_queryable` replaces every queryable of the same name the row passed would conflict with — a global one, or one whose `collection_ids` overlap the ones passed — and `delete_queryable(name, collection_ids)` removes one. `add_collection_to_queryable(name, collection_id)` adds a collection to an existing per-collection queryable without restating the full list, and `remove_collection_from_queryable(name, collection_id)` removes one, dropping the queryable when no collection is left, and raises if the queryable is global (use `delete_queryable`). A name and its `properties.`-prefixed spelling are one queryable for these functions and for the uniqueness check. `collection_ids` is stored sorted and deduplicated; an empty `collection_ids` argument means every collection, and `property_path`, the last argument, names the keys under `content` to read when they are not those of the name.
+
+Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, `to_text` or `to_text_array`; any other value is rejected unless it has been registered in `queryable_wrappers`, which is an admin action and requires that the function `pgstac.<name>(jsonb)` exist. A wrapper written in SQL must schema-qualify the functions it calls, because index builds run with a restricted `search_path`. If `property_wrapper` is left NULL, it is inferred from `definition`: `integer` -> `to_int`, `number` -> `to_float`, `array` -> `to_text_array`, a `format` of `date` or `date-time` -> `to_tstz`, otherwise `to_text`. A name whose first element is `assets`, `links`, `bbox`, `stac_version` or `stac_extensions` is read and indexed from the item root rather than from `properties`. The index type should almost always be `BTREE`, but can be any PostgreSQL index access method that has a default operator class for the type the wrapper returns — `GIN` for an array property read through `to_text_array`, `BRIN` for a value that correlates with physical row order. Writing the row builds the queryable's index, so an index type PostgreSQL cannot build with is rejected at that point, with PostgreSQL's own message.
 
 **More indexes is not necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
 

@@ -33,6 +33,7 @@ SELECT is_definer('create_table_constraints');
 SELECT is_definer('check_partition');
 SELECT is_definer('repartition');
 SELECT is_definer('maintain_index');
+SELECT is_definer('maintain_reference_index');
 SELECT is_definer('delete_collection');
 SELECT is_definer('collection_delete_trigger_func');
 
