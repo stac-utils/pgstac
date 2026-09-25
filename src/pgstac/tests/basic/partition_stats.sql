@@ -99,8 +99,7 @@ SELECT count(*) AS items_staging_upsert_cleared FROM items_staging_upsert;
 INSERT INTO items_staging_ignore (content) SELECT content FROM ps_items LIMIT 1;
 SELECT count(*) AS items_staging_ignore_cleared FROM items_staging_ignore;
 
--- deleting the collection removes its partition_stats rows. delete_collection
--- is SECURITY DEFINER, so pgstac_ingest can drop the partition tables it owns.
+-- deleting the collection removes its partition_stats rows
 SELECT delete_collection('pgstactest-pstats');
 SELECT count(*) AS stats_rows_after_collection_delete
 FROM partition_stats WHERE collection = 'pgstactest-pstats';
@@ -121,3 +120,14 @@ SELECT jsonb_array_length(search('{"collections":["pgstactest-pstats-q"],"limit"
     = (SELECT count(*) FROM items WHERE collection='pgstactest-pstats-q') AS queued_search_returns_all;
 
 SET pgstac.use_queue=FALSE;
+
+-- the delete trigger drops partitions owned by pgstac_admin, so a direct
+-- delete exercises the trigger's own privileges
+INSERT INTO collections (content) VALUES ('{"id":"pgstactest-pstats-direct"}');
+INSERT INTO items_staging (content)
+SELECT content || '{"collection":"pgstactest-pstats-direct"}'::jsonb FROM ps_items LIMIT 1;
+DELETE FROM collections WHERE id = 'pgstactest-pstats-direct';
+SELECT count(*) AS stats_rows_after_direct_delete
+FROM partition_stats WHERE collection = 'pgstactest-pstats-direct';
+SELECT count(*) AS partitions_after_direct_delete
+FROM partitions WHERE collection = 'pgstactest-pstats-direct';

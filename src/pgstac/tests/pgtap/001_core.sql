@@ -34,6 +34,7 @@ SELECT is_definer('check_partition');
 SELECT is_definer('repartition');
 SELECT is_definer('maintain_index');
 SELECT is_definer('delete_collection');
+SELECT is_definer('collection_delete_trigger_func');
 
 -- Everything that does not need ownership of pgstac_admin's objects runs as
 -- the invoker and relies on table privileges instead.

@@ -100,6 +100,17 @@ The nohydrate conf item returns an unhydrated item bypassing the CPU intensive s
 SELECT search('{"conf":{"nohydrate"=true}}');
 ```
 
+#### Base Item Versioning
+
+Items are stored dehydrated: any value that matches the collection's base item (`type`, `stac_version`, `collection` and the assets built from the collection's `item_assets`) is stripped on write and merged back on read. Every base item a collection has had is kept in the `base_items` table, and each item records which one it was dehydrated against, so editing a collection's `item_assets` or `stac_version` is safe — items already loaded still read back the way they were loaded.
+
+- An item is dehydrated against the collection's base item as it stands at load time and tagged with the reserved top-level key `pgstac:base_item`, whose value is that base item's `base_items` id. Any `pgstac:base_item` key on an incoming item is discarded, and the tag is removed again on read, so it never appears in hydrated output.
+- A collection whose base item has never changed has no `base_items` rows and its items carry no tag. The first edit to a collection's base item records both the base item the untagged items were dehydrated against and the new one; from then on the lowest id for the collection is its original base item and the highest is the current `collections.base_item`. Rows are kept for the life of the collection, so a frequently edited collection accumulates one row per edit.
+- With `conf.nohydrate` the tag is part of the returned content and appears as a top-level key on exactly those features that have one. An API that hydrates client-side must fetch the base item with `collection_base_item(collection_id, base_item_id)` when the key is present and `collection_base_item(collection_id)` when it is not, and must remove the key before returning the feature.
+- Deleting a collection deletes its `base_items` rows, so a collection id that is created again does not inherit them.
+
+A dehydrated export, such as one produced by `pg_dump` or `COPY` and reloaded with `pypgstac load items --dehydrated`, is only loadable into a database that also has the source's `base_items` rows — normally the same database. Item content in such an export is specific to the base items it was stripped against, and a tag that resolves to no row is hydrated against the collection's current base item with a `WARNING`.
+
 #### PgSTAC Partitioning
 By default PgSTAC partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
 ```sql

@@ -1,4 +1,5 @@
 """Test Hydration in PgSTAC."""
+
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, Generator

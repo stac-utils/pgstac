@@ -94,6 +94,22 @@ BEGIN
 END;
 $$ LANGUAGE PLPGSQL;
 
+-- Recalculates partition statistics before aggregating them; the observed
+-- ranges are only maintained automatically when update_collection_extent is on.
+-- return_target, not use_json_null: collection_extent returns NULL when it
+-- cannot compute a full extent, and JSON null is not a valid STAC extent.
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections
+    SET content = jsonb_set_lax(
+        content,
+        '{extent}'::text[],
+        collection_extent(id, TRUE),
+        true,
+        'return_target'
+    )
+;
+$$ LANGUAGE SQL;
+
 
 -- Reconcile partition_stats against the partition tree: an identity row for
 -- every partition, and no rows for partitions that are gone. dtrange, edtrange

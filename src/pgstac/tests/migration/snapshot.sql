@@ -2,8 +2,10 @@
 -- migration has to preserve. Run against the OLD version, before migrating.
 SET SEARCH_PATH TO pgstac, public;
 
+-- item_assets makes this collection's base item non-trivial.
 INSERT INTO collections (content) VALUES (
     '{"id":"mig-flat","type":"Collection",
+      "item_assets":{"data":{"type":"image/tiff","title":"Data"}},
       "extent":{"spatial":{"bbox":[[-180,-90,180,90]]},
                 "temporal":{"interval":[["2020-01-01T00:00:00Z",null]]}}}'
 );
@@ -69,7 +71,10 @@ SELECT
             ))->'features'
         ) AS n
         FROM unnest(ARRAY['mig-flat','mig-month','mig-year']) c
-    ) z) AS temporal_search_per_collection
+    ) z) AS temporal_search_per_collection,
+    (SELECT search(jsonb_build_object(
+        'collections', jsonb_build_array('mig-flat'), 'limit', 500
+    ))->'features') AS flat_features
 ;
 
 SELECT * FROM public.migration_snapshot;

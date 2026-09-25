@@ -59,8 +59,11 @@ EXECUTE FUNCTION partition_after_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+    SELECT (strip_jsonb(_item - '{id,geometry,collection,type,pgstac:base_item}'::text[], b.base_item)
+                - '{id,geometry,collection,type}'::text[])
+           || jsonb_strip_nulls(jsonb_build_object('pgstac:base_item', b.base_item_id))
+    FROM current_base_item(_item->>'collection') b;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
@@ -125,29 +128,36 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
-    output jsonb;
     content jsonb;
-    base_item jsonb := _collection.base_item;
+    base_item jsonb;
+    tag text;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
-    output := content_hydrate(
-        jsonb_build_object(
-            'id', _item.id,
-            'geometry', geom,
-            'collection', _item.collection,
-            'type', 'Feature'
-        ) || _item.content,
-        _collection.base_item,
-        fields
-    );
-
-    RETURN output;
+    -- The tag is validated rather than cast inside a BEGIN ... EXCEPTION block. A block with an
+    -- exception handler opens a subtransaction on EVERY call, and this runs once per returned
+    -- item; the guard costs a regex instead. Nine digits always fit in an int, so a tag that
+    -- passes cannot overflow the cast. A tag that fails falls through to the warning below.
+    tag := _item.content->>'pgstac:base_item';
+    IF tag IS NULL OR tag ~ '^\s*\d{1,9}\s*$' THEN
+        base_item := collection_base_item(_item.collection, tag::int);
+    END IF;
+    IF base_item IS NULL THEN
+        RAISE WARNING 'Item % in collection % is tagged with base item %, which does not exist; hydrating against the current base item.',
+            _item.id, _item.collection, tag;
+        SELECT c.base_item INTO base_item FROM collections c WHERE c.id = _item.collection;
+    END IF;
+    content := jsonb_build_object(
+        'id', _item.id,
+        'geometry', geom,
+        'collection', _item.collection,
+        'type', 'Feature'
+    ) || (_item.content - 'pgstac:base_item');
+    RETURN content_hydrate(content, base_item, fields);
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
@@ -157,8 +167,9 @@ CREATE OR REPLACE FUNCTION content_nonhydrated(
 ) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
     output jsonb;
+    base_item jsonb;
+    tag text;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
@@ -169,18 +180,22 @@ BEGIN
                 'collection', _item.collection,
                 'type', 'Feature'
             ) || _item.content;
+    -- The base item itself, not the row id it is stored as, and emitted for every item: an
+    -- untagged item hydrates against the collection's FIRST base item, so a client seeing no
+    -- key would use the current one and get different content than search() returns.
+    tag := output->>'pgstac:base_item';
+    IF tag IS NULL OR tag ~ '^\s*\d{1,9}\s*$' THEN
+        base_item := collection_base_item(_item.collection, tag::int);
+    END IF;
+    IF base_item IS NULL AND tag IS NOT NULL THEN
+        RAISE WARNING 'Item % in collection % is tagged with base item %, which does not exist; returning the current base item.',
+            _item.id, _item.collection, tag;
+        SELECT c.base_item INTO base_item FROM collections c WHERE c.id = _item.collection;
+    END IF;
+    output := output || jsonb_build_object('pgstac:base_item', base_item);
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT content_hydrate(
-        _item,
-        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
-        fields
-    );
-$$ LANGUAGE SQL STABLE;
-
 
 CREATE UNLOGGED TABLE items_staging (
     content JSONB NOT NULL
@@ -223,10 +238,9 @@ BEGIN
 
     RAISE DEBUG 'Creating temp table with data to be added. %', clock_timestamp() - ts;
     DROP TABLE IF EXISTS tmpdata;
+    -- LATERAL so content_dehydrate runs once per row.
     CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
-    SELECT
-        (content_dehydrate(content)).*
-    FROM newdata;
+    SELECT d.* FROM newdata n, LATERAL content_dehydrate(n.content) d;
     GET DIAGNOSTICS nrows = ROW_COUNT;
     RAISE DEBUG 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
 
@@ -274,7 +288,8 @@ BEGIN
     RETURN NULL;
 
 END;
-$$ LANGUAGE PLPGSQL;
+-- UTC, matching partition_name: the date_trunc here groups rows for check_partition.
+$$ LANGUAGE PLPGSQL SET TIME ZONE 'UTC';
 
 
 CREATE TRIGGER items_staging_insert_trigger AFTER INSERT ON items_staging REFERENCING NEW TABLE AS newdata
@@ -351,19 +366,3 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
     FROM items WHERE collection=$1;
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
-
--- Recalculates partition statistics before aggregating them; the observed
--- ranges are only maintained automatically when update_collection_extent is on.
--- return_target, not use_json_null: collection_extent returns NULL when it
--- cannot compute a full extent, and JSON null is not a valid STAC extent.
-CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections
-    SET content = jsonb_set_lax(
-        content,
-        '{extent}'::text[],
-        collection_extent(id, TRUE),
-        true,
-        'return_target'
-    )
-;
-$$ LANGUAGE SQL;

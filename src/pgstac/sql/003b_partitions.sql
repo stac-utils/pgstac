@@ -723,9 +723,16 @@ BEGIN
     IF TG_OP = 'UPDATE' AND NEW.partition_trunc IS DISTINCT FROM OLD.partition_trunc THEN
         PERFORM repartition(NEW.id, NEW.partition_trunc, TRUE);
     END IF;
+    -- The first edit also records the old base item, which untagged items use.
+    IF TG_OP = 'UPDATE' AND NEW.base_item IS DISTINCT FROM OLD.base_item THEN
+        IF NOT EXISTS (SELECT 1 FROM base_items WHERE collection = NEW.id) THEN
+            INSERT INTO base_items (collection, base_item) VALUES (NEW.id, OLD.base_item);
+        END IF;
+        INSERT INTO base_items (collection, base_item) VALUES (NEW.id, NEW.base_item);
+    END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE PLPGSQL;
+$$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
 
 
 CREATE TRIGGER collections_trigger AFTER
