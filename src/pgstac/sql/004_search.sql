@@ -51,7 +51,7 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION partition_queries(
     IN _where text DEFAULT 'TRUE',
-    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _orderby text DEFAULT 'datetime DESC, collection DESC, id DESC',
     IN partitions text[] DEFAULT NULL
 ) RETURNS SETOF text AS $$
 DECLARE
@@ -109,9 +109,10 @@ RETURN;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 
+-- Volatile like partition_queries, which reads the partitions as they stand.
 CREATE OR REPLACE FUNCTION partition_query_view(
     IN _where text DEFAULT 'TRUE',
-    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _orderby text DEFAULT 'datetime DESC, collection DESC, id DESC',
     IN _limit int DEFAULT 10
 ) RETURNS text AS $$
     WITH p AS (
@@ -134,7 +135,7 @@ CREATE OR REPLACE FUNCTION partition_query_view(
             ))
         ELSE NULL
         END FROM p;
-$$ LANGUAGE SQL IMMUTABLE;
+$$ LANGUAGE SQL;
 
 
 CREATE OR REPLACE FUNCTION q_to_tsquery (jinput jsonb)
@@ -157,8 +158,15 @@ BEGIN
     ELSE
         RAISE EXCEPTION 'Input must be a string or an array of strings.';
     END IF;
-    -- Extract all quoted phrases and store in array
-    quote_array := regexp_matches(input, '"[^"]*"', 'g');
+    -- The placeholder has to be made of term characters, so it cannot be made unspellable.
+    -- An input that contains it would be substituted for a phrase it never wrote.
+    IF position(placeholder in input) > 0 THEN
+        RAISE EXCEPTION 'Free text query may not contain %', placeholder;
+    END IF;
+
+    -- Extract all quoted phrases and store in array. ARRAY(...) because regexp_matches with
+    -- the g flag returns a set, and assigning a set to a scalar fails on the second match.
+    quote_array := ARRAY(SELECT m[1] FROM regexp_matches(input, '"[^"]*"', 'g') m);
 
     -- Replace each quoted part with a unique placeholder if there are any quoted phrases
     IF array_length(quote_array, 1) IS NOT NULL THEN
@@ -182,17 +190,22 @@ BEGIN
     processed_text := regexp_replace(processed_text, '\s+OR\s+', ' | ', 'gi');
 
     -- + ->
-    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_]+)', '\1', 'g'); -- +term at start
-    processed_text := regexp_replace(processed_text, '\s*\+([a-zA-Z0-9_]+)', ' & \1', 'g'); -- +term elsewhere
+    processed_text := regexp_replace(processed_text, '^\s*\+([a-zA-Z0-9_@]+)', '\1', 'g'); -- +term at start
+    processed_text := regexp_replace(processed_text, '\s+\+([a-zA-Z0-9_@]+)', ' & \1', 'g'); -- +term elsewhere, whitespace required so that foo+bar stays one word
 
     -- - ->  !
-    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_]+)', '! \1', 'g'); -- -term at start
-    processed_text := regexp_replace(processed_text, '\s*\-([a-zA-Z0-9_]+)', ' & ! \1', 'g'); -- -term elsewhere
+    processed_text := regexp_replace(processed_text, '^\s*\-([a-zA-Z0-9_@]+)', '! \1', 'g'); -- -term at start
+    processed_text := regexp_replace(processed_text, '\s+\-([a-zA-Z0-9_@]+)', ' & ! \1', 'g'); -- -term elsewhere, whitespace required so that foo-bar stays one word
+
+    -- a +/- term following an operator would otherwise double the operator
+    processed_text := regexp_replace(processed_text, '([&|])\s*&\s*(!?)', '\1 \2', 'g');
 
     -- terms separated with spaces are assumed to represent adjacent terms. loop through these
     -- occurrences and replace them with the adjacency operator (<->)
     LOOP
-        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)(?!\s*[&|<>])', '\1 <-> \2', 'g');
+        -- The placeholder standing in for a quoted phrase counts as a term here, or no adjacency
+        -- operator is inserted beside it and the result is not a valid tsquery.
+        temp_text := regexp_replace(processed_text, '([a-zA-Z0-9_@]+)\s+([a-zA-Z0-9_@]+)(?!\s*[&|<>])', '\1 <-> \2', 'g');
         IF temp_text = processed_text THEN
             EXIT; -- No more replacements were made
         END IF;
@@ -206,9 +219,6 @@ BEGIN
             processed_text := replace(processed_text, placeholder || i || placeholder, '''' || substring(quote_array[i] from 2 for length(quote_array[i]) - 2) || '''');
         END LOOP;
     END IF;
-
-    -- Print processed_text to the console for debugging purposes
-    RAISE NOTICE 'processed_text: %', processed_text;
 
     RETURN to_tsquery('english', processed_text);
 END;
@@ -290,8 +300,8 @@ BEGIN
     ELSIF filterlang = 'cql-json' THEN
         filter := cql1_to_cql2(filter);
     END IF;
-    RAISE NOTICE 'FILTER: %', filter;
-    where_segments := where_segments || cql2_query(filter);
+    RAISE DEBUG 'FILTER: %', filter;
+    where_segments := where_segments || cql2_query(filter, NULL, collections);
     IF cardinality(where_segments) < 1 THEN
         RETURN ' TRUE ';
     END IF;
@@ -308,62 +318,73 @@ $$ LANGUAGE PLPGSQL STABLE;
 
 
 CREATE OR REPLACE FUNCTION parse_sort_dir(_dir text, reverse boolean default false) RETURNS text AS $$
-    WITH t AS (
-        SELECT COALESCE(upper(_dir), 'ASC') as d
-    ) SELECT
-        CASE
-            WHEN NOT reverse THEN d
-            WHEN d = 'ASC' THEN 'DESC'
-            WHEN d = 'DESC' THEN 'ASC'
-        END
-    FROM t;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+DECLARE
+    d text := btrim(coalesce(_dir, ''));
+BEGIN
+    -- The whole word, not a prefix: 'desc%' accepts anything merely beginning with desc. An
+    -- unrecognised direction raises rather than reading as ASC, where a typo silently reverses
+    -- half a result set.
+    IF d <> '' AND d !~* '^(asc|desc)(ending)?$' THEN
+        RAISE EXCEPTION 'Invalid sortby direction %: must be asc or desc', _dir;
+    END IF;
+    -- boolean <> is xor: reverse flips whichever direction was asked for
+    RETURN CASE WHEN (d ILIKE 'desc%') <> reverse THEN 'DESC' ELSE 'ASC' END;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION sort_dir_to_op(_dir text, prev boolean default false) RETURNS text AS $$
-    WITH t AS (
-        SELECT COALESCE(upper(_dir), 'ASC') as d
-    ) SELECT
-        CASE
-            WHEN d = 'ASC' AND prev THEN '<='
-            WHEN d = 'DESC' AND prev THEN '>='
-            WHEN d = 'ASC' THEN '>='
-            WHEN d = 'DESC' THEN '<='
-        END
-    FROM t;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION sortby_with_tiebreakers(
+    _sortby jsonb,
+    _keys text[] DEFAULT '{collection,id}'
+) RETURNS jsonb AS $$
+DECLARE
+    -- A missing or empty sortby is datetime DESC and a lone object is a one
+    -- element array. The key columns of the searched relation (items unless
+    -- given) are appended in the first direction for a total order.
+    sort jsonb := CASE
+        WHEN _sortby IS NULL OR jsonb_typeof(_sortby) = 'null' OR _sortby = '[]'::jsonb THEN '[{"field":"datetime","direction":"desc"}]'::jsonb
+        WHEN jsonb_typeof(_sortby) = 'object' THEN jsonb_build_array(_sortby)
+        ELSE _sortby
+    END;
+BEGIN
+    IF jsonb_typeof(sort) != 'array' OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements(sort) e
+        WHERE jsonb_typeof(e) != 'object'
+           OR jsonb_typeof(e->'field') IS DISTINCT FROM 'string'
+           -- An empty field resolves to nothing, leaving a bare direction in the ORDER BY:
+           -- a syntax error raised from deep inside search_rows.
+           OR btrim(coalesce(strip_properties_prefix(e->>'field'), '')) = ''
+    ) THEN
+        RAISE EXCEPTION 'Invalid sortby %: must be an array of {"field": text, "direction": text} objects', _sortby;
+    END IF;
+    RETURN sort || coalesce(
+        (
+            SELECT jsonb_agg(jsonb_build_object('field', f, 'direction', sort->0->>'direction') ORDER BY n)
+            FROM unnest(_keys) WITH ORDINALITY AS t(f, n)
+            WHERE NOT jsonb_path_exists(sort, '$[*] ? (@.field == $f)', jsonb_build_object('f', f))
+        ),
+        '[]'::jsonb
+    );
+END;
+$$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION sort_sqlorderby(
     _search jsonb DEFAULT NULL,
-    reverse boolean DEFAULT FALSE
+    reverse boolean DEFAULT FALSE,
+    _keys text[] DEFAULT '{collection,id}',
+    _collection_ids text[] DEFAULT NULL
 ) RETURNS text AS $$
-    WITH sortby AS (
-        SELECT coalesce(_search->'sortby','[{"field":"datetime", "direction":"desc"}]') as sort
-    ), withid AS (
-        SELECT CASE
-            WHEN sort @? '$[*] ? (@.field == "id")' THEN sort
-            ELSE sort || '[{"field":"id", "direction":"desc"}]'::jsonb
-            END as sort
-        FROM sortby
-    ), withid_rows AS (
-        SELECT jsonb_array_elements(sort) as value FROM withid
-    ),sorts AS (
+    WITH sorts AS (
         SELECT
-            coalesce(
-                (queryable(value->>'field')).expression
-            ) as key,
+            (queryable(value->>'field', _collection_ids)).expression as key,
             parse_sort_dir(value->>'direction', reverse) as dir
-        FROM withid_rows
+        FROM jsonb_array_elements(sortby_with_tiebreakers(_search->'sortby', _keys)) AS t(value)
     )
     SELECT array_to_string(
         array_agg(concat(key, ' ', dir)),
         ', '
     ) FROM sorts;
 $$ LANGUAGE SQL;
-
-CREATE OR REPLACE FUNCTION get_sort_dir(sort_item jsonb) RETURNS text AS $$
-    SELECT CASE WHEN sort_item->>'direction' ILIKE 'desc%' THEN 'DESC' ELSE 'ASC' END;
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 CREATE OR REPLACE FUNCTION  get_token_val_str(
@@ -374,7 +395,7 @@ DECLARE
     q text;
     literal text;
 BEGIN
-    q := format($q$ SELECT quote_literal(%s) FROM (SELECT $1.*) as r;$q$, _field);
+    q := format($q$ SELECT quote_literal((%s)::text) FROM (SELECT $1.*) as r;$q$, _field);
     EXECUTE q INTO literal USING _item;
     RETURN literal;
 END;
@@ -382,31 +403,41 @@ $$ LANGUAGE PLPGSQL;
 
 
 
+-- The <collection>:<id> half of a paging token, each side the hex of its UTF-8 bytes so
+-- neither can contain the separator. Hex digits are RFC 3986 unreserved, so the token crosses
+-- a query string unchanged. The caller prefixes the direction to make a whole token.
+CREATE OR REPLACE FUNCTION page_token(_collection text, _id text) RETURNS text AS $$
+    SELECT encode(convert_to(_collection, 'UTF8'), 'hex')
+        || ':' || encode(convert_to(_id, 'UTF8'), 'hex');
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION get_token_record(IN _token text, OUT prev BOOLEAN, OUT item items) RETURNS RECORD AS $$
 DECLARE
-    _itemid text := _token;
-    _collectionid text;
+    _parts text[];
 BEGIN
-    IF _token IS NULL THEN
-        RETURN;
+    RAISE DEBUG 'Looking for token: %', _token;
+
+    -- <direction>:<collection>:<id>, the collection and id hex encoded so neither can hold a
+    -- separator. The direction is required: a token is only ever handed out as part of a
+    -- next or prev link. Digits in pairs, or decode meets an odd-length string and rejects it.
+    -- Lowered whole: hex is case insensitive to decode, so this costs nothing and makes the
+    -- direction match without case folding each part.
+    _parts := string_to_array(lower(_token), ':');
+    IF cardinality(_parts) <> 3
+        OR _parts[1] NOT IN ('next', 'prev')
+        OR _parts[2] !~ '^([0-9a-f]{2})+$'
+        OR _parts[3] !~ '^([0-9a-f]{2})+$'
+    THEN
+        RAISE EXCEPTION 'Invalid paging token: %', _token;
     END IF;
-    RAISE NOTICE 'Looking for token: %', _token;
-    prev := FALSE;
-    IF _token ILIKE 'prev:%' THEN
-        _itemid := replace(_token, 'prev:','');
-        prev := TRUE;
-    ELSIF _token ILIKE 'next:%' THEN
-        _itemid := replace(_token, 'next:', '');
-    END IF;
-    SELECT id INTO _collectionid FROM collections WHERE _itemid LIKE concat(id,':%');
-    IF FOUND THEN
-        _itemid := replace(_itemid, concat(_collectionid,':'), '');
-        SELECT * INTO item FROM items WHERE id=_itemid AND collection=_collectionid;
-    ELSE
-        SELECT * INTO item FROM items WHERE id=_itemid;
-    END IF;
+    prev := _parts[1] = 'prev';
+
+    SELECT * INTO item FROM items
+        WHERE collection = convert_from(decode(_parts[2], 'hex'), 'UTF8')
+          AND id = convert_from(decode(_parts[3], 'hex'), 'UTF8');
+
     IF item IS NULL THEN
-        RAISE EXCEPTION 'Could not find item using token: % item: % collection: %', _token, _itemid, _collectionid;
+        RAISE EXCEPTION 'Could not find item using token: %', _token;
     END IF;
     RETURN;
 END;
@@ -414,15 +445,15 @@ $$ LANGUAGE PLPGSQL STABLE STRICT;
 
 
 CREATE OR REPLACE FUNCTION get_token_filter(
-    _sortby jsonb DEFAULT '[{"field":"datetime","direction":"desc"}]'::jsonb,
+    _sortby jsonb DEFAULT NULL,
     token_item items DEFAULT NULL,
     prev boolean DEFAULT FALSE,
-    inclusive boolean DEFAULT FALSE
+    inclusive boolean DEFAULT FALSE,
+    _collection_ids text[] DEFAULT NULL
 ) RETURNS text AS $$
 DECLARE
     ltop text := '<';
     gtop text := '>';
-    dir text;
     sort record;
     orfilter text := '';
     orfilters text[] := '{}'::text[];
@@ -430,11 +461,7 @@ DECLARE
     output text;
     token_where text;
 BEGIN
-    IF _sortby IS NULL OR _sortby = '[]'::jsonb THEN
-        _sortby := '[{"field":"datetime","direction":"desc"}]'::jsonb;
-    END IF;
-    _sortby := _sortby || jsonb_build_object('field','id','direction',_sortby->0->>'direction');
-    RAISE NOTICE 'Getting Token Filter. % %', _sortby, token_item;
+    _sortby := sortby_with_tiebreakers(_sortby);
     IF inclusive THEN
         orfilters := orfilters || format('( id=%L AND collection=%L )' , token_item.id, token_item.collection);
     END IF;
@@ -443,9 +470,10 @@ BEGIN
         WITH s1 AS (
             SELECT
                 _row,
-                (queryable(value->>'field')).expression as _field,
+                (queryable(value->>'field', _collection_ids)).expression as _field,
                 (value->>'field' = 'id') as _isid,
-                get_sort_dir(value) as _dir
+                (value->>'field' = 'collection') as _iscollection,
+                parse_sort_dir(value->>'direction') as _dir
             FROM jsonb_array_elements(_sortby)
             WITH ORDINALITY AS t(value, _row)
         )
@@ -455,19 +483,13 @@ BEGIN
             _dir,
             get_token_val_str(_field, token_item) as _val
         FROM s1
-        WHERE _row <= (SELECT min(_row) FROM s1 WHERE _isid)
+        WHERE _row <= (SELECT greatest(min(_row) FILTER (WHERE _isid), min(_row) FILTER (WHERE _iscollection)) FROM s1)
+        ORDER BY _row ASC
     LOOP
         orfilter := NULL;
         RAISE DEBUG 'SORT: %', sort;
         IF sort._val IS NOT NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
-            orfilter := format($f$(
-                (%s %s %s) OR (%s IS NULL)
-            )$f$,
-            sort._field,
-            ltop,
-            sort._val,
-            sort._val
-            );
+            orfilter := format('(%s %s %s)', sort._field, ltop, sort._val);
         ELSIF sort._val IS NULL AND  ((prev AND sort._dir = 'ASC') OR (NOT prev AND sort._dir = 'DESC')) THEN
             RAISE DEBUG '< but null';
             orfilter := format('%s IS NOT NULL', sort._field);
@@ -502,14 +524,10 @@ BEGIN
     output := array_to_string(orfilters, ' OR ');
 
     token_where := concat('(',coalesce(output,'true'),')');
-    IF trim(token_where) = '' THEN
-        token_where := NULL;
-    END IF;
-    RAISE NOTICE 'TOKEN_WHERE: %',token_where;
+    RAISE DEBUG 'TOKEN_WHERE: %',token_where;
     RETURN token_where;
     END;
-$$ LANGUAGE PLPGSQL SET transform_null_equals TO TRUE
-;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION search_hash(jsonb, jsonb) RETURNS text AS $$
     SELECT md5(concat(($1 - '{token,limit,context,includes,excludes}'::text[])::text,$2::text));
@@ -728,7 +746,7 @@ BEGIN
     RAISE DEBUG 'Returning with actual count. %', sw;
     RETURN sw;
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL;
 
 
 CREATE OR REPLACE FUNCTION search_query(
@@ -747,13 +765,12 @@ DECLARE
     ro boolean := pgstac.readonly();
     found_search text;
 BEGIN
-    RAISE NOTICE 'SEARCH: %', _search;
     -- Calculate hash, where clause, and order by statement
     search.search := _search;
     search.metadata := _metadata;
     search.hash := search_hash(_search, _metadata);
     search._where := stac_search_to_where(_search);
-    search.orderby := sort_sqlorderby(_search);
+    search.orderby := sort_sqlorderby(_search, FALSE, '{collection,id}', to_text_array(_search->'collections'));
     search.lastused := now();
     search.usecount := 1;
 
@@ -762,7 +779,6 @@ BEGIN
         RETURN search;
     END IF;
 
-    RAISE NOTICE 'Updating Statistics for search: %s', search;
     -- Update statistics for times used and and when last used
     -- If the entry is locked, rather than waiting, skip updating the stats
     INSERT INTO searches (search, lastused, usecount, metadata)
@@ -790,17 +806,25 @@ BEGIN
     RETURN search;
 
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION search_fromhash(
     _hash text
 ) RETURNS searches AS $$
-    SELECT * FROM search_query((SELECT search FROM searches WHERE hash=_hash LIMIT 1));
-$$ LANGUAGE SQL STRICT;
+DECLARE
+    _search jsonb;
+BEGIN
+    SELECT search INTO _search FROM searches WHERE hash=_hash LIMIT 1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Search with Query Hash % Not Found', _hash;
+    END IF;
+    RETURN search_query(_search);
+END;
+$$ LANGUAGE PLPGSQL STRICT;
 
 CREATE OR REPLACE FUNCTION search_rows(
     IN _where text DEFAULT 'TRUE',
-    IN _orderby text DEFAULT 'datetime DESC, id DESC',
+    IN _orderby text DEFAULT 'datetime DESC, collection DESC, id DESC',
     IN partitions text[] DEFAULT NULL,
     IN _limit int DEFAULT 10
 ) RETURNS SETOF items AS $$
@@ -936,8 +960,35 @@ BEGIN
     RETURN _output;
 
 END;
-$$ LANGUAGE PLPGSQL SECURITY DEFINER;
+$$ LANGUAGE PLPGSQL;
 
+
+-- A non-negative integer from a jsonb member, named for the message. Read as numeric, so a
+-- value of the right shape but too large is refused here rather than surfacing as a bare
+-- integer overflow from the cast.
+CREATE OR REPLACE FUNCTION check_int(_value jsonb, _name text) RETURNS int AS $$
+DECLARE
+    v text := btrim(_value#>>'{}');
+BEGIN
+    IF v IS NULL THEN
+        RETURN NULL;
+    END IF;
+    IF v !~ '^\d+$' OR v::numeric > 2147483647 THEN
+        RAISE EXCEPTION 'Invalid % %: must be a non-negative integer', _name, _value;
+    END IF;
+    RETURN v::int;
+END;
+$$ LANGUAGE PLPGSQL IMMUTABLE PARALLEL SAFE;
+
+-- One reading of offset for both collection_search and collection_search_rows: two would let
+-- the rows returned and the links offered to reach them disagree.
+CREATE OR REPLACE FUNCTION search_offset(_search jsonb, _default int DEFAULT 0) RETURNS int AS $$
+    SELECT COALESCE(pgstac.check_int(_search->'offset', 'offset'), _default);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION search_limit(_search jsonb, _default int DEFAULT 10) RETURNS int AS $$
+    SELECT COALESCE(pgstac.check_int(_search->'limit', 'limit'), _default);
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION search(_search jsonb = '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
@@ -956,11 +1007,14 @@ DECLARE
     hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
     prev text;
     next text;
-    context jsonb;
     collection jsonb;
     out_records jsonb;
+    -- The (collection, id) of each row in out_records, in the same order. The tokens are
+    -- built from these rather than from the formatted features, which fields.exclude can
+    -- strip of exactly the two members a token needs.
+    out_keys jsonb;
     out_len int;
-    _limit int := coalesce((_search->>'limit')::int, 10);
+    _limit int := search_limit(_search);
     _querylimit int;
     _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
     has_prev boolean := FALSE;
@@ -971,21 +1025,20 @@ BEGIN
     searches := search_query(_search);
     _where := searches._where;
     orderby := searches.orderby;
-    search_where := where_stats(_where);
+    search_where := where_stats(_where, false, _search->'conf');
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
     RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
-    RAISE NOTICE '***TOKEN: %', token;
     _querylimit := _limit + 1;
     IF token IS NOT NULL THEN
         token_prev := token.prev;
         token_item := token.item;
-        token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE);
+        token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE, to_text_array(_search->'collections'));
         RAISE DEBUG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
         IF token_prev THEN -- if we are using a prev token, we know has_next is true
             RAISE DEBUG 'There is a previous token, so automatically setting has_next to true';
             has_next := TRUE;
-            orderby := sort_sqlorderby(_search, TRUE);
+            orderby := sort_sqlorderby(_search, TRUE, '{collection,id}', to_text_array(_search->'collections'));
         ELSE
             RAISE DEBUG 'There is a next token, so automatically setting has_prev to true';
             has_prev := TRUE;
@@ -1009,7 +1062,10 @@ BEGIN
     RAISE DEBUG 'CACHE SET TO %', get_setting_bool('format_cache');
     RAISE DEBUG 'Time to set hydration/formatting %', age_ms(timer);
     timer := clock_timestamp();
-    SELECT jsonb_agg(format_item(i, _fields, hydrate)) INTO out_records
+    SELECT
+        jsonb_agg(format_item(i, _fields, hydrate)),
+        jsonb_agg(jsonb_build_array(i.collection, i.id))
+    INTO out_records, out_keys
     FROM search_rows(
         full_where,
         orderby,
@@ -1023,32 +1079,35 @@ BEGIN
 
     IF token_prev THEN
         out_records := flip_jsonb_array(out_records);
+        out_keys := flip_jsonb_array(out_keys);
     END IF;
 
     RAISE DEBUG 'Query returned % records.', jsonb_array_length(out_records);
     RAISE DEBUG 'TOKEN:   % %', token_item.id, token_item.collection;
-    RAISE DEBUG 'RECORD_1: % %', out_records->0->>'id', out_records->0->>'collection';
-    RAISE DEBUG 'RECORD-1: % %', out_records->-1->>'id', out_records->-1->>'collection';
+    RAISE DEBUG 'RECORD_1: % %', out_keys->0->>1, out_keys->0->>0;
+    RAISE DEBUG 'RECORD-1: % %', out_keys->-1->>1, out_keys->-1->>0;
 
     -- REMOVE records that were from our token
-    IF out_records->0->>'id' = token_item.id AND out_records->0->>'collection' = token_item.collection THEN
+    IF out_keys->0->>0 = token_item.collection AND out_keys->0->>1 = token_item.id THEN
         out_records := out_records - 0;
-    ELSIF out_records->-1->>'id' = token_item.id AND out_records->-1->>'collection' = token_item.collection THEN
+        out_keys := out_keys - 0;
+    ELSIF out_keys->-1->>0 = token_item.collection AND out_keys->-1->>1 = token_item.id THEN
         out_records := out_records - -1;
+        out_keys := out_keys - -1;
     END IF;
 
-    out_len := jsonb_array_length(out_records);
-
-    IF out_len = _limit + 1 THEN
+    IF jsonb_array_length(out_records) = _limit + 1 THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;
+            out_keys := out_keys - 0;
         ELSE
             has_next := TRUE;
             out_records := out_records - -1;
+            out_keys := out_keys - -1;
         END IF;
     END IF;
-
+    out_len := coalesce(jsonb_array_length(out_records), 0);
 
     links := links || jsonb_build_object(
         'rel', 'root',
@@ -1060,9 +1119,12 @@ BEGIN
         'href', concat(base_url, '/search')
     );
 
-    IF has_next THEN
-        next := concat(out_records->-1->>'collection', ':', out_records->-1->>'id');
-        RAISE NOTICE 'HAS NEXT | %', next;
+    -- An empty page still anchors on the token that produced it, so the caller has a way back
+    -- instead of a dead end. A link identical to the incoming token is dropped: following it
+    -- would return this same page forever.
+    IF has_next AND out_len > 0 THEN
+        next := page_token(out_keys->-1->>0, out_keys->-1->>1);
+        RAISE DEBUG 'HAS NEXT | %', next;
         links := links || jsonb_build_object(
             'rel', 'next',
             'type', 'application/geo+json',
@@ -1071,15 +1133,26 @@ BEGIN
         );
     END IF;
 
-    IF has_prev THEN
-        prev := concat(out_records->0->>'collection', ':', out_records->0->>'id');
-        RAISE NOTICE 'HAS PREV | %', prev;
-        links := links || jsonb_build_object(
-            'rel', 'prev',
-            'type', 'application/geo+json',
-            'method', 'GET',
-            'href', concat(base_url, '/search?token=prev:', prev)
-        );
+    IF has_prev AND (out_len > 0 OR _limit = 0) THEN
+        prev := CASE WHEN out_len > 0
+            THEN page_token(out_keys->0->>0, out_keys->0->>1)
+            ELSE page_token(token_item.collection, token_item.id)
+        END;
+        -- Never hand back the token that produced this page: limit 0 reached by a prev token
+        -- anchored the prev link on that same token, so a client following it never advanced.
+        -- Compared lowered, as get_token_record reads the token, so PREV: cannot reopen the
+        -- loop this guard closes.
+        IF lower(concat('prev:', prev)) IS DISTINCT FROM lower(_search->>'token') THEN
+            RAISE DEBUG 'HAS PREV | %', prev;
+            links := links || jsonb_build_object(
+                'rel', 'prev',
+                'type', 'application/geo+json',
+                'method', 'GET',
+                'href', concat(base_url, '/search?token=prev:', prev)
+            );
+        ELSE
+            prev := NULL;
+        END IF;
     END IF;
 
     RAISE DEBUG 'Time to get prev/next %', age_ms(timer);
@@ -1094,15 +1167,9 @@ BEGIN
 
 
 
+    collection := collection || jsonb_build_object('numberReturned', out_len);
     IF context(_search->'conf') != 'off' THEN
-        collection := collection || jsonb_strip_nulls(jsonb_build_object(
-            'numberMatched', total_count,
-            'numberReturned', coalesce(jsonb_array_length(out_records), 0)
-        ));
-    ELSE
-        collection := collection || jsonb_strip_nulls(jsonb_build_object(
-            'numberReturned', coalesce(jsonb_array_length(out_records), 0)
-        ));
+        collection := collection || jsonb_strip_nulls(jsonb_build_object('numberMatched', total_count));
     END IF;
 
     IF get_setting_bool('timing', _search->'conf') THEN

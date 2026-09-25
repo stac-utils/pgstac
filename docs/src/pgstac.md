@@ -205,6 +205,14 @@ Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, `to_text` or 
 
 Leave `property_index_type` set to NULL if you do not want an index set for a property.
 
+### Search
+
+#### Temporal Predicates
+
+See the [OGC CQL2 standard](https://docs.ogc.org/is/21-065r2/21-065r2.html) for the temporal operators themselves and how they compare intervals. Beyond the spec, pgstac treats a timestamp (a date-time property or an instant literal) used directly as a temporal operand as that instant, and a date (a date-only literal or a property with `"format": "date"`) as the whole UTC day; used as an end of an interval, in any of its spellings (`{"interval": [a, b]}`, `"a/b"` or `[a, b]`), a timestamp is that instant and a date runs to the end of its day; `..` or an empty string leaves an end open, and a duration such as `P1D` may stand in for one end of a slash or array interval. Literals without a UTC offset are read as UTC.
+
+The `datetime` argument of `search()` is separate from CQL2: it means the item's span, and matches every item whose `datetime`/`end_datetime` interval intersects the requested one.
+
 ### Maintenance Procedures
 
 These are procedures that should be run periodically to make sure that statistics and constraints are kept up-to-date and validated. These can be made to run regularly using the pg_cron extension if available.

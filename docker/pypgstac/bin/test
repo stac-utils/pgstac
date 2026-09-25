@@ -81,12 +81,14 @@ TESTOUTPUT=$(psql -X -q -v ON_ERROR_STOP=1 -f $PGSTACDIR/tests/pgtap.sql pgstac_
 psql -X -q -v ON_ERROR_STOP=1 <<EOSQL
 DROP DATABASE IF EXISTS pgstac_test_pgtap WITH (force);
 EOSQL
-if [[ $(echo "$TESTOUTPUT" | grep -e '^not') ]]; then
+# finish() reports a plan that does not match the tests run as a diagnostic comment rather than a
+# failed assertion, so it is looked for as well; the count it reports is what plan() must be set to.
+if [[ $(echo "$TESTOUTPUT" | grep -e '^not' -e '^# Looks like') ]]; then
     echo "PGTap tests failed."
     echo "$TESTOUTPUT" | awk NF
     exit 1
 else
-    echo "PGTap Tests Passed!"
+    echo "PGTap Tests Passed! ($(echo "$TESTOUTPUT" | grep -c '^ok') assertions)"
 fi
 
 }

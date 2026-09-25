@@ -40,12 +40,12 @@ SELECT results_eq($$ SELECT bbox_geom('[0,1,2,3,4,5]'::jsonb) $$, $$ SELECT '010
 
 
 
-SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean']);
+SELECT has_function('pgstac'::name, 'sort_sqlorderby', ARRAY['jsonb','boolean','text[]','text[]']);
 
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb);
     $$,$$
-    SELECT 'datetime DESC, to_int(content->''properties''->''eo:cloud_cover'') ASC, id DESC';
+    SELECT 'datetime DESC, to_int(content->''properties''->''eo:cloud_cover'') ASC, collection DESC, id DESC';
     $$,
     'Test creation of sort sql'
 );
@@ -54,22 +54,126 @@ SELECT results_eq($$
 SELECT results_eq($$
     SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"},{"field":"eo:cloud_cover","direction":"asc"}]}'::jsonb, true);
     $$,$$
-    SELECT 'datetime ASC, to_int(content->''properties''->''eo:cloud_cover'') DESC, id ASC';
+    SELECT 'datetime ASC, to_int(content->''properties''->''eo:cloud_cover'') DESC, collection ASC, id ASC';
     $$,
     'Test creation of reverse sort sql'
 );
+
+-- A direction that is neither asc nor desc is refused outright rather than read as ASC, so a
+-- crafted one cannot reach the ORDER BY at all, let alone be spliced into it.
+SELECT throws_ok(
+    $$ SELECT sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc; select pg_sleep(1) --"}]}'::jsonb) $$,
+    NULL,
+    'Invalid sortby direction desc; select pg_sleep(1) --: must be asc or desc',
+    'a sortby direction that is not asc or desc is refused'
+);
+
+SELECT matches(
+    sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"descending"}]}'::jsonb),
+    '^(\S+ (ASC|DESC)(, |$))+$',
+    'a spelled out direction still renders as a bare ASC or DESC token'
+);
+
+SELECT is(
+    sortby_with_tiebreakers('[{"field":"eo:cloud_cover","direction":"desc"}]'::jsonb),
+    '[{"field":"eo:cloud_cover","direction":"desc"},{"field":"collection","direction":"desc"},{"field":"id","direction":"desc"}]'::jsonb,
+    'collection then id are appended as tie-breakers in the first sort direction'
+);
+
+SELECT is(
+    sortby_with_tiebreakers('[{"field":"id","direction":"asc"},{"field":"eo:cloud_cover","direction":"desc"}]'::jsonb),
+    '[{"field":"id","direction":"asc"},{"field":"eo:cloud_cover","direction":"desc"},{"field":"collection","direction":"asc"}]'::jsonb,
+    'a key already in the sortby is not appended again'
+);
+
+SELECT is(
+    sort_sqlorderby('{}'::jsonb),
+    'datetime DESC, collection DESC, id DESC',
+    'a missing sortby is datetime DESC with the item key appended in the same direction'
+);
+
+SELECT is(
+    sort_sqlorderby('{"sortby":[]}'::jsonb),
+    sort_sqlorderby('{}'::jsonb),
+    'an empty sortby is the default sort'
+);
+
+SELECT is(
+    sort_sqlorderby('{"sortby":null}'::jsonb),
+    sort_sqlorderby('{}'::jsonb),
+    'a JSON null sortby is the default sort'
+);
+
+SELECT is(
+    sort_sqlorderby('{}'::jsonb, FALSE, '{id}'),
+    'datetime DESC, id DESC',
+    'the tie-break keys are those of the searched relation'
+);
+
+SELECT is(
+    sort_sqlorderby('{"sortby":[{"field":"datetime","direction":" desc"}]}'::jsonb),
+    sort_sqlorderby('{"sortby":[{"field":"datetime","direction":"desc"}]}'::jsonb),
+    'whitespace around a direction is ignored'
+);
+
+-- b is the newer collection, so datetime DESC puts it first where an id sort would not
+SELECT create_collection('{"id":"pgstac-test-sort-a","type":"Collection","stac_version":"1.0.0","description":"a","license":"proprietary","links":[],"extent":{"spatial":{"bbox":[[-180,-90,180,90]]},"temporal":{"interval":[["2020-01-01T00:00:00Z","2020-12-31T00:00:00Z"]]}}}');
+SELECT create_collection('{"id":"pgstac-test-sort-b","type":"Collection","stac_version":"1.0.0","description":"b","license":"proprietary","links":[],"extent":{"spatial":{"bbox":[[-180,-90,180,90]]},"temporal":{"interval":[["2021-01-01T00:00:00Z","2021-12-31T00:00:00Z"]]}}}');
+
+SELECT is(
+    (SELECT jsonb_agg(c->>'id') FROM jsonb_array_elements(collection_search('{"ids":["pgstac-test-sort-a","pgstac-test-sort-b"]}')->'collections') c),
+    '["pgstac-test-sort-b","pgstac-test-sort-a"]'::jsonb,
+    'collection_search without a sortby orders by datetime DESC'
+);
+
+SELECT is(
+    collection_search('{"ids":["pgstac-test-sort-a","pgstac-test-sort-b"],"sortby":[]}'),
+    collection_search('{"ids":["pgstac-test-sort-a","pgstac-test-sort-b"]}'),
+    'an empty collection_search sortby is the default sort'
+);
+
+SELECT delete_collection('pgstac-test-sort-a');
+SELECT delete_collection('pgstac-test-sort-b');
 
 
 SELECT has_function('pgstac'::name, 'search', ARRAY['jsonb']);
 
 
 SELECT results_eq($$
-    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}], "token": "prev:pgstac-test-item-0011"}')
+    SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}'::jsonb
+        || jsonb_build_object('token', 'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0011')))
     $$,$$
     SELECT search('{"collections": ["pgstac-test-collection"], "limit": 10, "sortby":[{"field":"id","direction":"asc"}]}')
     $$,
     'Test prev token when reading first token_type=prev (https://github.com/stac-utils/pgstac/issues/140)'
 );
+
+SELECT is(
+    (SELECT search('{"limit":1}'::jsonb || jsonb_build_object('token',
+            'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0003')))
+            ->'features'->0->>'id'),
+    'pgstac-test-item-0002',
+    'a next token returns the row that follows its anchor under the default sort'
+);
+
+SELECT is(
+    get_token_filter(token_item => (SELECT i FROM items i WHERE collection = 'pgstac-test-collection' AND id = 'pgstac-test-item-0003')),
+    get_token_filter('[{"field":"datetime","direction":"desc"}]', (SELECT i FROM items i WHERE collection = 'pgstac-test-collection' AND id = 'pgstac-test-item-0003')),
+    'a missing sortby gives the token filter for the default sort'
+);
+
+SELECT lives_ok($$
+    SELECT search('{"sortby":[{"field":"geometry","direction":"asc"}],"limit":10}'::jsonb
+        || jsonb_build_object('token',
+            'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0010')));
+$$, 'a token can be built from a geometry sort value');
+
+SET pgstac.context TO 'off';
+SELECT ok(
+    search('{"limit":1,"conf":{"context":"on"}}') ? 'numberMatched',
+    'a per-request conf.context on counts matches even when the global context is off'
+);
+SET pgstac.context TO 'on';
 
 
 SELECT has_function('pgstac'::name, 'search_query', ARRAY['jsonb','boolean','jsonb']);
@@ -1351,3 +1455,423 @@ SELECT is(
     '2',
     'Make sure all matching items are returned when items with the same ID are in multiple collections, all collections specified. #192'
 );
+
+-- Returns NULL rather than aborting the test file when a token cannot be resolved.
+CREATE OR REPLACE FUNCTION pg_temp.dupsearch(_token text DEFAULT NULL) RETURNS jsonb AS $$
+BEGIN
+    RETURN search(
+        '{"ids": ["pgstac-test-item-duplicated"], "limit": 1}'::jsonb
+        || jsonb_build_object('token', _token)
+    );
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE PLPGSQL;
+
+SELECT is(
+    (SELECT jsonb_array_length(pg_temp.dupsearch(pg_temp.next(pg_temp.dupsearch()))->'features')),
+    1,
+    'Paging past an item whose id is duplicated in another collection returns the sibling. #392'
+);
+
+SELECT is(
+    (SELECT pg_temp.dupsearch(pg_temp.next(pg_temp.dupsearch()))->'features'->0->>'collection'),
+    'pgstac-test-collection',
+    'Page 2 of a duplicated id search is the other collection. #392'
+);
+
+SELECT isnt(
+    (SELECT (item).id FROM get_token_record(
+        (SELECT pg_temp.prev(pg_temp.dupsearch(pg_temp.next(pg_temp.dupsearch())))))),
+    NULL,
+    'Page 2 of a duplicated id search carries a prev token that resolves to an item. #392'
+);
+
+SELECT is(
+    (SELECT pg_temp.dupsearch(pg_temp.prev(pg_temp.dupsearch(pg_temp.next(pg_temp.dupsearch()))))->'features'->0->>'collection'),
+    'pgstac-test-collection2',
+    'Following the prev link from page 2 of a duplicated id search returns page 1. #392'
+);
+
+SELECT ok(
+    pg_temp.isnull(pg_temp.prev(search('{"ids": ["pgstac-test-item-duplicated"], "limit": 2}'::jsonb
+        || jsonb_build_object('token',
+            'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-duplicated'))))),
+    'A page that returns no items carries no prev link. #392'
+);
+
+INSERT INTO items (id, collection, datetime, end_datetime, geometry, content)
+    SELECT 'pgstac-test-collection:pgstac-test-item-0001', collection, datetime, end_datetime, geometry, content
+    FROM items WHERE collection = 'pgstac-test-collection' AND id = 'pgstac-test-item-0001';
+
+-- A bare date is the whole of that day wherever it appears. At either end of an interval it
+-- already was; alone it was the instant of midnight, so the same string meant two things.
+SELECT results_eq(
+    $$ SELECT parse_dtrange('"2020-01-01"'::jsonb) $$,
+    $$ SELECT '["2020-01-01 00:00:00+00","2020-01-02 00:00:00+00")'::tstzrange $$,
+    'a bare date on its own is the whole day, as it already is inside an interval'
+);
+
+-- A timestamp with no offset means UTC whatever the session is set to, so this filter must select
+-- the same rows in both. Features, not numberMatched: where_stats memoises the count against the
+-- where clause, which is identical here, so comparing counts reads the cache and never exercises
+-- the zone.
+CREATE TEMP TABLE utc_dt_features AS
+SELECT search('{"filter":{"op":"lt","args":[{"property":"datetime"},"2011-08-16"]},"limit":500,"fields":{"include":["id"]}}')->'features' AS f;
+SET TIME ZONE 'America/New_York';
+SELECT is(
+    search('{"filter":{"op":"lt","args":[{"property":"datetime"},"2011-08-16"]},"limit":500,"fields":{"include":["id"]}}')->'features',
+    (SELECT f FROM utc_dt_features),
+    'a datetime filter selects the same rows whatever the session timezone'
+);
+RESET TIME ZONE;
+DROP TABLE utc_dt_features;
+
+-- An explicit timestamp spelling keeps meaning the instant it names; every other spelling of a
+-- bare date is the whole day. Nothing covered this, and it silently became a day plus a
+-- microsecond when the lone-date rule changed.
+SELECT results_eq(
+    $$ SELECT low_ts, high_ts FROM temporal_operand('{"timestamp":"2020-01-01"}'::jsonb) $$,
+    $$ VALUES ('2020-01-01 00:00:00+00'::timestamptz, '2020-01-01 00:00:00+00'::timestamptz) $$,
+    'an explicit timestamp spelling of a bare date stays the instant it names'
+);
+SELECT results_eq(
+    $$ SELECT low_ts, high_ts FROM temporal_operand('"2020-01-01"'::jsonb) $$,
+    $$ VALUES ('2020-01-01 00:00:00+00'::timestamptz, '2020-01-01 23:59:59.999999+00'::timestamptz) $$,
+    'a bare date as an operand is the whole day, ending at its last microsecond'
+);
+
+-- A quoted phrase used to be usable only on its own: beside a bare term no adjacency operator
+-- was inserted next to it, and a second phrase aborted the call outright.
+SELECT is(
+    q_to_tsquery(to_jsonb('landsat "sea ice"'::text))::text,
+    $q$'landsat' <-> ( 'sea' <-> 'ice' )$q$,
+    'a quoted phrase beside a bare term is joined to it'
+);
+SELECT is(
+    q_to_tsquery(to_jsonb('"sea ice" AND "snow cover"'::text))::text,
+    $q$'sea' <-> 'ice' & 'snow' <-> 'cover'$q$,
+    'two quoted phrases in one query are both extracted'
+);
+
+-- The token is carried in a query string, so it can only use characters a client will not
+-- rewrite: hex digits and the tilde separator are all RFC 3986 unreserved.
+SELECT matches(page_token('pgstac-test-collection', 'item-1'),
+    '^[0-9a-f]+:[0-9a-f]+$',
+    'a token names the row as two hex halves');
+SELECT is(page_token('a:b', 'x:y'),
+    '613a62:783a79',
+    'a colon in either half is encoded, so it cannot be mistaken for a separator');
+SELECT is(
+    (SELECT (item).id FROM get_token_record(
+        'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0011'))),
+    'pgstac-test-item-0011',
+    'a token page_token wrote round-trips through get_token_record'
+);
+SELECT throws_ok(
+    $$ SELECT get_token_record('6162:6364') $$,
+    'P0001', 'Invalid paging token: 6162:6364',
+    'a token with no direction is refused'
+);
+SELECT throws_ok(
+    $$ SELECT get_token_record('sideways:6162:6364') $$,
+    'P0001', 'Invalid paging token: sideways:6162:6364',
+    'a token whose direction is neither next nor prev is refused'
+);
+SELECT throws_ok(
+    $$ SELECT get_token_record('next:pgstac-test-collection:pgstac-test-item-0011') $$,
+    'P0001', 'Invalid paging token: next:pgstac-test-collection:pgstac-test-item-0011',
+    'an unencoded token is refused'
+);
+
+SELECT is(
+    (SELECT (item).id FROM get_token_record(
+        'next:' || page_token('pgstac-test-collection', 'pgstac-test-collection:pgstac-test-item-0001'))),
+    'pgstac-test-collection:pgstac-test-item-0001',
+    'A token for an item id that repeats its collection prefix resolves to that item. #392'
+);
+
+DELETE FROM items WHERE collection = 'pgstac-test-collection' AND id = 'pgstac-test-collection:pgstac-test-item-0001';
+
+-- collection a holds items b:c and d while a:b is also a collection. Encoding both halves
+-- is what keeps a token for (a, b:c) from reading as (a:b, c); a:b is created first so a
+-- prefix match that takes the first row found would land on it.
+SELECT create_collection('{"id":"a:b","type":"Collection","stac_version":"1.0.0","description":"a:b","license":"proprietary","links":[],"extent":{"spatial":{"bbox":[[-180,-90,180,90]]},"temporal":{"interval":[["2020-01-01T00:00:00Z","2020-12-31T00:00:00Z"]]}}}');
+SELECT create_collection('{"id":"a","type":"Collection","stac_version":"1.0.0","description":"a","license":"proprietary","links":[],"extent":{"spatial":{"bbox":[[-180,-90,180,90]]},"temporal":{"interval":[["2020-01-01T00:00:00Z","2020-12-31T00:00:00Z"]]}}}');
+SELECT create_items(jsonb_agg(jsonb_build_object(
+    'id', i.id, 'type', 'Feature', 'stac_version', '1.0.0', 'collection', 'a',
+    'bbox', '[0,0,1,1]'::jsonb, 'links', '[]'::jsonb, 'assets', '{}'::jsonb,
+    'geometry', '{"type":"Polygon","coordinates":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]}'::jsonb,
+    'properties', jsonb_build_object('datetime', i.dt)
+))) FROM (VALUES ('b:c', '2020-06-02T00:00:00Z'), ('d', '2020-06-01T00:00:00Z')) AS i(id, dt);
+
+SELECT is(
+    search('{"collections":["a"],"limit":1}'::jsonb || jsonb_build_object('token',
+        'next:' || page_token('a', 'b:c')))->'features'->0->>'id',
+    'd',
+    'a token whose collection prefix is also a longer collection id resolves'
+);
+
+SELECT is(
+    pg_temp.next(search('{"collections":["a"],"limit":1}')),
+    'next:' || page_token('a', 'b:c'),
+    'the next token pgstac emits for that item is the one it resolves'
+);
+
+SELECT delete_collection('a:b');
+SELECT delete_collection('a');
+
+SELECT results_eq($$
+    SELECT (get_token_record(t)).prev FROM unnest(ARRAY[
+        'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0011'),
+        'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0011')]) t
+    $$, $$ VALUES (true), (false) $$,
+    'only a prev: direction marks a token as prev'
+);
+
+-- Catches the tsquery syntax errors the unfixed doubled-operator inputs raise.
+CREATE OR REPLACE FUNCTION pg_temp.tsq(j jsonb) RETURNS text AS $$
+BEGIN
+    RETURN q_to_tsquery(j)::text;
+EXCEPTION WHEN others THEN
+    RETURN 'ERROR: ' || SQLERRM;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT is(
+    pg_temp.tsq('"first-generation"'::jsonb),
+    $q$'first-gener' <-> 'first' <-> 'generat'$q$,
+    'A hyphen inside a word is not an exclusion operator. #459'
+);
+
+SELECT ok(
+    to_tsvector('english', 'a first-generation sensor') @@ q_to_tsquery('"first-generation"'::jsonb),
+    'A document containing a hyphenated word matches a search for that word. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"landsat-8 OR sentinel-2"'::jsonb),
+    $q$'landsat' <-> '-8' | 'sentinel' <-> '-2'$q$,
+    'A hyphen before a digit inside a word is not an exclusion operator. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"model+data"'::jsonb),
+    $q$'model' <-> 'data'$q$,
+    'A plus inside a word is not an and operator. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"bear -stranger"'::jsonb),
+    $q$'bear' & !'stranger'$q$,
+    'A term prefixed with a hyphen after whitespace is still excluded. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"-stranger"'::jsonb),
+    $q$!'stranger'$q$,
+    'A term prefixed with a hyphen at the start is still excluded. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"bear AND -stranger"'::jsonb),
+    $q$'bear' & !'stranger'$q$,
+    'An excluded term after AND does not double the operator. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('["bear", "-stranger"]'::jsonb),
+    $q$'bear' | !'stranger'$q$,
+    'An excluded term in an array of q values does not double the operator. #459'
+);
+
+SELECT is(
+    pg_temp.tsq('"bear AND +stranger"'::jsonb),
+    $q$'bear' & 'stranger'$q$,
+    'An included term after AND does not double the operator. #459'
+);
+
+SELECT ok(
+    (SELECT prosrc FROM pg_proc WHERE proname = 'q_to_tsquery') NOT LIKE '%RAISE NOTICE%',
+    'q_to_tsquery does not emit a debug NOTICE. #459'
+);
+
+-- sortby is validated once, before any SQL is built
+SELECT throws_ok($$
+    SELECT search('{"sortby": "datetime"}')
+$$, 'P0001', 'Invalid sortby "datetime": must be an array of {"field": text, "direction": text} objects', 'A sortby string raises.');
+
+SELECT throws_ok($$
+    SELECT search('{"sortby": [{"direction": "asc"}]}')
+$$, 'P0001', 'Invalid sortby [{"direction": "asc"}]: must be an array of {"field": text, "direction": text} objects', 'A sortby object without a field raises.');
+
+SELECT throws_ok($$
+    SELECT search('{"sortby": [1]}')
+$$, 'P0001', 'Invalid sortby [1]: must be an array of {"field": text, "direction": text} objects', 'A sortby array of non-objects raises.');
+
+-- limit: non-integer or negative raises; 0 is an empty page
+SELECT throws_ok($$ SELECT search('{"limit": 1.5}') $$, 'P0001', 'Invalid limit 1.5: must be a non-negative integer', 'search: a non-integer limit raises.');
+SELECT throws_ok($$ SELECT search('{"limit": -1}') $$, 'P0001', 'Invalid limit -1: must be a non-negative integer', 'search: a negative limit raises.');
+SELECT throws_ok($$ SELECT search('{"limit": "ten"}') $$, 'P0001', 'Invalid limit "ten": must be a non-negative integer', 'search: a non-numeric limit raises.');
+SELECT throws_ok($$ SELECT collection_search('{"limit": 1.5}') $$, 'P0001', 'Invalid limit 1.5: must be a non-negative integer', 'collection_search: a non-integer limit raises.');
+SELECT throws_ok($$ SELECT collection_search('{"limit": -1}') $$, 'P0001', 'Invalid limit -1: must be a non-negative integer', 'collection_search: a negative limit raises.');
+
+SELECT is(
+    search('{"collections": ["pgstac-test-collection"], "limit": 0}') - 'links' - 'numberMatched',
+    '{"type": "FeatureCollection", "features": [], "numberReturned": 0}'::jsonb,
+    'search: limit 0 returns an empty page.'
+);
+SELECT ok(
+    pg_temp.isnull(pg_temp.next(search('{"collections": ["pgstac-test-collection"], "limit": 0}'))),
+    'search: limit 0 has no next link.'
+);
+SELECT ok(
+    pg_temp.isnull(pg_temp.prev(search('{"collections": ["pgstac-test-collection"], "limit": 0}'))),
+    'search: limit 0 without a token has no prev link.'
+);
+SELECT is(
+    pg_temp.prev(search('{"collections": ["pgstac-test-collection"], "limit": 0}'::jsonb
+        || jsonb_build_object('token',
+            'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0002')))),
+    'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0002'),
+    'search: limit 0 reached by token has a prev link and no next link.'
+);
+SELECT ok(
+    pg_temp.isnull(pg_temp.next(search('{"collections": ["pgstac-test-collection"], "limit": 0}'::jsonb
+        || jsonb_build_object('token',
+            'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0002'))))),
+    'search: limit 0 reached by token has no next link.'
+);
+
+SELECT is(
+    collection_search('{"limit": 0}') - 'links' - 'numberMatched',
+    '{"collections": [], "numberReturned": 0}'::jsonb,
+    'collection_search: limit 0 returns an empty page.'
+);
+SELECT is(
+    (SELECT array_agg(l->>'rel' ORDER BY l->>'rel') FROM jsonb_array_elements(collection_search('{"limit": 0}')->'links') l),
+    NULL,
+    'collection_search: limit 0 without an offset has no prev or next link.'
+);
+SELECT is(
+    (SELECT array_agg(l->>'rel' ORDER BY l->>'rel') FROM jsonb_array_elements(collection_search('{"limit": 0, "offset": 1}')->'links') l),
+    '{prev}'::text[],
+    'collection_search: limit 0 with an offset has only a prev link.'
+);
+SELECT is(
+    (SELECT array_agg(l->>'rel' ORDER BY l->>'rel') FROM jsonb_array_elements(collection_search('{"limit": 1, "offset": 100000}')->'links') l),
+    '{prev}'::text[],
+    'collection_search: an offset past the end has only a prev link.'
+);
+SELECT is(
+    collection_search('{"limit": 1, "offset": 100000}')->'numberReturned',
+    '0'::jsonb,
+    'collection_search: an offset past the end returns an empty page.'
+);
+
+SELECT throws_ok($$
+    SELECT geometrysearch(st_makeenvelope(0, 0, 1, 1, 4326), 'nosuchhash')
+$$, 'P0001', 'Search with Query Hash nosuchhash Not Found', 'geometrysearch raises on an unknown query hash.');
+
+SELECT throws_ok($$
+    SELECT search_fromhash('nonexistent')
+$$, 'P0001', 'Search with Query Hash nonexistent Not Found', 'search_fromhash raises on an unknown query hash.');
+
+
+-- The between operator, and the arity every operator is held to.
+
+SELECT is(
+    cql2_query('{"op":"between","args":[{"property":"datetime"},"2020-01-01T00:00:00Z","2020-06-01T00:00:00Z"]}'::jsonb),
+    $q$datetime BETWEEN to_tstz('"2020-01-01T00:00:00Z"') AND to_tstz('"2020-06-01T00:00:00Z"')$q$,
+    'between reads a datetime column through to_tstz'
+);
+
+SELECT is(
+    cql2_query('{"op":"between","args":[{"property":"id"},"a","z"]}'::jsonb),
+    $q$id BETWEEN 'a' AND 'z'$q$,
+    'between reads a text column as itself'
+);
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"between","args":[{"property":"datetime"},"2020-01-01T00:00:00Z"]}'::jsonb)
+$$, 'P0001', 'The between operator takes a value, a lower bound and an upper bound.',
+   'between refuses two arguments');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"between","args":[{"property":"datetime"},"2020-01-01T00:00:00Z","2020-06-01T00:00:00Z","2020-09-01T00:00:00Z"]}'::jsonb)
+$$, 'P0001', 'The between operator takes a value, a lower bound and an upper bound.',
+   'between refuses four arguments');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"in","args":[{"property":"id"},"notanarray"]}'::jsonb)
+$$, 'P0001', 'The in operator takes a value and an array of values.',
+   'in refuses a second argument that is not an array');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"isnull","args":[{"property":"id"},1,2]}'::jsonb)
+$$, 'P0001', 'The isnull operator was given 3 arguments, more than it takes.',
+   'an operator refuses more arguments than its template takes');
+
+-- like compares text, and says which half of the reason it refused for.
+
+SELECT upsert_queryable(
+    name => 'test:likeint', definition => '{"type":"integer"}'::jsonb, property_wrapper => 'to_int');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"like","args":[{"property":"test:likeint"},"a%"]}'::jsonb)
+$$, 'P0001', 'The like operator compares text, but its operand is read with to_int.',
+   'like refuses an operand read through a non-text wrapper');
+
+SELECT delete_queryable('test:likeint');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"like","args":[{"property":"geometry"},"a%"]}'::jsonb)
+$$, 'P0001', 'The like operator compares text, but its operand is not a text column.',
+   'like refuses a column of items that is not text');
+
+-- A property that names nothing is refused where the cause is visible, not in the executor.
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"eq","args":[{"property":""},1]}'::jsonb)
+$$, 'P0001', 'A property name is required.',
+   'cql2_query refuses an empty property name');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"eq","args":[{"property":"properties"},1]}'::jsonb)
+$$, 'P0001', 'A property name is required.',
+   'cql2_query refuses a property named only properties');
+
+SELECT throws_ok($$
+    SELECT cql2_query('{"op":"t_intersects","args":[{"property":""},"2020-01-01T00:00:00Z"]}'::jsonb)
+$$, 'P0001', 'A property name is required.',
+   'a temporal operand refuses an empty property name');
+
+-- An interval that selects nothing is refused rather than returning no rows silently.
+
+SELECT throws_ok($$
+    SELECT parse_dtrange('"P0D/2020-01-02"'::jsonb)
+$$, 'P0001', 'Datetime range "P0D/2020-01-02" is empty: its duration is zero.',
+   'parse_dtrange refuses a zero duration');
+
+SELECT throws_ok($$
+    SELECT parse_dtrange('"2020-01-05/2020-01-01"'::jsonb)
+$$, 'P0001', 'Datetime range "2020-01-05/2020-01-01" is empty: it ends before it starts.',
+   'parse_dtrange refuses an interval that ends before it starts');
+
+SELECT throws_ok($$
+    SELECT q_to_tsquery('"cloud @QUOTE@ rain"'::jsonb)
+$$, 'P0001', 'Free text query may not contain @QUOTE@',
+   'free text refuses the placeholder it substitutes phrases with');
+
+-- The two token guards the existing tests above do not reach: an odd number of hex digits,
+-- which is what decode itself would reject, and a token whose shape is right but names nothing.
+
+SELECT throws_ok($$
+    SELECT get_token_record('next:616:6161')
+$$, 'P0001', 'Invalid paging token: next:616:6161',
+   'a token with an odd number of hex digits is refused before decode sees it');
+
+SELECT throws_ok($$
+    SELECT get_token_record('next:6e6f70653a:6e6f70653a')
+$$, 'P0001', 'Could not find item using token: next:6e6f70653a:6e6f70653a',
+   'a well formed token naming no item is refused');
