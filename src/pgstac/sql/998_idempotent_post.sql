@@ -127,6 +127,13 @@ GRANT ALL ON PROCEDURE run_queued_queries TO pgstac_admin;
 REVOKE ALL PRIVILEGES ON FUNCTION run_queued_queries_intransaction FROM public;
 GRANT ALL ON FUNCTION run_queued_queries_intransaction TO pgstac_admin;
 
+REVOKE ALL PRIVILEGES ON FUNCTION run_queued_query FROM public;
+GRANT ALL ON FUNCTION run_queued_query TO pgstac_admin;
+
+-- Deletes from the queue, so it is admin-only like the runners that call it.
+REVOKE ALL PRIVILEGES ON FUNCTION retire_queued_queries FROM public;
+GRANT ALL ON FUNCTION retire_queued_queries TO pgstac_admin;
+
 -- PostgreSQL grants EXECUTE to PUBLIC on every new function, so each definer
 -- is revoked and granted back to the roles that need it. Keep in step with the
 -- ALTER FUNCTION ... SECURITY DEFINER statements above; the pgtap suite fails

@@ -254,9 +254,13 @@ ALTER DATABASE pgstac_test_migration_data SET client_min_messages to $CLIENTMESS
 EOSQL
     export PGDATABASE=pgstac_test_migration_data
 
-    local PREVIOUS
+    # Once a release is staged its own base migration is the highest one present,
+    # and migrating it to itself is a no-op that then fails on the legacy fixtures.
+    local PREVIOUS THISVERSION
+    THISVERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
     PREVIOUS=$(find $SRCDIR/pgstac/migrations -name "pgstac.*.sql" \
         | sed -En 's/^.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' \
+        | grep -v "^${THISVERSION}$" \
         | sort -Vr | head -1)
     echo "Populating a $PREVIOUS database, then migrating it."
 
@@ -279,6 +283,36 @@ EOSQL
         return 1
     fi
     echo "Migration with data PASSED!"
+}
+
+function test_idempotent_pre(){
+    # 000_idempotent_pre is prepended to every incremental migration and migra
+    # does not recreate an unchanged function it dropped, so against the current
+    # schema it must drop nothing.
+    cd $PGSTACDIR
+    psql -X -q -v ON_ERROR_STOP=1 pgstac_test_db_template <<EOSQL
+BEGIN;
+CREATE TEMP TABLE pre AS
+    SELECT oid::regprocedure::text AS sig FROM pg_proc WHERE pronamespace = 'pgstac'::regnamespace;
+\i sql/000_idempotent_pre.sql
+RESET ROLE;
+DO \$\$
+DECLARE
+    dropped text;
+BEGIN
+    SELECT string_agg(sig, ', ') INTO dropped FROM (
+        SELECT sig FROM pre
+        EXCEPT
+        SELECT oid::regprocedure::text FROM pg_proc WHERE pronamespace = 'pgstac'::regnamespace
+    ) d;
+    IF dropped IS NOT NULL THEN
+        RAISE EXCEPTION '000_idempotent_pre.sql drops live function(s): %', dropped;
+    END IF;
+END
+\$\$;
+ROLLBACK;
+EOSQL
+    echo "000_idempotent_pre drops no live functions."
 }
 
 function test_migrations(){
@@ -422,6 +456,7 @@ fi
 [ $PGTAP -eq 1 ] && test_pgtap
 [ $BASICSQL -eq 1 ] && test_basicsql
 [ $PYPGSTAC -eq 1 ] && test_pypgstac
+[ $MIGRATIONS -eq 1 ] && test_idempotent_pre
 [ $MIGRATIONS -eq 1 ] && test_migrations
 [ $MIGRATIONS -eq 1 ] && test_migrations_with_data
 [ $PGDUMP -eq 1 ] && test_pgdump

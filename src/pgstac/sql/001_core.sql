@@ -157,26 +157,11 @@ CREATE TABLE query_queue_history(
 
 CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
 DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
-    cnt int := 0;
+    timeout_ts timestamptz := statement_timestamp() + queue_timeout();
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        cnt := cnt + 1;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        EXIT WHEN NOT run_queued_query();
         COMMIT;
     END LOOP;
 END;
@@ -184,17 +169,12 @@ $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
+    timeout_ts timestamptz := statement_timestamp() + queue_timeout();
     cnt int := 0;
 BEGIN
     timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            RETURN cnt;
-        END IF;
+        EXIT WHEN NOT run_queued_query();
         cnt := cnt + 1;
         BEGIN
             qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
