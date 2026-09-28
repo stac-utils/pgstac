@@ -210,7 +210,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   collection ids. Concurrent loaders into different collections no longer deadlock.
 - Docker images move from Debian bullseye to trixie; the pgstac image drops plrust. CI
   actions and pre-commit hooks updated, Python 3.12 and 3.13 classifiers added, ruff
-  updated to 0.16.8.
+  updated to 0.16.8. The `orjson` floor rises to 3.10.7 and `pydantic` to 2.8 on Python
+  3.13, the oldest releases installable there; pydantic 1.x is still supported below 3.13.
 
 ### Added
 - `queue_retries`, how many times a queued statement is run before it is given up on
