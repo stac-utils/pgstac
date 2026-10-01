@@ -5558,13 +5558,19 @@ ON CONFLICT DO NOTHING;
 INSERT INTO queryables (name, definition)
   SELECT * FROM (VALUES
     ('id', '{"title": "Item ID","description": "Item identifier","$ref": "https://schemas.stacspec.org/v1.0.0/item-spec/json-schema/item.json#/definitions/core/allOf/2/properties/id"}'::jsonb),
-    ('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}'),
+    ('geometry', '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json#/properties/geometry"}'),
     ('datetime', '{"description": "Datetime","type": "string","title": "Acquired","format": "date-time","pattern": "(\\+00:00|Z)$"}')
   ) v (name, definition)
   WHERE NOT EXISTS (SELECT FROM queryables WHERE name = v.name);
 
 -- Rewrites rows an older release stored in another spelling; a no-op otherwise.
 SELECT canonicalize_queryables();
+
+-- Point the geometry queryable at the Feature's geometry if it is set to the whole Feature.
+UPDATE queryables
+SET definition = '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json#/properties/geometry"}'
+WHERE name = 'geometry' AND collection_ids IS NULL
+  AND definition = '{"title": "Item Geometry","description": "Item Geometry","$ref": "https://geojson.org/schema/Feature.json"}'::jsonb;
 
 -- Reference indexes for rows that predate them; a row whose index cannot be built is warned about.
 SELECT maintain_reference_index();

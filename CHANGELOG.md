@@ -161,6 +161,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `ASC` and `DESC` can now reach the generated SQL.
 - Ingest evaluates `content_dehydrate` once per row instead of once per output column, and
   tile search no longer hydrates every row twice.
+- The default `geometry` queryable's `$ref` points at a GeoJSON geometry
+  (`https://geojson.org/schema/Feature.json#/properties/geometry`) rather than a whole
+  GeoJSON Feature. A database still holding the old default definition is updated; an
+  edited one is left alone.
 
 ### Changed
 - `pypgstac migrate` drains the query queue before and after migrating, so an operator

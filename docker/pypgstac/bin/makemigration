@@ -132,7 +132,8 @@ psql -q -X -1 -v ON_ERROR_STOP=1 -v CLIENT_MIN_MESSAGES=WARNING -f $TOSQL $TODBU
 MIGRATION=$(mktemp)
 trap "rm $MIGRATION" 0 2 3 15
 
-migra --schema pgstac --unsafe $FROMDBURL $TODBURL >$MIGRATION
+# schemainspect needs pkg_resources (setuptools<81); sqlalchemy 2.1 defaults postgresql:// to psycopg 3
+uvx --from "migra[pg]" --with "setuptools<81" --with "sqlalchemy<2.1" migra --schema pgstac --unsafe $FROMDBURL $TODBURL >$MIGRATION
 if [[ $DEBUG == 1 ]]; then
   echo "*************"
   cat $MIGRATION
