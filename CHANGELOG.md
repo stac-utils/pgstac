@@ -95,6 +95,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   and tagged with another — silently, because the tag still existed.
 - An item whose `pgstac:base_item` is not an integer degrades to the current base item with a
   warning instead of aborting the whole search page.
+- Changing a collection's `stac_version` no longer changes the `stac_version` returned for its
+  existing items: each returns the version it was loaded with, through every ingest path.
+  Items loaded before upgrading are not rewritten.
 - `collections_trigger_func` sets its `search_path`, so editing a collection's `item_assets` or
   `stac_version` works from any `search_path` again.
 - A paging token encodes both the collection and the item id, so neither can contain the

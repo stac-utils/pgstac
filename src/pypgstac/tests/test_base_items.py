@@ -284,3 +284,37 @@ def test_loader_cache_cleared_when_collections_are_loaded(loader: Loader) -> Non
 
     assert TAG not in stored_content(loader, "item-c")
     assert "gsd" not in get_item(loader, "item-c")["assets"]["vv"]
+
+
+def test_loader_items_keep_stac_version_across_collection_edit(loader: Loader) -> None:
+    """The loader strips only a matching stac_version; none changes on an edit."""
+    loader.load_collections([collection_json()], insert_mode=Methods.ignore)
+    differ = item_json("b-110")
+    differ["stac_version"] = "1.1.0"
+    loader.load_items(
+        [item_json("a-100"), differ, item_json("e-100to110"), item_json("g-100")],
+        insert_mode=Methods.insert,
+    )
+
+    assert "stac_version" not in stored_content(loader, "a-100")
+    assert stored_content(loader, "b-110")["stac_version"] == "1.1.0"
+
+    moved = item_json("e-100to110")
+    moved["stac_version"] = "1.1.0"
+    loader.load_items([moved], insert_mode=Methods.upsert)
+    assert stored_content(loader, "e-100to110")["stac_version"] == "1.1.0"
+
+    edited = collection_json()
+    edited["stac_version"] = "1.1.0"
+    loader.load_collections([edited], insert_mode=Methods.upsert)
+
+    loader.load_items([item_json("g-100")], insert_mode=Methods.upsert)
+    assert stored_content(loader, "g-100")["stac_version"] == "1.0.0"
+
+    for item_id, version in (
+        ("a-100", "1.0.0"),
+        ("b-110", "1.1.0"),
+        ("e-100to110", "1.1.0"),
+        ("g-100", "1.0.0"),
+    ):
+        assert get_item(loader, item_id)["stac_version"] == version
