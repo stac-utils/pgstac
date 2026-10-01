@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import psycopg
 import pytest
 
 from pypgstac.db import PgstacDB
@@ -32,10 +33,11 @@ def test_load_queryables_succeeds(db: PgstacDB) -> None:
         ],
     )
 
-    # Verify that the queryables were loaded
+    # The loader stores no wrapper; the effective one is inferred from the definition
     result = db.query(
         """
-        SELECT name, property_wrapper, property_index_type
+        SELECT name, property_wrapper,
+            queryable_wrapper(property_wrapper, definition), property_index_type
         FROM queryables
         WHERE name LIKE 'test:%'
         ORDER BY name;
@@ -44,12 +46,18 @@ def test_load_queryables_succeeds(db: PgstacDB) -> None:
 
     # Convert result to a list of dictionaries for easier assertion
     queryables = [
-        {"name": row[0], "property_wrapper": row[1], "property_index_type": row[2]}
+        {
+            "name": row[0],
+            "stored_wrapper": row[1],
+            "property_wrapper": row[2],
+            "property_index_type": row[3],
+        }
         for row in result
     ]
 
     # Check that all test properties were loaded with correct wrappers
     assert len(queryables) == 5
+    assert all(q["stored_wrapper"] is None for q in queryables)
 
     # Check string property
     string_prop = next(q for q in queryables if q["name"] == "test:string_prop")
@@ -71,10 +79,11 @@ def test_load_queryables_succeeds(db: PgstacDB) -> None:
     assert datetime_prop["property_wrapper"] == "to_tstz"
     assert datetime_prop["property_index_type"] == "BTREE"
 
-    # Check array property
+    # Check array property. GIN, not BTREE: to_text_array is matched with @> and &&,
+    # which btree cannot serve, so a btree index here would be built and never used.
     array_prop = next(q for q in queryables if q["name"] == "test:array_prop")
     assert array_prop["property_wrapper"] == "to_text_array"
-    assert array_prop["property_index_type"] == "BTREE"
+    assert array_prop["property_index_type"] == "GIN"
 
 
 def test_load_queryables_without_index_fields(db: PgstacDB) -> None:
@@ -180,20 +189,17 @@ def test_load_queryables_empty_index_fields(db: PgstacDB) -> None:
 
 
 @patch("pypgstac.pypgstac.PgstacDB.connect")
-def test_maintain_partitions_called_only_with_index_fields(mock_connect):
-    """Test that maintain_partitions is only called when index_fields is provided."""
-    # Mock the database connection
+def test_index_fields_are_forwarded_to_sql(mock_connect):
+    """The CLI hands index_fields to upsert_queryables rather than acting on them.
+
+    Whether partitions are maintained is decided in SQL, where the rest of the rules
+    about turning a property into a queryable live; the pgtap suite covers that.
+    """
     mock_conn = MagicMock()
     mock_connect.return_value = mock_conn
 
-    # Mock cursor
-    mock_cursor = MagicMock()
-    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-    # Create a CLI instance with the mocked connection
     cli = PgstacCLI(dsn="mock_dsn")
 
-    # Create a temporary file with test queryables
     test_file = HERE / "data-files" / "queryables" / "temp_test.json"
     with open(test_file, "w") as f:
         f.write(
@@ -202,46 +208,29 @@ def test_maintain_partitions_called_only_with_index_fields(mock_connect):
                 "type": "object",
                 "title": "Test Properties",
                 "properties": {
-                    "test:prop1": {
-                        "type": "string",
-                        "title": "Test Property 1"
-                    },
-                    "test:prop2": {
-                        "type": "integer",
-                        "title": "Test Property 2"
-                    }
+                    "test:prop1": {"type": "string", "title": "Test Property 1"},
+                    "test:prop2": {"type": "integer", "title": "Test Property 2"}
                 }
             }
             """,
         )
 
-    # Case 1: With index_fields
-    cli.load_queryables(
-        str(test_file),
-        index_fields=["test:prop1"],
-    )
-
-    # Check that maintain_partitions was called
-    maintain_calls = [
-        call_args for call_args in mock_cursor.execute.call_args_list
-        if "maintain_partitions" in str(call_args)
+    cli.load_queryables(str(test_file), index_fields=["test:prop1"])
+    calls = [
+        c for c in mock_conn.execute.call_args_list if "upsert_queryables" in str(c)
     ]
-    assert len(maintain_calls) == 1
+    assert len(calls) == 1
+    assert calls[0].args[1][2] == ["test:prop1"]
 
-    # Reset mock
-    mock_cursor.reset_mock()
+    mock_conn.reset_mock()
 
-    # Case 2: Without index_fields
     cli.load_queryables(str(test_file))
-
-    # Check that maintain_partitions was not called
-    maintain_calls = [
-        call_args for call_args in mock_cursor.execute.call_args_list
-        if "maintain_partitions" in str(call_args)
+    calls = [
+        c for c in mock_conn.execute.call_args_list if "upsert_queryables" in str(c)
     ]
-    assert len(maintain_calls) == 0
+    assert len(calls) == 1
+    assert calls[0].args[1][2] is None
 
-    # Clean up
     test_file.unlink()
 
 
@@ -294,6 +283,31 @@ def test_load_queryables_with_collections(db: PgstacDB, loader: Loader) -> None:
             assert q["property_index_type"] is None
 
 
+def test_load_queryables_with_collections_replaces_global(
+    db: PgstacDB,
+    loader: Loader,
+) -> None:
+    """A per-collection load replaces a global queryable of the same name."""
+    loader.load_collections(
+        str(TEST_COLLECTIONS_JSON),
+        insert_mode="insert",
+    )
+    collection_ids = [row[0] for row in db.query("SELECT id FROM collections LIMIT 1;")]
+
+    cli = PgstacCLI(dsn=db.dsn)
+    cli.load_queryables(str(TEST_QUERYABLES_JSON))
+    cli.load_queryables(str(TEST_QUERYABLES_JSON), collection_ids=collection_ids)
+
+    rows = list(
+        db.query(
+            "SELECT collection_ids FROM queryables WHERE name = 'test:string_prop';",
+        ),
+    )
+
+    # The global row is gone and the per-collection row is the only one left
+    assert rows == [(collection_ids,)]
+
+
 def test_load_queryables_update(db: PgstacDB) -> None:
     """Test updating existing queryables."""
     # Create a CLI instance
@@ -318,7 +332,8 @@ def test_load_queryables_update(db: PgstacDB) -> None:
     # Verify that the property wrapper was updated and index changed
     result = db.query(
         """
-        SELECT name, property_wrapper, property_index_type
+        SELECT name, queryable_wrapper(property_wrapper, definition),
+            property_index_type
         FROM queryables
         WHERE name in ('test:number_prop', 'test:string_prop');
         """,
@@ -334,7 +349,7 @@ def test_load_queryables_update(db: PgstacDB) -> None:
     number_prop = next(q for q in queryables if q["name"] == "test:number_prop")
     string_prop = next(q for q in queryables if q["name"] == "test:string_prop")
 
-    # The property wrapper should be back to to_float
+    # The reload cleared the stored wrapper, so it is inferred as to_float again
     assert number_prop["property_wrapper"] == "to_float"
     # The index should be removed from number_prop
     assert number_prop["property_index_type"] is None
@@ -425,7 +440,8 @@ def test_load_queryables_delete_missing(db: PgstacDB) -> None:
 
 
 def test_load_queryables_delete_missing_with_collections(
-    db: PgstacDB, loader: Loader,
+    db: PgstacDB,
+    loader: Loader,
 ) -> None:
     """Test loading queryables with delete_missing=True and specific collections."""
     # Load test collections first
@@ -434,9 +450,16 @@ def test_load_queryables_delete_missing_with_collections(
         insert_mode="insert",
     )
 
-    # Get collection IDs from the database
-    result = db.query("SELECT id FROM collections LIMIT 2;")
+    # Two collection ids, in an order other than the one queryables stores them in
+    db.query_one(
+        """
+        INSERT INTO collections (content)
+        VALUES ('{"id": "pgstac-test-collection-2"}') RETURNING id;
+        """,
+    )
+    result = db.query("SELECT id FROM collections ORDER BY id DESC LIMIT 2;")
     collection_ids = [row[0] for row in result]
+    assert collection_ids != sorted(collection_ids)
 
     # Create a CLI instance
     cli = PgstacCLI(dsn=db.dsn)
@@ -524,10 +547,10 @@ def test_load_queryables_no_properties(db: PgstacDB) -> None:
     with open(no_props_file, "w") as f:
         f.write('{"type": "object", "title": "No Properties"}')
 
-    # Loading should raise a ValueError
+    # upsert_queryables rejects it, so the error carries the SQLSTATE it raised with.
     with pytest.raises(
-        ValueError,
-        match="No properties found in queryables definition",
+        psycopg.errors.InvalidParameterValue,
+        match="No properties found in the queryables definition",
     ):
         cli.load_queryables(str(no_props_file))
 

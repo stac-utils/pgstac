@@ -89,14 +89,20 @@ class MigrationPath:
             return [f"pgstac.{path[0]}.sql"]
         files = []
         for idx in range(len(path) - 1):
-            f = f"pgstac.{path[idx]}-{path[idx+1]}.sql"
+            f = f"pgstac.{path[idx]}-{path[idx + 1]}.sql"
             f = f.replace("--init", "")
-            files.append(f"pgstac.{path[idx]}-{path[idx+1]}.sql")
+            files.append(f"pgstac.{path[idx]}-{path[idx + 1]}.sql")
         return files
 
 
 def get_sql(file: str) -> str:
-    """Get sql from a file as a string."""
+    """Get sql from a file as a string, without its own transaction control.
+
+    A migration file wraps itself in BEGIN/COMMIT so that applying one directly with
+    psql is atomic. Every file of a chain is executed here on one connection with
+    autocommit off, and an embedded COMMIT would end that transaction, leaving the
+    files already applied committed when a later one fails.
+    """
     sqlstrs = []
     file = re.sub("[0-9]+[.][0-9]+[.][0-9]+-dev", "unreleased", file)
     fp = os.path.join(migrations_dir, file)
@@ -104,7 +110,15 @@ def get_sql(file: str) -> str:
 
     with file_handle as fd:
         sqlstrs.extend(fd.readlines())
-    return "\n".join(sqlstrs)
+    sql = "\n".join(sqlstrs)
+    # Both or neither. Four migrations from 0.2.x put SET SEARCH_PATH before
+    # their BEGIN, so stripping the trailing COMMIT on its own would leave an
+    # unmatched BEGIN inside the transaction this runs in.
+    stripped, n = re.subn(r"\A\s*BEGIN\s*;", "", sql, flags=re.IGNORECASE)
+    if n:
+        stripped = re.sub(r"COMMIT\s*;\s*\Z", "", stripped, flags=re.IGNORECASE)
+        return stripped
+    return sql
 
 
 class Migrate:
@@ -149,6 +163,24 @@ class Migrate:
         if len(files) < 1:
             raise Exception("Could not find migration files")
 
+        # Before the schema moves under them: a queued statement names the function
+        # signatures it was queued against. Outside the migration's transaction, so a
+        # failure here stops the upgrade rather than rolling back a half-applied one.
+        if self.db.queue_length() > 0:
+            # Statistics updates are discarded rather than run: 998_idempotent_post
+            # queues every partition again once the migration commits, so running them
+            # now locks every partition to compute what is about to be recomputed, and
+            # a failure would stop the upgrade over work that was going to be redone.
+            discarded = self.db.discard_queued_partition_stats()
+            if discarded:
+                logger.info(
+                    f"Discarded {discarded} queued partition statistics updates; "
+                    "they are queued again after the migration.",
+                )
+            if self.db.queue_length() > 0:
+                logger.info("Draining the query queue before migrating.")
+                self.db.run_queued()
+
         conn = self.db.connect()
 
         queued = 0
@@ -186,15 +218,25 @@ class Migrate:
                     "Migration failed, database rolled back to previous state.",
                 )
 
+        conn.autocommit = True
+
         logger.debug(f"New Version: {newversion}")
 
-        # With pgstac.use_queue on, statistics and constraint maintenance are
-        # deferred, and nothing else reports that they are still pending.
+        # 998_idempotent_post queues partition maintenance rather than running it in
+        # the migration's transaction, so it is drained here: an operator running no
+        # queue runner of their own would otherwise be left with stale statistics and
+        # constraints and nothing saying so. The schema change has already committed,
+        # so a statement that cannot be run is reported, not raised -- the migration
+        # itself succeeded.
         if queued > 0:
-            logger.warning(
-                f"{queued} queries are queued after migration. "
-                "Run 'pypgstac runqueue' until it drains -- until then "
-                "partition statistics and constraints are stale.",
-            )
+            logger.info(f"Draining {queued} queued maintenance statements.")
+            try:
+                self.db.run_queued()
+            except RuntimeError as e:
+                logger.error(
+                    f"{e}\nThe schema is migrated to {newversion}, but partition "
+                    "statistics and constraints are stale for the statements above. "
+                    "Fix the cause and run 'pypgstac runqueue'.",
+                )
 
         return newversion

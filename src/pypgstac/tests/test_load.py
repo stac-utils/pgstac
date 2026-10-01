@@ -188,6 +188,58 @@ def test_load_items_delsert_succeeds(loader: Loader) -> None:
     )
 
 
+def test_format_item_refuses_an_inverted_datetime_range(loader: Loader) -> None:
+    """An item whose start_datetime is after its end_datetime is refused.
+
+    create_item refuses it through stac_daterange; the loader writes the columns
+    directly and so has to apply the same rule, or the item loads and no
+    temporal search can ever match it.
+    """
+    loader.load_collections(str(TEST_COLLECTIONS), insert_mode=Methods.insert)
+    item = {
+        "id": "pgstac-test-inverted",
+        "type": "Feature",
+        "collection": "pgstac-test-collection",
+        "stac_version": "1.0.0",
+        "geometry": {"type": "Point", "coordinates": [0, 0]},
+        "bbox": [0, 0, 0, 0],
+        "links": [],
+        "assets": {},
+        "properties": {
+            "start_datetime": "2020-06-01T00:00:00Z",
+            "end_datetime": "2020-01-01T00:00:00Z",
+        },
+    }
+    with pytest.raises(Exception, match="start_datetime must be < end_datetime"):
+        loader.format_item(item)
+
+
+def test_format_item_accepts_an_ordinary_range(loader: Loader) -> None:
+    """The ordinary case is untouched, including a range whose ends are equal."""
+    loader.load_collections(str(TEST_COLLECTIONS), insert_mode=Methods.insert)
+    base = {
+        "id": "pgstac-test-ordinary",
+        "type": "Feature",
+        "collection": "pgstac-test-collection",
+        "stac_version": "1.0.0",
+        "geometry": {"type": "Point", "coordinates": [0, 0]},
+        "bbox": [0, 0, 0, 0],
+        "links": [],
+        "assets": {},
+        "properties": {
+            "start_datetime": "2020-01-01T00:00:00Z",
+            "end_datetime": "2020-06-01T00:00:00Z",
+        },
+    }
+    assert loader.format_item(base)["datetime"] == "2020-01-01T00:00:00Z"
+    same = dict(base)
+    same["properties"] = {
+        "start_datetime": "2020-01-01T00:00:00Z",
+        "end_datetime": "2020-01-01T00:00:00Z",
+    }
+    assert loader.format_item(same)["end_datetime"] == "2020-01-01T00:00:00Z"
+
+
 def test_partition_loads_default(loader: Loader) -> None:
     """Test pypgstac items ignore loader."""
     loader.load_collections(

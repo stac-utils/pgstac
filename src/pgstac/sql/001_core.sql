@@ -90,6 +90,12 @@ CREATE OR REPLACE FUNCTION age_ms(a timestamptz, b timestamptz DEFAULT clock_tim
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
+-- How many times a queued statement is run before it is left for an operator. At least one,
+-- or nothing would ever be eligible and the queue could not drain.
+CREATE OR REPLACE FUNCTION queue_retries() RETURNS int AS $$
+    SELECT greatest(coalesce(get_setting('queue_retries'), '3')::int, 1);
+$$ LANGUAGE SQL;
+
 CREATE OR REPLACE FUNCTION queue_timeout() RETURNS interval AS $$
     SELECT t2s(coalesce(
             get_setting('queue_timeout'),
@@ -144,7 +150,8 @@ $$ LANGUAGE SQL STRICT IMMUTABLE;
 DROP TABLE IF EXISTS query_queue;
 CREATE TABLE query_queue (
     query text PRIMARY KEY,
-    added timestamptz DEFAULT now()
+    added timestamptz DEFAULT now(),
+    attempts int NOT NULL DEFAULT 0
 );
 
 DROP TABLE IF EXISTS query_queue_history;
@@ -152,62 +159,104 @@ CREATE TABLE query_queue_history(
     query text,
     added timestamptz NOT NULL,
     finished timestamptz NOT NULL DEFAULT now(),
-    error text
+    error text,
+    attempts int
 );
+
+-- Runs one statement that still has attempts left, or returns FALSE when none has. A failure
+-- leaves the row in the queue, so a deadlock victim is retried rather than lost. A statement
+-- that runs out of attempts is recorded in the history with its error and dropped.
+CREATE OR REPLACE FUNCTION run_queued_query() RETURNS boolean AS $$
+DECLARE
+    qitem query_queue%ROWTYPE;
+    _retries int := queue_retries();
+    error text;
+BEGIN
+    -- Fewest attempts first, so a statement that keeps failing yields to the rest of the queue
+    -- rather than spending its whole budget back to back. Counted at claim time: the failure
+    -- below is caught in a subtransaction, but a backend killed outright records nothing.
+    UPDATE query_queue SET attempts = attempts + 1
+    WHERE query = (
+        SELECT query FROM query_queue
+        WHERE attempts < _retries
+        ORDER BY attempts, added DESC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING * INTO qitem;
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+    BEGIN
+        RAISE DEBUG 'RUNNING QUERY: %', qitem.query;
+        EXECUTE qitem.query;
+        EXCEPTION WHEN others THEN
+            error := format('%s | %s', SQLERRM, SQLSTATE);
+    END;
+    IF error IS NULL THEN
+        DELETE FROM query_queue WHERE query = qitem.query;
+    ELSIF qitem.attempts < _retries THEN
+        RAISE NOTICE 'Queued query failed on attempt % of %, will retry: % | %',
+            qitem.attempts, _retries, qitem.query, error;
+    ELSE
+        -- Out of attempts: recorded below and dropped, so the queue can reach empty. The
+        -- history row carries the error that stopped it.
+        RAISE WARNING 'Queued query failed on all % attempts: % | %',
+            _retries, qitem.query, error;
+        DELETE FROM query_queue WHERE query = qitem.query;
+    END IF;
+    INSERT INTO query_queue_history (query, added, finished, error, attempts)
+        VALUES (qitem.query, qitem.added, clock_timestamp(), error, qitem.attempts);
+    RETURN TRUE;
+END;
+$$ LANGUAGE PLPGSQL;
+
+-- Rows with no attempts left that run_queued_query did not retire itself: a backend killed
+-- mid-statement, or a queue_retries lowered since they were queued. Without this they are
+-- never eligible again and the queue never reaches empty.
+CREATE OR REPLACE FUNCTION retire_queued_queries()
+RETURNS TABLE (query text, attempts int) AS $$
+    WITH retired AS (
+        DELETE FROM pgstac.query_queue q
+        WHERE q.attempts >= pgstac.queue_retries()
+        RETURNING q.query, q.added, q.attempts
+    ), recorded AS (
+        INSERT INTO pgstac.query_queue_history (query, added, finished, error, attempts)
+        SELECT
+            r.query,
+            r.added,
+            clock_timestamp(),
+            'Retired with no attempts left; the failure is on an earlier attempt of this query',
+            r.attempts
+        FROM retired r
+        RETURNING 1
+    )
+    SELECT r.query, r.attempts FROM retired r;
+$$ LANGUAGE SQL;
 
 CREATE OR REPLACE PROCEDURE run_queued_queries() AS $$
 DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
-    cnt int := 0;
+    timeout_ts timestamptz := statement_timestamp() + queue_timeout();
 BEGIN
-    timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            EXIT;
-        END IF;
-        cnt := cnt + 1;
-        BEGIN
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
+        EXIT WHEN NOT run_queued_query();
         COMMIT;
     END LOOP;
+    PERFORM retire_queued_queries();
+    COMMIT;
 END;
 $$ LANGUAGE PLPGSQL;
 
 CREATE OR REPLACE FUNCTION run_queued_queries_intransaction() RETURNS int AS $$
 DECLARE
-    qitem query_queue%ROWTYPE;
-    timeout_ts timestamptz;
-    error text;
+    timeout_ts timestamptz := statement_timestamp() + queue_timeout();
     cnt int := 0;
 BEGIN
-    timeout_ts := statement_timestamp() + queue_timeout();
     WHILE clock_timestamp() < timeout_ts LOOP
-        DELETE FROM query_queue WHERE query = (SELECT query FROM query_queue ORDER BY added DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING * INTO qitem;
-        IF NOT FOUND THEN
-            RETURN cnt;
-        END IF;
+        EXIT WHEN NOT run_queued_query();
         cnt := cnt + 1;
-        BEGIN
-            qitem.query := regexp_replace(qitem.query, 'CONCURRENTLY', '');
-            RAISE NOTICE 'RUNNING QUERY: %', qitem.query;
-
-            EXECUTE qitem.query;
-            EXCEPTION WHEN others THEN
-                error := format('%s | %s', SQLERRM, SQLSTATE);
-                RAISE WARNING '%', error;
-        END;
-        INSERT INTO query_queue_history (query, added, finished, error)
-            VALUES (qitem.query, qitem.added, clock_timestamp(), error);
     END LOOP;
+    PERFORM retire_queued_queries();
     RETURN cnt;
 END;
 $$ LANGUAGE PLPGSQL;
@@ -217,13 +266,18 @@ $$ LANGUAGE PLPGSQL;
 -- its effects are visible in this transaction.
 CREATE OR REPLACE FUNCTION run_or_queue(query text) RETURNS boolean AS $$
 DECLARE
-    use_queue boolean := COALESCE(get_setting('use_queue'), 'FALSE')::boolean;
+    use_queue boolean := get_setting_bool('use_queue');
 BEGIN
     IF get_setting_bool('debug') THEN
         RAISE NOTICE '%', query;
     END IF;
     IF use_queue THEN
-        INSERT INTO query_queue (query) VALUES (query) ON CONFLICT DO NOTHING;
+        -- A fresh request for a statement already queued gets a fresh budget: the earlier
+        -- attempts were spent on a state this caller has just superseded.
+        -- By constraint, not by column: the target column and this function's parameter
+        -- are both named query, which ON CONFLICT (query) cannot tell apart.
+        INSERT INTO query_queue (query) VALUES (query)
+        ON CONFLICT ON CONSTRAINT query_queue_pkey DO UPDATE SET attempts = 0;
         RETURN FALSE;
     END IF;
     EXECUTE query;
@@ -333,3 +387,20 @@ BEGIN
 
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public SET CLIENT_MIN_MESSAGES TO NOTICE;
+
+
+-- pg_get_expr renders timestamps under the READER's DateStyle, so this is the only place
+-- pgstac deparses a partition bound. ISO text then parses the same under any DateStyle.
+CREATE OR REPLACE FUNCTION partition_bound_expr(_oid oid) RETURNS text AS $$
+    SELECT pg_get_expr(relpartbound, oid) FROM pg_class WHERE oid = _oid;
+$$ LANGUAGE SQL STABLE STRICT PARALLEL SAFE SET DateStyle TO 'ISO, YMD';
+
+-- The collection of a LIST partition. The bound is a SQL literal, so quotes inside an id are
+-- doubled; undoing that once keeps an id containing a quote matchable.
+CREATE OR REPLACE FUNCTION partition_collection(_oid oid) RETURNS text AS $$
+    SELECT replace(
+        substring(pgstac.partition_bound_expr(_oid), '^FOR VALUES IN \(''(.*)''\)$'),
+        '''''',
+        ''''
+    );
+$$ LANGUAGE SQL STABLE STRICT PARALLEL SAFE;

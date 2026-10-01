@@ -8,6 +8,12 @@ SELECT has_function('pgstac'::name, 'get_collection', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'delete_collection', ARRAY['text']);
 SELECT has_function('pgstac'::name, 'all_collections', '{}'::text[]);
 
+SELECT has_table('pgstac'::name, 'base_items'::name);
+SELECT has_function('pgstac'::name, 'collection_base_item', ARRAY['jsonb']);
+SELECT has_function('pgstac'::name, 'collection_base_item', ARRAY['text','integer']);
+SELECT hasnt_function('pgstac'::name, 'collection_base_item', ARRAY['text']);
+SELECT hasnt_function('pgstac', 'content_hydrate', ARRAY['items','collections','jsonb']);
+
 DELETE FROM collections WHERE id in ('pgstac-test-collection', 'pgstac-test-collection2');
 \copy collections (content) FROM 'tests/testdata/collections.ndjson';
 \copy items_staging (content) FROM 'tests/testdata/items.ndjson';

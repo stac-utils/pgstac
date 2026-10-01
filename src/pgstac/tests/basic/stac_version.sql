@@ -1,0 +1,81 @@
+-- An item keeps the stac_version it was loaded with when its collection's stac_version changes.
+SELECT create_collection('{"id": "pgstactest-stacversion", "type": "Collection", "stac_version": "1.0.0", "description": "stac_version hydration", "license": "proprietary", "links": [], "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [["2024-01-01T00:00:00Z", null]]}}}');
+CREATE TEMP TABLE sv_template AS SELECT '{"type": "Feature", "collection": "pgstactest-stacversion", "geometry": {"type": "Point", "coordinates": [0, 0]}, "bbox": [0, 0, 0, 0], "properties": {"datetime": "2024-01-01T00:00:00Z"}, "links": [], "assets": {}}'::jsonb AS content;
+
+-- Replaces _id's update_item, upsert_item and upsert_items rows at _version; a NULL _version omits stac_version.
+CREATE FUNCTION pg_temp.sv_replace(_id text, _version text) RETURNS void AS $$
+DECLARE
+    t jsonb := (SELECT content FROM sv_template);
+BEGIN
+    PERFORM update_item(t || jsonb_strip_nulls(jsonb_build_object('id', _id || '-update_item', 'stac_version', _version)));
+    PERFORM upsert_item(t || jsonb_strip_nulls(jsonb_build_object('id', _id || '-upsert_item', 'stac_version', _version)));
+    PERFORM upsert_items(jsonb_build_array(t || jsonb_strip_nulls(jsonb_build_object('id', _id || '-upsert_items', 'stac_version', _version))));
+END;
+$$ LANGUAGE PLPGSQL;
+
+-- Loads _id through create_item and create_items at _version, and its replaced rows at _initial then _version.
+CREATE FUNCTION pg_temp.sv_load(_id text, _version text, _initial text) RETURNS void AS $$
+DECLARE
+    t jsonb := (SELECT content FROM sv_template);
+    suffix text;
+BEGIN
+    PERFORM create_item(t || jsonb_strip_nulls(jsonb_build_object('id', _id, 'stac_version', _version)));
+    PERFORM create_items(jsonb_build_array(t || jsonb_strip_nulls(jsonb_build_object('id', _id || '-create_items', 'stac_version', _version))));
+    FOREACH suffix IN ARRAY ARRAY['-update_item', '-upsert_item', '-upsert_items'] LOOP
+        PERFORM create_item(t || jsonb_strip_nulls(jsonb_build_object('id', _id || suffix, 'stac_version', _initial)));
+    END LOOP;
+    PERFORM pg_temp.sv_replace(_id, _version);
+END;
+$$ LANGUAGE PLPGSQL;
+
+-- Each item's stored stac_version and the one every read path returns; nohydrate is hydrated against the base item it carries.
+CREATE TEMP VIEW sv_check AS
+WITH
+    q AS (SELECT '{"collections": ["pgstactest-stacversion"], "limit": 100}'::jsonb AS q),
+    nh AS (SELECT f->>'id' AS id, content_hydrate(f - 'pgstac:base_item', f->'pgstac:base_item')->>'stac_version' AS v FROM q, jsonb_array_elements(search(q || '{"conf": {"nohydrate": true}}')->'features') f),
+    fl AS (SELECT f->>'id' AS id, f->>'stac_version' AS v FROM q, jsonb_array_elements(search(q || '{"fields": {"include": ["id", "stac_version"]}}')->'features') f),
+    gs AS (SELECT f->>'id' AS id, f->>'stac_version' AS v FROM q, jsonb_array_elements(geojsonsearch('{"type": "Point", "coordinates": [0, 0]}', (SELECT hash FROM search_query(q)), NULL, 10000, 100, '5 seconds', FALSE, FALSE)->'features') f)
+SELECT i.id, i.content->>'stac_version' AS stored, get_item(i.id, i.collection)->>'stac_version' AS get_item,
+    search(jsonb_build_object('ids', jsonb_build_array(i.id), 'collections', jsonb_build_array(i.collection)))->'features'->0->>'stac_version' AS search,
+    nh.v AS nohydrate, fl.v AS fields, gs.v AS tiles
+FROM items i
+LEFT JOIN nh ON nh.id = i.id
+LEFT JOIN fl ON fl.id = i.id
+LEFT JOIN gs ON gs.id = i.id
+WHERE i.collection = 'pgstactest-stacversion'
+ORDER BY i.id COLLATE "C";
+
+-- Collection at 1.0.0.
+-- a-100 matches; its replaced rows were first stored at 0.9.0.
+SELECT pg_temp.sv_load('a-100', '1.0.0', '0.9.0');
+-- b-110 differs.
+SELECT pg_temp.sv_load('b-110', '1.1.0', '0.9.0');
+-- e-100to110 replaced rows were first loaded matching, then moved to 1.1.0.
+SELECT pg_temp.sv_load('e-100to110', '1.1.0', '1.0.0');
+-- g-100 matches; its replaced rows are loaded again at 1.0.0 after the edit.
+SELECT pg_temp.sv_load('g-100', '1.0.0', '1.0.0');
+-- n-none has no stac_version; its replaced rows were first loaded matching.
+SELECT pg_temp.sv_load('n-none', NULL, '1.0.0');
+
+SELECT update_collection(content || '{"stac_version": "1.1.0"}') FROM collections WHERE id='pgstactest-stacversion';
+
+-- Collection at 1.1.0: g-100 replaced rows now differ from the collection.
+SELECT pg_temp.sv_replace('g-100', '1.0.0');
+-- c-110 matches, d-100 differs.
+SELECT pg_temp.sv_load('c-110', '1.1.0', '0.9.0');
+SELECT pg_temp.sv_load('d-100', '1.0.0', '0.9.0');
+
+SELECT * FROM sv_check;
+
+SELECT update_collection(content || '{"stac_version": "1.0.0"}') FROM collections WHERE id='pgstactest-stacversion';
+
+-- Collection back at 1.0.0: h-100 matches.
+SELECT pg_temp.sv_load('h-100', '1.0.0', '0.9.0');
+
+SELECT * FROM sv_check;
+
+-- With the format cache on, moving cached items to a new stac_version is returned.
+SET pgstac.format_cache TO 'on';
+SELECT count(*) FROM sv_check;
+SELECT pg_temp.sv_replace('a-100', '1.1.0');
+SELECT * FROM sv_check WHERE id LIKE 'a-100%';

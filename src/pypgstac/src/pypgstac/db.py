@@ -1,4 +1,5 @@
 """Base library for database interaction with PgSTAC."""
+
 import atexit
 import logging
 import time
@@ -236,14 +237,97 @@ class PgstacDB:
             return r[0]
         return r
 
+    def _has_retrying_queue(self) -> bool:
+        """Whether this database has the queue that counts attempts."""
+        row = (
+            self.connect()
+            .execute(
+                "SELECT to_regprocedure('pgstac.retire_queued_queries()') IS NOT NULL;",
+            )
+            .fetchone()
+        )
+        return bool(row and row[0])
+
+    def queue_length(self) -> int:
+        """Statements waiting in the queue; 0 when the database has no queue yet."""
+        conn = self.connect()
+        # Two statements: names resolve at parse time, so referencing query_queue in a
+        # branch that a database without one never takes still fails on that database.
+        row = conn.execute(
+            "SELECT to_regclass('pgstac.query_queue') IS NOT NULL;",
+        ).fetchone()
+        if not (row and row[0]):
+            return 0
+        row = conn.execute("SELECT count(*)::int FROM pgstac.query_queue;").fetchone()
+        return row[0] if row else 0
+
+    def discard_queued_partition_stats(self) -> int:
+        """Drop queued partition statistics updates, returning how many were dropped."""
+        cur = self.connect().execute(
+            "DELETE FROM pgstac.query_queue"
+            " WHERE query LIKE 'SELECT update_partition_stats(%';",
+        )
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def _queue_progress(self) -> Tuple[int, int]:
+        """Rows waiting and attempts spent, which together only ever move forwards."""
+        if not self._has_retrying_queue():
+            return (self.queue_length(), 0)
+        row = (
+            self.connect()
+            .execute(
+                "SELECT count(*)::int, coalesce(sum(attempts), 0)::int"
+                " FROM pgstac.query_queue;",
+            )
+            .fetchone()
+        )
+        return (row[0], row[1]) if row else (0, 0)
+
     def run_queued(self) -> str:
-        try:
-            self.connect().execute("""
-                CALL run_queued_queries();
-            """)
+        """Drain the queue and report anything that could not be run.
+
+        run_queued_queries stops at queue_timeout, so one call does not necessarily
+        empty the queue. Repeat until it is, or until a round changes nothing: every
+        claim spends an attempt, so an unchanged state means no statement ran and
+        another round would not help either.
+
+        Raises RuntimeError naming the statements whose last outcome was an error.
+        """
+        conn = self.connect()
+        # run_queued_queries COMMITs per statement, which a connection left in a
+        # transaction refuses. There is none open here, so this is safe to set.
+        conn.autocommit = True
+        row = conn.execute("SELECT clock_timestamp();").fetchone()
+        started = row[0] if row else None
+
+        previous = None
+        while True:
+            state = self._queue_progress()
+            if state[0] == 0 or state == previous:
+                break
+            previous = state
+            # run_queued_queries is a procedure that COMMITs per statement, so it
+            # cannot run inside an explicit transaction.
+            conn.execute("CALL run_queued_queries();", prepare=False)
+
+        if started is None or not self._has_retrying_queue():
             return "Ran Queued Queries"
-        except Exception as e:
-            return f"Error Running Queued Queries: {e}"
+
+        # The last outcome per statement, so one that failed and then succeeded on a
+        # retry is not reported as a failure.
+        outcomes = conn.execute(
+            "SELECT DISTINCT ON (query) query, attempts, error"
+            " FROM pgstac.query_queue_history"
+            " WHERE finished >= %s ORDER BY query, finished DESC;",
+            (started,),
+        ).fetchall()
+        failed = [(q, a, e) for q, a, e in outcomes if e is not None]
+        if failed:
+            listed = "\n".join(f"  {q} (after {a} attempts): {e}" for q, a, e in failed)
+            raise RuntimeError(
+                f"{len(failed)} queued statements could not be run:\n{listed}",
+            )
+        return "Ran Queued Queries"
 
     @property
     def version(self) -> Optional[str]:
@@ -280,9 +364,11 @@ class PgstacDB:
         if isinstance(version, str):
             if int(version) < 130000:
                 major, minor, patch = tuple(
-                    map(int, [version[i:i + 2] for i in range(0, len(version), 2)]),
+                    map(int, [version[i : i + 2] for i in range(0, len(version), 2)]),
                 )
-                raise Exception(f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}")  # noqa: E501
+                raise Exception(
+                    f"PgSTAC requires PostgreSQL 13+, current version is: {major}.{minor}.{patch}",  # noqa: E501
+                )
             return version
         else:
             if self.connection is not None:

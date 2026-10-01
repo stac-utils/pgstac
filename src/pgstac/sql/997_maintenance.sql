@@ -12,7 +12,7 @@ BEGIN
         IF NOT FOUND THEN
             EXIT;
         END IF;
-        RAISE NOTICE '%', q;
+        RAISE DEBUG '%', q;
         EXECUTE q;
         COMMIT;
     END LOOP;
@@ -41,7 +41,7 @@ BEGIN
     WHERE convalidated = FALSE AND contype in ('c','f')
     AND nsp.nspname = 'pgstac'
     LOOP
-        RAISE NOTICE '%', q;
+        RAISE DEBUG '%', q;
         PERFORM run_or_queue(q);
         COMMIT;
     END LOOP;
@@ -93,6 +93,22 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;
+
+-- Recalculates partition statistics before aggregating them; the observed
+-- ranges are only maintained automatically when update_collection_extent is on.
+-- return_target, not use_json_null: collection_extent returns NULL when it
+-- cannot compute a full extent, and JSON null is not a valid STAC extent.
+CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
+UPDATE collections
+    SET content = jsonb_set_lax(
+        content,
+        '{extent}'::text[],
+        collection_extent(id, TRUE),
+        true,
+        'return_target'
+    )
+;
+$$ LANGUAGE SQL;
 
 
 -- Reconcile partition_stats against the partition tree: an identity row for

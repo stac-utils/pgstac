@@ -60,24 +60,33 @@ SELECT search('{"filter":{"op":"a_contained_by","args":[{"property":"proj:bbox"}
 -- Test Paging
 SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
 
-SELECT search('{"token":"next:pgstac-test-item-0048", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0048')));
 
-SELECT search('{"token":"next:pgstac-test-item-0016", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0016')));
 
-SELECT search('{"token":"prev:pgstac-test-item-0030", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0030')));
 
-SELECT search('{"token":"prev:pgstac-test-item-0054", "fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+SELECT search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0054')));
 
 -- Test paging without fields extension
 SELECT jsonb_path_query(search('{"fields":{"include":["id","properties.datetime","properties.eo:cloud_cover"]},"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
 
-SELECT jsonb_path_query(search('{"token":"next:pgstac-test-item-0048","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+SELECT jsonb_path_query(search('{"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0048'))), '$.features[*].id');
 
-SELECT jsonb_path_query(search('{"token":"next:pgstac-test-item-0016","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+SELECT jsonb_path_query(search('{"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0016'))), '$.features[*].id');
 
-SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0030","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+SELECT jsonb_path_query(search('{"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0030'))), '$.features[*].id');
 
-SELECT jsonb_path_query(search('{"token":"prev:pgstac-test-item-0054","sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'), '$.features[*].id');
+SELECT jsonb_path_query(search('{"sortby":[{"field":"properties.eo:cloud_cover","direction":"asc"},{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}'::jsonb || jsonb_build_object('token', 'prev:' || page_token('pgstac-test-collection', 'pgstac-test-item-0054'))), '$.features[*].id');
 
 SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1}');
-SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1, "token": "next:pgstac-test-item-0001"}');
+SELECT search('{"collections": ["pgstac-test-collection"], "limit": 1}'::jsonb
+    || jsonb_build_object('token', 'next:' || page_token('pgstac-test-collection', 'pgstac-test-item-0001')));
+
+SELECT search('{"filter":{"op":"gte", "args":[{"property":"start_datetime"},"2011-08-16T00:00:00Z"]}, "fields":{"include":["id"]}, "sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}], "limit": 1}');
+
+SELECT search('{"filter":{"op":"t_overlaps", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"filter":{"op":"t_overlappedby", "args":[{"property":"datetime"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');
+
+SELECT search('{"filter":{"op":"t_intersects", "args":[{"property":"test:created"},"2011-08-16T00:00:00Z/2011-08-18T00:00:00Z"]}, "fields":{"include":["id","properties.datetime"]},"sortby":[{"field":"datetime","direction":"desc"},{"field":"id","direction":"asc"}]}');

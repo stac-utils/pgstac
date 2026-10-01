@@ -83,6 +83,46 @@ SELECT results_eq($$
     'Test search limit 2 - no prev/next links'
 );
 
+SELECT results_eq($$
+    select collection_search('{"limit":1, "offset":1}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}, {"rel": "next", "body": {"offset": 2}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 1}'::jsonb
+    $$,
+    'Test search middle page - both prev and next links'
+);
+
+SELECT results_eq($$
+    select collection_search('{"limit": 700, "offset":1}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 650, "numberReturned": 649}'::jsonb
+    $$,
+    'Test search limit greater than numberMatched with offset - prev link, no next link'
+);
+
+SELECT results_eq($$
+    select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":10, "offset":1, "sortby":[{"field":"id","direction":"asc"}]}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 1}'::jsonb
+    $$,
+    'Test search offset into a result set smaller than limit - prev link'
+);
+
+SELECT results_eq($$
+    select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":10, "offset":15}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 2, "numberReturned": 0}'::jsonb
+    $$,
+    'Test search offset past the end of a short result set - prev steps back from the last offset that can hold rows'
+);
+
+SELECT results_eq($$
+    select collection_search('{"ids":["nosuchcollection"],"limit":10, "offset":5}') - '{collections}'::text[];
+    $$,$$
+    SELECT '{"links": [{"rel": "prev", "body": {"offset": 0}, "href": "./collections", "type": "application/json", "merge": true, "method": "GET"}], "numberMatched": 0, "numberReturned": 0}'::jsonb
+    $$,
+    'Test search offset with zero matches - prev link'
+);
+
 SET pgstac.base_url='https://test.com/';
 SELECT results_eq($$
     select collection_search('{"ids":["testcollection_1","testcollection_2"],"limit":1, "sortby":[{"field":"id","direction":"asc"}]}');

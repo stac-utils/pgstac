@@ -6,6 +6,246 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [v0.10.0]
+
+### Upgrading
+- 0.10.0 is a breaking release. Upgrade pypgstac and the database together: pypgstac 0.10.x
+  refuses to load into a 0.9.x database, and vice versa.
+- Deploy API instances that hydrate client-side (stac-fastapi-pgstac) onto a release that
+  understands the `pgstac:base_item` tag before editing `item_assets` or `stac_version` on
+  a collection that already has items.
+- `queryables` rows are rewritten into one stored spelling: names lose the `properties.`
+  prefix, an empty `collection_ids` becomes global, rows that now conflict are reduced to
+  the oldest, and `property_path` is converted from a path expression to the keys it named.
+  A queryable whose `property_wrapper` is not registered, or whose index PostgreSQL cannot
+  build, halts the migration until it is fixed.
+- Queryables scoped to collections that no longer exist are pruned, and one scoped only to
+  such collections is removed. 0.9.12's collection delete did not touch `queryables`, so these
+  are the ordinary state of a long-lived catalog.
+- Where two rows now conflict the older survives, completed from the one being removed rather
+  than replacing it: a bare stub is usually older than a hand-configured row.
+- Indexes whose definition changed — dotted names, names read from the item root, and
+  definitions with no explicit wrapper — are rebuilt correctly, and the old index is left
+  as an orphan until `maintain_partitions(dropindexes => true)`. Every other index is left
+  alone. See [Indexing](docs/src/pgstac.md).
+- Paging tokens change format and a token issued by an earlier release is no longer
+  accepted. Both halves are now hex-encoded, so a collection or item id containing a colon
+  can no longer make a token ambiguous. A client holding a token across the upgrade has to
+  start its paging again; tokens are cursors, not durable identifiers.
+- Searches return different results where the fixes below change them.
+
+### Fixed
+- Filters and sorts on `start_datetime` work again; `cql2_query()` resolves every property
+  through `queryable()`, which also fixes `properties.`-prefixed spellings and `geometry`
+  outside spatial operators.
+  ([#452](https://github.com/stac-utils/pgstac/issues/452))
+- Temporal operators honour both operands. Every `t_*` operator hardcoded the item's
+  datetime span as the left operand and ignored a literal in the first position, so a
+  filter on any other property silently filtered on the item datetime, and `t_overlaps`
+  failed outright. Intervals on either side, property-to-property comparisons and
+  date-only operands all work; a non-temporal property now raises rather than producing a
+  nonsense predicate.
+  ([#281](https://github.com/stac-utils/pgstac/issues/281))
+- Queryables whose name contains a dot, or that name `assets`, `links`, `bbox`,
+  `stac_version` or `stac_extensions`, are indexed on the path the filter actually reads.
+  Such an index previously matched nothing and was duplicated on every
+  `maintain_partitions()` run. A queryable with no explicit wrapper is indexed through the
+  wrapper its filter uses, not `to_text`.
+  ([#483](https://github.com/stac-utils/pgstac/issues/483),
+  [#465](https://github.com/stac-utils/pgstac/issues/465))
+- Paging no longer truncates a result set when the same item id exists in more than one
+  collection, and a token whose collection id prefixes another, or whose item id contains a
+  colon, can be read back. `search()` emits no paging link for an empty page, and a
+  `sortby` on `geometry` no longer fails.
+  ([#392](https://github.com/stac-utils/pgstac/issues/392))
+- Free text search treats `-` and `+` as prefix operators only at the start of a term, so
+  `q=first-generation` and `q=landsat-8` match, and a term following `AND`, `OR` or a comma
+  no longer fails with `syntax error in tsquery`.
+  ([#459](https://github.com/stac-utils/pgstac/issues/459))
+- Deleting a collection that has items works for `pgstac_ingest` again, including through a
+  direct `DELETE FROM collections`.
+  ([#475](https://github.com/stac-utils/pgstac/issues/475))
+- `collection_search()` returns a `prev` link whenever `offset > 0`, not only when the
+  result set is larger than `limit`.
+  ([#338](https://github.com/stac-utils/pgstac/issues/338))
+- `run_queued_queries()` no longer records a failed statement's error against every later
+  statement in the run, and warns on failure as the in-transaction form already did.
+  ([#487](https://github.com/stac-utils/pgstac/issues/487))
+- A migration of a populated catalog no longer deadlocks against autovacuum. Partition
+  statistics and constraints were rebuilt inside the migration's transaction, holding a
+  `SHARE UPDATE EXCLUSIVE` lock on every partition until it committed -- the same lock
+  `ANALYZE` takes. They are queued instead, and `pypgstac migrate` drains the queue once the
+  schema change has committed, so each is its own short transaction.
+- A queued statement that fails is retried rather than discarded. It used to be deleted from
+  the queue before it ran, so a deadlock victim was lost and the queue reported itself
+  drained while the work had not been done.
+- `queryable()` ignored `collection_ids` entirely, so a per-collection queryable resolved to
+  whichever row had the lowest id for *every* collection — reading the property through the
+  wrong wrapper and path, and leaving that collection's own index unusable.
+- `maintain_partitions(dropindexes => true)` dropped a partition's unique id index, which let
+  duplicate item ids into that partition. The indexes `items` itself carries are structural and
+  are no longer treated as orphans.
+- The upgrade aborted on a queryable naming a deleted collection, an unregistered legacy
+  `property_wrapper`, or an index type PostgreSQL cannot build — sometimes, depending on whether
+  the row's name happened to need rewriting. The first is pruned, and the other two now halt
+  deterministically with the offending queryable named and the remedy in the hint.
+- `base_items` now has a foreign key to `collections`, and `current_base_item` returns a base
+  item id only when that row really holds the collection's current base item. Rewriting a
+  collection's id orphaned its base items, so an item could be dehydrated against one base item
+  and tagged with another — silently, because the tag still existed.
+- An item whose `pgstac:base_item` is not an integer degrades to the current base item with a
+  warning instead of aborting the whole search page.
+- Changing a collection's `stac_version` no longer changes the `stac_version` returned for its
+  existing items: each returns the version it was loaded with, through every ingest path.
+  Items loaded before upgrading are not rewritten.
+- `collections_trigger_func` sets its `search_path`, so editing a collection's `item_assets` or
+  `stac_version` works from any `search_path` again.
+- A paging token encodes both the collection and the item id, so neither can contain the
+  separator and a collection whose id holds a colon no longer makes the token ambiguous.
+- `search()` with `limit: 0` reached by a `prev` token handed back the same token, so a client
+  following the link never advanced.
+- A `limit` of the right shape but too large reports the same error as any other invalid limit
+  rather than a bare integer overflow.
+- `sortby_with_tiebreakers` is `STABLE`; it was marked `IMMUTABLE` while calling `STABLE` jsonb
+  functions.
+- A new partition is bucketed in UTC, so which one an item belongs to no longer depends on the
+  timezone of the session that loaded it. **No existing partition is changed or rewritten.** A
+  partition that already covers an item's datetime receives it whatever alignment that partition
+  was created with, so a catalog partitioned before this release from a session that was not in
+  UTC keeps working exactly as it did. Changing a collection's `partition_trunc` rebuilds its
+  partitions, and that rebuild aligns them to UTC.
+- Partition CHECK constraints are written with an ISO `DateStyle`. They are read back by pattern,
+  which only understands that form, so under a `SQL` or `German` DateStyle a partition's bounds
+  parsed as NULL — silently widening its range to unbounded and losing both partition pruning and
+  its statistics. Existing constraints are re-read correctly once a partition's statistics are
+  next recalculated.
+- A timestamp or date with no explicit offset is read as UTC everywhere, whatever the server or
+  session is set to. A literal compared against `datetime` or `end_datetime` was emitted bare and
+  cast at execution, so the same filter selected different rows in different sessions, and the
+  day-end of a `format: date` property was 23 or 25 hours long across a DST change.
+- A bare date on its own is the whole of that day, as it already was at either end of an interval
+  and as a temporal operand. `datetime=2020-01-01` previously meant the instant of midnight, so
+  the same string meant two things depending on where it appeared.
+- Two queryables that resolve to the same index definition share one index instead of each
+  building its own, which produced byte-identical duplicates that could never be reclaimed.
+- Concurrent writes to different queryable names no longer deadlock on the shared index template.
+- An invalid `sortby` direction raises rather than being read as ascending; `offset` is validated
+  and parsed identically by `collection_search` and `collection_search_rows`.
+- A migration file is wrapped in its own transaction, so applying one with `psql -f` cannot leave
+  a half-migrated database.
+- Free text search accepts a quoted phrase alongside anything else. `q=landsat "sea ice"` raised
+  a tsquery syntax error, and two quoted phrases in one query failed outright.
+- A CQL2 `in` whose second argument is not an array, and a `between` without three arguments,
+  raise instead of emitting `IN ()` or `BETWEEN x AND NULL` — the latter silently matched
+  nothing. An operator given more arguments than its template takes raises instead of dropping
+  the extras, which silently widened the result.
+- A property used as a temporal operand must be declared temporal. Only the numeric and array
+  wrappers were rejected, so a queryable declared `{"type":"string"}` was forced through
+  `to_tstz` and failed at execution, on whichever rows the plan happened to evaluate.
+- A registered property's declared type decides how it is compared. A `{"type":"string"}`
+  queryable with no explicit wrapper fell through to a numeric heuristic when the other operand
+  was a number, while the same property with an explicit `to_text` compared as text.
+- An inverted `datetime` range whose ends are one day apart raises instead of producing an empty
+  range, which rendered as a comparison against NULL and returned nothing.
+- `collection_search` steps `prev` back from the last offset that can hold rows, so an offset
+  past the end no longer walks back one empty page at a time, and `limit: 0` no longer offers a
+  link to the page that produced it.
+- `get_queryables('{}')` means every collection again, as `upsert_queryable` and
+  `delete_queryable` already read it; it had started returning NULL.
+- `content_hydrate` no longer opens a subtransaction per item. Validating the base item tag
+  instead of catching the cast restores hydration to its 0.9.12 cost.
+- A queryable whose name holds `%` or a parenthesised word no longer breaks ingest or
+  duplicates an index on every maintenance run.
+- `get_queryables()` merges `maximum` across the rows of a name; a typo took the minimum.
+- `search()` honours a per-request `conf.context` when deciding whether to count matches,
+  and an unsupported CQL2 operator raises instead of matching an arbitrary one.
+- A `sortby` direction is no longer spliced into the `ORDER BY` as given. `parse_sort_dir`
+  returned the caller's string verbatim, so a crafted direction was an injection vector; only
+  `ASC` and `DESC` can now reach the generated SQL.
+- Ingest evaluates `content_dehydrate` once per row instead of once per output column, and
+  tile search no longer hydrates every row twice.
+- The default `geometry` queryable's `$ref` points at a GeoJSON geometry
+  (`https://geojson.org/schema/Feature.json#/properties/geometry`) rather than a whole
+  GeoJSON Feature. A database still holding the old default definition is updated; an
+  edited one is left alone.
+
+### Changed
+- `pypgstac migrate` drains the query queue before and after migrating, so an operator
+  running no queue runner of their own is not left with stale statistics and constraints.
+  The drain that ran inside the migration is gone: it could not report a failure without
+  rolling back the upgrade with it.
+- The `datetime` argument of `search()` is a closed interval: an explicit end timestamp is
+  included, and a bare date at the high end runs to the end of that day rather than
+  stopping at its midnight.
+- A date-time property used as a *direct* temporal operand — including
+  `{"property":"datetime"}` — now means the instant at that column's value, not the item's
+  span, so such a filter can return fewer rows than before. The `datetime=` argument is a
+  separate path and still means the span.
+- A search with no `sortby`, or an empty one, orders by `datetime DESC` with the relation's
+  key appended in the same direction. `collection_search()` previously defaulted to
+  `id ASC`, and an ascending item search previously ended `... ASC, id DESC`, so the order
+  of tied rows and the paging tokens change.
+- `limit` must be a non-negative integer and `sortby` an array of `{field, direction}`
+  objects; anything else raises before any SQL is built. `limit: 0` returns an empty page
+  with no `next` link.
+- `search()` with `conf.nohydrate` now returns the base item each item was dehydrated against
+  as its `pgstac:base_item`, instead of the internal row id. A client hydrating against the
+  collection's *current* base item got different content than `search()` returned for the same
+  item once the collection had been edited. Clients that hydrate their own items — notably
+  stac-fastapi-pgstac — must use the base item carried on the item when it is present.
+- A queryable resolves against the collections the search names. A global queryable still wins
+  outright; where several collection-scoped rows apply and disagree, the property is read as
+  `to_text` over the keys its name denotes rather than through one collection's wrapper.
+- A CQL2 operator's `args` must be an array. 0.9.12 wrapped a bare object in one, so
+  `{"op":"isNull","args":{"property":"id"}}` was accepted; it now raises. Pass
+  `"args": [{"property":"id"}]`.
+- Queryables are managed through functions rather than by writing to the table: names are
+  stored without the `properties.` prefix, `collection_ids` sorted and deduplicated, and an
+  empty `collection_ids` argument means every collection. `property_path` is now a `text[]`
+  of the keys a queryable reads when its name does not match them.
+- A queryable with no `property_wrapper` infers one from its definition (`integer` →
+  `to_int`, `number` → `to_float`, `array` → `to_text_array`, a `date` or `date-time`
+  format → `to_tstz`, otherwise `to_text`), and an index type is validated by PostgreSQL
+  itself when the row is written. See [Indexing](docs/src/pgstac.md).
+- Writing a per-collection queryable maintains only the partitions of the collections it
+  names, and deleting a collection removes it from the scope of every queryable.
+- Progress, timing and trace messages are emitted at `DEBUG` instead of `NOTICE`; set
+  `client_min_messages = debug1` to see them. Messages that printed a whole item row or the
+  full search request are gone.
+- `pypgstac load_queryables` writes through `upsert_queryable`, leaving the wrapper for the
+  database to infer, and `--delete_missing` matches its scope whatever the order of the
+  collection ids. Concurrent loaders into different collections no longer deadlock.
+- Docker images move from Debian bullseye to trixie; the pgstac image drops plrust. CI
+  actions and pre-commit hooks updated, Python 3.12 and 3.13 classifiers added, ruff
+  updated to 0.16.8. The `orjson` floor rises to 3.10.7 and `pydantic` to 2.8 on Python
+  3.13, the oldest releases installable there; pydantic 1.x is still supported below 3.13.
+
+### Added
+- `queue_retries`, how many times a queued statement is run before it is given up on
+  (default 3). Each attempt is counted on the queue row and recorded in
+  `query_queue_history`; a statement that uses up its attempts is reported with the error
+  that stopped it. `pypgstac runqueue` and `pypgstac migrate` now exit non-zero and name
+  those statements, where `runqueue` previously reported every failure as success.
+- Base item versioning. Editing a collection no longer changes how already loaded items
+  hydrate: an item carries the base item it was dehydrated against, and every base item a
+  collection has had is kept for the life of the collection. See
+  [Base Item Versioning](docs/src/pgstac.md).
+- `upsert_queryable()`, `delete_queryable()`, `add_collection_to_queryable()` and
+  `remove_collection_from_queryable()` manage queryables through functions. Concurrent
+  calls for one property are serialized, so two sessions cannot commit conflicting rows.
+- `queryable_wrappers`, the table of accepted `property_wrapper` names. A custom wrapper is
+  registered by adding its name; `pgstac.<name>(jsonb)` must exist.
+- `canonicalize_queryables()` rewrites every row into the stored spelling — what the
+  migration runs, and the repair for rows written directly to the table.
+- `current_base_item(cid)` returns a collection's current base item and its id.
+
+### Removed
+- `content_hydrate(items, collections, jsonb)`; use `content_hydrate(items, jsonb)`.
+- `sort_sqlorderby(jsonb, boolean)` and `collection_base_item(text)` gained a trailing
+  argument; the old calls still work.
+- Internal helpers with no callers, and the `idxconcurrently` parameter of
+  `maintain_index()` and `maintain_partition_queries()`, which could never run.
+
 ## [v0.9.12]
 
 ### Fixed

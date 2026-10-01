@@ -77,6 +77,7 @@ class PgstacCLI:
             loader.load_items(file, method, dehydrated, chunksize)
 
     def runqueue(self) -> str:
+        """Drain the query queue, reporting anything that could not be run."""
         return self._db.run_queued()
 
     def loadextensions(self) -> None:
@@ -150,151 +151,18 @@ class PgstacCLI:
         if not queryables_data:
             raise ValueError(f"No valid JSON data found in {file}")
 
-        # Extract properties from the queryables definition
-        properties = queryables_data.get("properties", {})
-        if not properties:
-            raise ValueError("No properties found in queryables definition")
-
-        conn = self._db.connect()
-        with conn.cursor() as cur:
-            with conn.transaction():
-                # Insert each property as a queryable
-                for name, definition in properties.items():
-                    # Skip core fields that are already indexed
-                    if name in (
-                        "id",
-                        "geometry",
-                        "datetime",
-                        "end_datetime",
-                        "collection",
-                    ):
-                        continue
-
-                    # Determine property wrapper based on type
-                    property_wrapper = "to_text"  # default
-                    if definition.get("type") == "number":
-                        property_wrapper = "to_float"
-                    elif definition.get("type") == "integer":
-                        property_wrapper = "to_int"
-                    elif definition.get("format") == "date-time":
-                        property_wrapper = "to_tstz"
-                    elif definition.get("type") == "array":
-                        property_wrapper = "to_text_array"
-
-                    # Determine if this field should be indexed
-                    property_index_type = None
-                    if index_fields and name in index_fields:
-                        property_index_type = "BTREE"
-
-                    # First delete any existing queryable with the same name
-                    if not collection_ids:
-                        # If no collection_ids specified, delete queryables
-                        # with NULL collection_ids
-                        cur.execute(
-                            """
-                            DELETE FROM queryables
-                            WHERE name = %s AND collection_ids IS NULL
-                            """,
-                            [name],
-                        )
-                    else:
-                        # Delete queryables with matching name and collection_ids
-                        cur.execute(
-                            """
-                            DELETE FROM queryables
-                            WHERE name = %s AND collection_ids = %s::text[]
-                            """,
-                            [name, collection_ids],
-                        )
-
-                        # Also delete queryables with NULL collection_ids
-                        cur.execute(
-                            """
-                            DELETE FROM queryables
-                            WHERE name = %s AND collection_ids IS NULL
-                            """,
-                            [name],
-                        )
-
-                    # Then insert the new queryable
-                    cur.execute(
-                        """
-                        INSERT INTO queryables
-                        (name, collection_ids, definition, property_wrapper,
-                        property_index_type)
-                        VALUES (%s, %s, %s, %s, %s)
-                        """,
-                        [
-                            name,
-                            collection_ids,
-                            orjson.dumps(definition).decode(),
-                            property_wrapper,
-                            property_index_type,
-                        ],
-                    )
-
-                # If delete_missing is True,
-                # delete all queryables that were not in the file
-                if delete_missing:
-                    # Get the list of property names from the file
-                    property_names = list(properties.keys())
-
-                    # Skip core fields that are already indexed
-                    core_fields = [
-                        "id",
-                        "geometry",
-                        "datetime",
-                        "end_datetime",
-                        "collection",
-                    ]
-                    property_names = [
-                        name for name in property_names if name not in core_fields
-                    ]
-
-                    if not property_names:
-                        # If no valid properties, don't delete anything
-                        pass
-                    elif not collection_ids:
-                        # If no collection_ids specified,
-                        # delete queryables with NULL collection_ids
-                        # that are not in the property_names list
-                        placeholders = ", ".join(["%s"] * len(property_names))
-                        core_placeholders = ", ".join(["%s"] * len(core_fields))
-
-                        # Build the query with proper placeholders
-                        query = f"""
-                            DELETE FROM queryables
-                            WHERE collection_ids IS NULL
-                            AND name NOT IN ({placeholders})
-                            AND name NOT IN ({core_placeholders})
-                        """
-
-                        # Flatten the parameters
-                        params = property_names + core_fields
-
-                        cur.execute(query, params)
-                    else:
-                        # Delete queryables with matching collection_ids
-                        # that are not in the property_names list
-                        placeholders = ", ".join(["%s"] * len(property_names))
-                        core_placeholders = ", ".join(["%s"] * len(core_fields))
-
-                        # Build the query with proper placeholders
-                        query = f"""
-                            DELETE FROM queryables
-                            WHERE collection_ids = %s::text[]
-                            AND name NOT IN ({placeholders})
-                            AND name NOT IN ({core_placeholders})
-                        """
-
-                        # Flatten the parameters
-                        params = [collection_ids] + property_names + core_fields
-
-                        cur.execute(query, params)
-
-                # Trigger index creation only if index_fields were provided
-                if index_fields and len(index_fields) > 0:
-                    cur.execute("SELECT maintain_partitions();")
+        # One call: everything about how a property becomes a queryable -- the wrapper,
+        # the index method, the properties. prefix and the collection_ids rules --
+        # stays in SQL beside the constraints that enforce them.
+        self._db.connect().execute(
+            "SELECT upsert_queryables(%s::jsonb, %s::text[], %s::text[], %s)",
+            [
+                orjson.dumps(queryables_data).decode(),
+                collection_ids,
+                index_fields,
+                bool(delete_missing),
+            ],
+        )
 
 
 def cli() -> fire.Fire:

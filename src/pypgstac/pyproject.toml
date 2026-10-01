@@ -1,6 +1,6 @@
 [project]
 name = "pypgstac"
-version = "0.9.12"
+version = "0.10.0"
 description = "Schema, functions and a python library for storing and accessing STAC collections and items in PostgreSQL"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -16,14 +16,19 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "cachetools>=5.3.0,<6.1",
     "fire>=0.7.0",
     "hydraters>=0.1.0",
-    "orjson>=3.9.0",
+    # orjson below 3.10.7 has no Python 3.13 wheel and its sdist cannot be built
+    "orjson>=3.10.7",
     "plpygis>=0.5.0",
+    # pydantic 1.x is still supported, but pydantic-core below 2.20 cannot build on 3.13
     "pydantic>=1.10,<3",
+    "pydantic>=2.8; python_version >= '3.13'",
     "python-dateutil>=2.8.0",
     "smart-open>=5.0",
     "tenacity>=8.1.0",
@@ -44,7 +49,7 @@ dev = [
     "black>=24.10.0",
     "mypy>=1.13.0",
     "types-setuptools",
-    "ruff==0.8.2",
+    "ruff==0.16.8",
     "pre-commit",
 ]
 psycopg = ["psycopg[binary]>=3.1.0", "psycopg-pool>=3.1.0"]

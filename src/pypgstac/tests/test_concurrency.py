@@ -598,6 +598,47 @@ def test_loader_concurrent_delsert_same_ids_no_deadlock(db: PgstacDB) -> None:
     assert count == len(ids)
 
 
+def test_loader_concurrent_delsert_different_collections_no_deadlock(
+    db: PgstacDB,
+) -> None:
+    """Concurrent delserts into different collections.
+
+    Each loader holds EXCLUSIVE on its own partition. Its DELETE runs against
+    the parent, so unless it is bound to the partition's collection it locks
+    every partition and the two loaders wait on each other's table lock.
+    """
+    collections = ["loader-delsert-a", "loader-delsert-b"]
+    dt = month_dt("2020-04")
+    ids = [f"d{n:03d}" for n in range(50)]
+    for collection in collections:
+        make_collection(db, collection, None)
+        assert load([loader_item(collection, i, dt) for i in ids]) is None
+    before = deadlocks(db)
+
+    errors = [
+        e
+        for e in run_loaders(
+            [
+                lambda collection=collection: load(
+                    [loader_item(collection, i, dt) for i in ids],
+                    Methods.delsert,
+                )
+                for collection in collections
+            ],
+        )
+        if e
+    ]
+
+    assert errors == [], f"concurrent delserts raised: {errors}"
+    assert deadlocks(db) == before
+    for collection in collections:
+        count = db.query_one(
+            "SELECT count(*) FROM items WHERE collection = %s;",
+            [collection],
+        )
+        assert count == len(ids)
+
+
 def test_loader_widening_partition_keeps_check_constraints(db: PgstacDB) -> None:
     """The loader path must also leave validated constraints behind.
 
@@ -634,8 +675,7 @@ def test_loader_widening_partition_keeps_check_constraints(db: PgstacDB) -> None
         [partition],
     )
     assert validated == 1, (
-        f"{partition} has {validated} validated CHECK constraints after a "
-        "widening load"
+        f"{partition} has {validated} validated CHECK constraints after a widening load"
     )
 
     dtrange, edtrange = constraint_ranges(db, partition)
@@ -699,3 +739,30 @@ def test_loader_does_not_starve_readers(db: PgstacDB) -> None:
         f"a search waited {max(waits):.1f}s while the loader ran; readers are "
         "being blocked by the loader's locks"
     )
+
+
+def test_concurrent_upsert_queryable_leaves_one_row(db: PgstacDB) -> None:
+    """Two sessions upserting the same queryable name at once.
+
+    upsert_queryable deletes the conflicting rows and inserts its own; without
+    the per-property advisory lock neither session sees the other's row, so the
+    second to commit fails on the deferred queryables constraint trigger. With
+    it the later call waits and replaces the first row. Each holds its
+    transaction open long enough to overlap.
+    """
+
+    def upsert(wrapper: str) -> Callable[[psycopg.Connection], None]:
+        def run(conn: psycopg.Connection) -> None:
+            with conn.transaction():
+                conn.execute(
+                    "SELECT upsert_queryable('race:name', property_wrapper => %s);",
+                    [wrapper],
+                )
+                time.sleep(1)
+
+        return run
+
+    run_concurrently([upsert("to_int"), upsert("to_float")])
+
+    rows = db.query_one("SELECT count(*) FROM queryables WHERE name = 'race:name';")
+    assert rows == 1

@@ -65,7 +65,7 @@ Example for updating the pgstac_settings table with a new value:
 ```sql
 INSERT INTO pgstac_settings (name, value)
 VALUES
-    ('default-filter-lang', 'cql-json'),
+    ('default_filter_lang', 'cql-json'),
     ('context', 'on')
 
 ON CONFLICT ON CONSTRAINT pgstac_settings_pkey DO UPDATE SET value = excluded.value;
@@ -97,8 +97,19 @@ Runtime configuration is available for **context**, **context_estimated_count**,
 
 The nohydrate conf item returns an unhydrated item bypassing the CPU intensive step of rehydrating data with data from the collection metadata. When using the nohydrate conf, the only fields that are respected in the fields extension are geometry and bbox.
 ```sql
-SELECT search('{"conf":{"nohydrate"=true}}');
+SELECT search('{"conf":{"nohydrate":true}}');
 ```
+
+#### Base Item Versioning
+
+Items are stored dehydrated: any value that matches the collection's base item (`type`, `stac_version`, `collection` and the assets built from the collection's `item_assets`) is stripped on write and merged back on read. Every base item a collection has had is kept in the `base_items` table, and each item records which one it was dehydrated against, so editing a collection's `item_assets` or `stac_version` is safe — items already loaded still read back the way they were loaded.
+
+- An item is dehydrated against the collection's base item as it stands at load time and tagged with the reserved top-level key `pgstac:base_item`, whose value is that base item's `base_items` id. Any `pgstac:base_item` key on an incoming item is discarded, and the tag is removed again on read, so it never appears in hydrated output.
+- A collection whose base item has never changed has no `base_items` rows and its items carry no tag. The first edit to a collection's base item records both the base item the untagged items were dehydrated against and the new one; from then on the lowest id for the collection is its original base item and the highest is the current `collections.base_item`. Rows are kept for the life of the collection, so a frequently edited collection accumulates one row per edit.
+- With `conf.nohydrate` the tag is part of the returned content and appears as a top-level key on exactly those features that have one. An API that hydrates client-side must fetch the base item with `collection_base_item(collection_id, base_item_id)` when the key is present and `collection_base_item(collection_id)` when it is not, and must remove the key before returning the feature.
+- Deleting a collection deletes its `base_items` rows, so a collection id that is created again does not inherit them.
+
+A dehydrated export, such as one produced by `pg_dump` or `COPY` and reloaded with `pypgstac load items --dehydrated`, is only loadable into a database that also has the source's `base_items` rows — normally the same database. Item content in such an export is specific to the base items it was stripped against, and a tag that resolves to no row is hydrated against the collection's current base item with a `WARNING`.
 
 #### PgSTAC Partitioning
 By default PgSTAC partitions data by collection (note: this is a change starting with version 0.5.0). Each collection can further be partitioned by either year or month. **Partitioning must be set up prior to loading any data!** Partitioning can be configured by setting the partition_trunc flag on a collection in the database.
@@ -120,7 +131,8 @@ The `queryables` table controls the indexes that PgSTAC will build as well as th
 | `name`                | The name of the property                                                 | text       | `eo:cloud_cover`                                                                                                   |
 | `collection_ids`      | The collection ids that this queryable applies to                        | text[]     | `{sentinel-2-l2a,landsat-c2-l2,aster-l1t}` or `NULL`                                                               |
 | `definition`          | The queryable definition of the property                                 | jsonb      | `{"title": "Cloud Cover", "type": "number", "minimum": 0, "maximum": 100}`                                         |
-| `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | One of `to_int`, `to_float`, `to_tstz`, `to_text` or `NULL`                                                        |
+| `property_path`       | The keys under `content` to read, when they are not those of the name    | text[]     | `{properties,"eo:cloud cover"}` or `NULL`                                                                          |
+| `property_wrapper`    | The wrapper function to use to convert the property to a searchable type | text       | A name registered in `queryable_wrappers`, or `NULL` to infer one from `definition`                                |
 | `property_index_type` | The index type to use for the property                                   | text       | `BTREE`, `NULL` or other valid [PostgreSQL index type](https://www.postgresql.org/docs/current/indexes-types.html) |
 
 Each record in the queryables table references a single property but can apply to any number of collections. If the `collection_ids` field is left as NULL, then that queryable will apply to all collections. There are constraints that allow only a single queryable record to be active per collection. If there is a queryable already set for a property field with collection_ids set to NULL, you will not be able to create a separate queryable entry that applies to that property with a specific collection as pgstac would not then be able to determine which queryable entry to use.
@@ -178,22 +190,35 @@ The `queryables` table is also used to specify which item `properties` attribute
 To add a new global index across all collection partitions:
 
 ```sql
-INSERT INTO pgstac.queryables (name, property_wrapper, property_index_type)
-VALUES (<property name>, <property wrapper>, <index type>);
+SELECT upsert_queryable(
+    name => '<property name>',
+    property_wrapper => '<property wrapper>',
+    property_index_type => '<index type>'
+);
 ```
 
-Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, or `to_text`. The index type should almost always be `BTREE`, but can be any PostgreSQL index type valid for the data type.
+`upsert_queryable` replaces every queryable of the same name the row passed would conflict with — a global one, or one whose `collection_ids` overlap the ones passed — and `delete_queryable(name, collection_ids)` removes one. `add_collection_to_queryable(name, collection_id)` adds a collection to an existing per-collection queryable without restating the full list, and `remove_collection_from_queryable(name, collection_id)` removes one, dropping the queryable when no collection is left, and raises if the queryable is global (use `delete_queryable`). A name and its `properties.`-prefixed spelling are one queryable for these functions and for the uniqueness check. `collection_ids` is stored sorted and deduplicated; an empty `collection_ids` argument means every collection, and `property_path`, the last argument, names the keys under `content` to read when they are not those of the name.
+
+Property wrapper should be one of `to_int`, `to_float`, `to_tstz`, `to_text` or `to_text_array`; any other value is rejected unless it has been registered in `queryable_wrappers`, which is an admin action and requires that the function `pgstac.<name>(jsonb)` exist. A wrapper written in SQL must schema-qualify the functions it calls, because index builds run with a restricted `search_path`. If `property_wrapper` is left NULL, it is inferred from `definition`: `integer` -> `to_int`, `number` -> `to_float`, `array` -> `to_text_array`, a `format` of `date` or `date-time` -> `to_tstz`, otherwise `to_text`. A name whose first element is `assets`, `links`, `bbox`, `stac_version` or `stac_extensions` is read and indexed from the item root rather than from `properties`. The index type should almost always be `BTREE`, but can be any PostgreSQL index access method that has a default operator class for the type the wrapper returns — `GIN` for an array property read through `to_text_array`, `BRIN` for a value that correlates with physical row order. Writing the row builds the queryable's index, so an index type PostgreSQL cannot build with is rejected at that point, with PostgreSQL's own message.
 
 **More indexes is not necessarily better.** You should only index the primary fields that are actively being used to search. Adding too many indexes can be very detrimental to performance and ingest speed. If your primary use case is delivering items sorted by datetime and you do not use the context extension, you likely will not need any further indexes.
 
 Leave `property_index_type` set to NULL if you do not want an index set for a property.
+
+### Search
+
+#### Temporal Predicates
+
+See the [OGC CQL2 standard](https://docs.ogc.org/is/21-065r2/21-065r2.html) for the temporal operators themselves and how they compare intervals. Beyond the spec, pgstac treats a timestamp (a date-time property or an instant literal) used directly as a temporal operand as that instant, and a date (a date-only literal or a property with `"format": "date"`) as the whole UTC day; used as an end of an interval, in any of its spellings (`{"interval": [a, b]}`, `"a/b"` or `[a, b]`), a timestamp is that instant and a date runs to the end of its day; `..` or an empty string leaves an end open, and a duration such as `P1D` may stand in for one end of a slash or array interval. Literals without a UTC offset are read as UTC.
+
+The `datetime` argument of `search()` is separate from CQL2: it means the item's span, and matches every item whose `datetime`/`end_datetime` interval intersects the requested one.
 
 ### Maintenance Procedures
 
 These are procedures that should be run periodically to make sure that statistics and constraints are kept up-to-date and validated. These can be made to run regularly using the pg_cron extension if available.
 ```sql
 SELECT cron.schedule('0 * * * *', 'CALL validate_constraints();');
-SELECT cron.schedule('10, * * * *', 'CALL analyze_items();');
+SELECT cron.schedule('10 * * * *', 'CALL analyze_items();');
 ```
 
 #### Migrating a large catalog
@@ -202,19 +227,24 @@ The last step of every install and migration recalculates statistics and CHECK
 constraints for every partition. On a catalog with many partitions this is the most
 expensive part of the migration and it holds locks while it runs.
 
-To keep that work off the migration itself, migrate with the queue enabled and drain it
-afterwards:
+That work is queued rather than run inside the migration, and `pypgstac migrate` drains
+the queue once the schema change has committed. Run inline it would hold a `SHARE UPDATE
+EXCLUSIVE` lock on every partition until the migration committed — the same lock `ANALYZE`
+takes — and deadlock against autovacuum on a busy catalog.
+
+Search is correct as soon as the migration commits, because partition visibility is always
+written synchronously; until the queue drains, the observed datetime ranges and the CHECK
+constraints used for partition pruning are stale. `check_pgstac_settings()` warns while
+anything is still queued.
+
+A queued statement that fails is retried `pgstac.queue_retries` times (default 3) before it
+is given up on, so a statement that lost a deadlock is not lost with it. Every attempt is
+recorded in `query_queue_history` with the error that stopped it. `pypgstac migrate` reports
+statements it could not run; `pypgstac runqueue` exits non-zero and names them:
 
 ```bash
-pypgstac --usequeue migrate
-pypgstac runqueue   # repeat until it reports nothing left to do
+pypgstac runqueue   # as a role with pgstac_admin
 ```
-
-`--usequeue` is a global flag, so it goes before the subcommand. Search is correct as
-soon as the migration commits — partition visibility is always written synchronously —
-but until the queue is drained the observed datetime ranges and the CHECK constraints
-used for partition pruning are stale. `check_pgstac_settings()` warns while anything is
-still queued, and `runqueue` must be run as a role with `pgstac_admin`.
 
 ### System Checks
 

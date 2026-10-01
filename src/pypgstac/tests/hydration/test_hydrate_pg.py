@@ -1,4 +1,5 @@
 """Test Hydration in PgSTAC."""
+
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, Generator
@@ -37,7 +38,9 @@ class TestHydratePG(THydrate):
         os.environ["PGDATABASE"] = origdb
 
     def hydrate(
-        self, base_item: Dict[str, Any], item: Dict[str, Any],
+        self,
+        base_item: Dict[str, Any],
+        item: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Hydrate using pgstac."""
         with self.db() as db:

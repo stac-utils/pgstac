@@ -13,6 +13,11 @@ PARTITION BY LIST (collection)
 CREATE INDEX "datetime_idx" ON items USING BTREE (datetime DESC, end_datetime ASC);
 CREATE INDEX "geometry_idx" ON items USING GIST (geometry);
 
+-- Never written: it carries the reference index of every indexed queryable, the copies of the
+-- indexes above and the unique id index among them (see 002a_queryables).
+CREATE TABLE IF NOT EXISTS queryable_index_template (LIKE items INCLUDING INDEXES);
+CREATE UNIQUE INDEX IF NOT EXISTS queryable_index_template_id_idx ON queryable_index_template (id);
+
 CREATE STATISTICS datetime_stats (dependencies) on datetime, end_datetime from items;
 
 ALTER TABLE items ADD CONSTRAINT items_collections_fk FOREIGN KEY (collection) REFERENCES collections(id) ON DELETE CASCADE DEFERRABLE;
@@ -22,7 +27,7 @@ DECLARE
     p text;
     t timestamptz := clock_timestamp();
 BEGIN
-    RAISE NOTICE 'Updating partition stats %', t;
+    RAISE DEBUG 'Updating partition stats %', t;
     -- Ordered: each iteration holds a partition_stats row lock until commit.
     FOR p IN SELECT DISTINCT partition
         FROM newdata n JOIN partition_stats p
@@ -34,7 +39,7 @@ BEGIN
     IF TG_OP IN ('DELETE','UPDATE') THEN
         DELETE FROM format_item_cache c USING newdata n WHERE c.collection = n.collection AND c.id = n.id;
     END IF;
-    RAISE NOTICE 't: % %', t, clock_timestamp() - t;
+    RAISE DEBUG 't: % %', t, clock_timestamp() - t;
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac, public;
@@ -59,8 +64,11 @@ EXECUTE FUNCTION partition_after_triggerfunc();
 
 
 CREATE OR REPLACE FUNCTION content_slim(_item jsonb) RETURNS jsonb AS $$
-    SELECT strip_jsonb(_item - '{id,geometry,collection,type}'::text[], collection_base_item(_item->>'collection')) - '{id,geometry,collection,type}'::text[];
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+    SELECT (strip_jsonb(_item - '{id,geometry,collection,type,pgstac:base_item}'::text[], b.base_item)
+                - '{id,geometry,collection,type}'::text[])
+           || jsonb_strip_nulls(jsonb_build_object('pgstac:base_item', b.base_item_id))
+    FROM current_base_item(_item->>'collection') b;
+$$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION content_dehydrate(content jsonb) RETURNS items AS $$
     SELECT
@@ -125,29 +133,36 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 
 
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, _collection collections, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
+CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
-    output jsonb;
     content jsonb;
-    base_item jsonb := _collection.base_item;
+    base_item jsonb;
+    tag text;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
     END IF;
-    output := content_hydrate(
-        jsonb_build_object(
-            'id', _item.id,
-            'geometry', geom,
-            'collection', _item.collection,
-            'type', 'Feature'
-        ) || _item.content,
-        _collection.base_item,
-        fields
-    );
-
-    RETURN output;
+    -- The tag is validated rather than cast inside a BEGIN ... EXCEPTION block. A block with an
+    -- exception handler opens a subtransaction on EVERY call, and this runs once per returned
+    -- item; the guard costs a regex instead. Nine digits always fit in an int, so a tag that
+    -- passes cannot overflow the cast. A tag that fails falls through to the warning below.
+    tag := _item.content->>'pgstac:base_item';
+    IF tag IS NULL OR tag ~ '^\s*\d{1,9}\s*$' THEN
+        base_item := collection_base_item(_item.collection, tag::int);
+    END IF;
+    IF base_item IS NULL THEN
+        RAISE WARNING 'Item % in collection % is tagged with base item %, which does not exist; hydrating against the current base item.',
+            _item.id, _item.collection, tag;
+        SELECT c.base_item INTO base_item FROM collections c WHERE c.id = _item.collection;
+    END IF;
+    content := jsonb_build_object(
+        'id', _item.id,
+        'geometry', geom,
+        'collection', _item.collection,
+        'type', 'Feature'
+    ) || (_item.content - 'pgstac:base_item');
+    RETURN content_hydrate(content, base_item, fields);
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
 
@@ -157,8 +172,9 @@ CREATE OR REPLACE FUNCTION content_nonhydrated(
 ) RETURNS jsonb AS $$
 DECLARE
     geom jsonb;
-    bbox jsonb;
     output jsonb;
+    base_item jsonb;
+    tag text;
 BEGIN
     IF include_field('geometry', fields) THEN
         geom := ST_ASGeoJson(_item.geometry, 20)::jsonb;
@@ -169,18 +185,22 @@ BEGIN
                 'collection', _item.collection,
                 'type', 'Feature'
             ) || _item.content;
+    -- The base item itself, not the row id it is stored as, and emitted for every item: an
+    -- untagged item hydrates against the collection's FIRST base item, so a client seeing no
+    -- key would use the current one and get different content than search() returns.
+    tag := output->>'pgstac:base_item';
+    IF tag IS NULL OR tag ~ '^\s*\d{1,9}\s*$' THEN
+        base_item := collection_base_item(_item.collection, tag::int);
+    END IF;
+    IF base_item IS NULL AND tag IS NOT NULL THEN
+        RAISE WARNING 'Item % in collection % is tagged with base item %, which does not exist; returning the current base item.',
+            _item.id, _item.collection, tag;
+        SELECT c.base_item INTO base_item FROM collections c WHERE c.id = _item.collection;
+    END IF;
+    output := output || jsonb_build_object('pgstac:base_item', base_item);
     RETURN output;
 END;
 $$ LANGUAGE PLPGSQL STABLE PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION content_hydrate(_item items, fields jsonb DEFAULT '{}'::jsonb) RETURNS jsonb AS $$
-    SELECT content_hydrate(
-        _item,
-        (SELECT c FROM collections c WHERE id=_item.collection LIMIT 1),
-        fields
-    );
-$$ LANGUAGE SQL STABLE;
-
 
 CREATE UNLOGGED TABLE items_staging (
     content JSONB NOT NULL
@@ -198,7 +218,7 @@ DECLARE
     ts timestamptz := clock_timestamp();
     nrows int;
 BEGIN
-    RAISE NOTICE 'Creating Partitions. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Creating Partitions. %', clock_timestamp() - ts;
 
     FOR part IN WITH t AS (
         SELECT
@@ -218,30 +238,29 @@ BEGIN
     ) SELECT check_partition(collection, dtrange, edtrange) FROM (
         SELECT * FROM p ORDER BY collection, d
     ) ordered LOOP
-        RAISE NOTICE 'Partition %', part;
+        RAISE DEBUG 'Partition %', part;
     END LOOP;
 
-    RAISE NOTICE 'Creating temp table with data to be added. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Creating temp table with data to be added. %', clock_timestamp() - ts;
     DROP TABLE IF EXISTS tmpdata;
+    -- LATERAL so content_dehydrate runs once per row.
     CREATE TEMP TABLE tmpdata ON COMMIT DROP AS
-    SELECT
-        (content_dehydrate(content)).*
-    FROM newdata;
+    SELECT d.* FROM newdata n, LATERAL content_dehydrate(n.content) d;
     GET DIAGNOSTICS nrows = ROW_COUNT;
-    RAISE NOTICE 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
+    RAISE DEBUG 'Added % rows to tmpdata. %', nrows, clock_timestamp() - ts;
 
-    RAISE NOTICE 'Doing the insert. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Doing the insert. %', clock_timestamp() - ts;
     IF TG_TABLE_NAME = 'items_staging' THEN
         INSERT INTO items
         SELECT * FROM tmpdata;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_ignore' THEN
         INSERT INTO items
         SELECT * FROM tmpdata
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     ELSIF TG_TABLE_NAME = 'items_staging_upsert' THEN
         -- Locked in a fixed order first, so concurrent upserts over an
         -- overlapping id set cannot deadlock. A bare DELETE gives no ordering;
@@ -259,22 +278,23 @@ BEGIN
         WHERE i.collection = l.collection AND i.id = l.id
         ;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Deleted % rows from items. %', nrows, clock_timestamp() - ts;
         INSERT INTO items AS t
         SELECT * FROM tmpdata
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS nrows = ROW_COUNT;
-        RAISE NOTICE 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
+        RAISE DEBUG 'Inserted % rows to items. %', nrows, clock_timestamp() - ts;
     END IF;
 
-    RAISE NOTICE 'Deleting data from staging table. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Deleting data from staging table. %', clock_timestamp() - ts;
     EXECUTE format('DELETE FROM %I', TG_TABLE_NAME);
-    RAISE NOTICE 'Done. %', clock_timestamp() - ts;
+    RAISE DEBUG 'Done. %', clock_timestamp() - ts;
 
     RETURN NULL;
 
 END;
-$$ LANGUAGE PLPGSQL;
+-- UTC, matching partition_name: the date_trunc here groups rows for check_partition.
+$$ LANGUAGE PLPGSQL SET TIME ZONE 'UTC';
 
 
 CREATE TRIGGER items_staging_insert_trigger AFTER INSERT ON items_staging REFERENCING NEW TABLE AS newdata
@@ -351,19 +371,3 @@ CREATE OR REPLACE FUNCTION collection_temporal_extent(id text) RETURNS jsonb AS 
     FROM items WHERE collection=$1;
 ;
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET SEARCH_PATH TO pgstac, public;
-
--- Recalculates partition statistics before aggregating them; the observed
--- ranges are only maintained automatically when update_collection_extent is on.
--- return_target, not use_json_null: collection_extent returns NULL when it
--- cannot compute a full extent, and JSON null is not a valid STAC extent.
-CREATE OR REPLACE FUNCTION update_collection_extents() RETURNS VOID AS $$
-UPDATE collections
-    SET content = jsonb_set_lax(
-        content,
-        '{extent}'::text[],
-        collection_extent(id, TRUE),
-        true,
-        'return_target'
-    )
-;
-$$ LANGUAGE SQL;
