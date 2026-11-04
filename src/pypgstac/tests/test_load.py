@@ -3,8 +3,10 @@
 import json
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict
 from unittest import mock
 
 import pytest
@@ -231,13 +233,14 @@ def test_format_item_accepts_an_ordinary_range(loader: Loader) -> None:
             "end_datetime": "2020-06-01T00:00:00Z",
         },
     }
-    assert loader.format_item(base)["datetime"] == "2020-01-01T00:00:00Z"
+    assert loader.format_item(base)["datetime"] == "2020-01-01T00:00:00.000000+00:00"
     same = dict(base)
     same["properties"] = {
         "start_datetime": "2020-01-01T00:00:00Z",
         "end_datetime": "2020-01-01T00:00:00Z",
     }
-    assert loader.format_item(same)["end_datetime"] == "2020-01-01T00:00:00Z"
+    end = loader.format_item(same)["end_datetime"]
+    assert end == "2020-01-01T00:00:00.000000+00:00"
 
 
 def test_partition_loads_default(loader: Loader) -> None:
@@ -313,6 +316,165 @@ def test_partition_loads_year(loader: Loader) -> None:
     )
 
     assert partitions == 1
+
+
+def _month_partitioned(loader: Loader) -> str:
+    """Load the test collections partitioned by month; return the first one's key."""
+    loader.load_collections(str(TEST_COLLECTIONS_JSON), insert_mode=Methods.ignore)
+    loader.db.connect().execute("UPDATE collections SET partition_trunc='month';")
+    return str(loader.db.query_one("SELECT key FROM collections ORDER BY key LIMIT 1;"))
+
+
+def _item(loader: Loader, id: str, dt: str) -> Dict[str, Any]:
+    """A test item of the first collection with only a datetime."""
+    with open(TEST_ITEMS) as f:
+        item = json.loads(f.readline())
+    item["id"] = id
+    item["collection"] = loader.db.query_one(
+        "SELECT id FROM collections ORDER BY key LIMIT 1;",
+    )
+    for k in ("start_datetime", "end_datetime"):
+        item["properties"].pop(k, None)
+    item["properties"]["datetime"] = dt
+    return item
+
+
+def _partition_of(loader: Loader, id: str) -> str:
+    return str(
+        loader.db.query_one(
+            "SELECT tableoid::regclass::text FROM items WHERE id = %s;",
+            [id],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("trunc", "dt", "suffix"),
+    [
+        ("month", "2020-01-31T23:30:00-02:00", "202002"),
+        ("year", "2019-12-31T23:30:00-02:00", "2020"),
+    ],
+)
+def test_partition_follows_utc(
+    loader: Loader,
+    trunc: str,
+    dt: str,
+    suffix: str,
+) -> None:
+    """An offset that moves a datetime into the next UTC period files it there."""
+    key = _month_partitioned(loader)
+    loader.db.connect().execute(
+        "UPDATE collections SET partition_trunc = %s;",
+        [trunc],
+    )
+    loader.load_items(iter([_item(loader, "utc", dt)]), insert_mode=Methods.insert)
+    assert _partition_of(loader, "utc") == f"_items_{key}_{suffix}"
+
+
+def test_no_offset_is_read_as_utc(
+    loader: Loader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A datetime with no offset is UTC, whatever zone the machine is in."""
+    key = _month_partitioned(loader)
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        loader.load_items(
+            iter([_item(loader, "no-offset", "2020-05-31T23:30:00")]),
+            insert_mode=Methods.insert,
+        )
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+    assert _partition_of(loader, "no-offset") == f"_items_{key}_202005"
+
+
+def test_partition_bounds_past_python_range(loader: Loader) -> None:
+    """A partition whose upper bound Python cannot hold still takes its items."""
+    key = _month_partitioned(loader)
+    loader.load_items(
+        iter([_item(loader, "far-future", "9999-12-15T00:00:00Z")]),
+        insert_mode=Methods.insert,
+    )
+    assert _partition_of(loader, "far-future") == f"_items_{key}_999912"
+
+
+def test_partition_bounds_compare_across_offsets(loader: Loader) -> None:
+    """Items whose text order is not their time order load into one partition."""
+    key = _month_partitioned(loader)
+    loader.load_items(
+        iter(
+            [
+                _item(loader, "offset-utc", "2020-02-10T10:00:00Z"),
+                _item(loader, "offset-minus2", "2020-02-10T09:30:00-02:00"),
+            ],
+        ),
+        insert_mode=Methods.insert,
+    )
+    assert _partition_of(loader, "offset-utc") == f"_items_{key}_202002"
+    assert _partition_of(loader, "offset-minus2") == f"_items_{key}_202002"
+
+
+def test_partition_existing_non_utc_bounds(loader: Loader) -> None:
+    """A partition made on non-UTC month bounds takes the items it covers."""
+    key = _month_partitioned(loader)
+    collection = loader.db.query_one(
+        "SELECT id FROM collections WHERE key = %s;",
+        [key],
+    )
+    # The bounds an America/New_York session gave January 2020, built by hand because
+    # check_partition buckets in UTC.
+    loader.db.connect().execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS _items_{key} PARTITION OF items
+            FOR VALUES IN ('{collection}') PARTITION BY RANGE (datetime);
+        CREATE TABLE _items_{key}_202001 PARTITION OF _items_{key}
+            FOR VALUES FROM ('2020-01-01 05:00:00+00') TO ('2020-02-01 05:00:00+00');
+        CREATE UNIQUE INDEX ON _items_{key}_202001 (id);
+        INSERT INTO partition_stats (partition, collection, partition_dtrange)
+        VALUES ('_items_{key}_202001', '{collection}',
+            '[2020-01-01 05:00:00+00, 2020-02-01 05:00:00+00)');
+        """,
+    )
+    loader.load_items(
+        iter([_item(loader, "legacy-bounds", "2020-02-01T02:00:00Z")]),
+        insert_mode=Methods.insert,
+    )
+    assert _partition_of(loader, "legacy-bounds") == f"_items_{key}_202001"
+
+
+def test_datetimes_only_postgres_reads_load(loader: Loader, tmp_path: Path) -> None:
+    """A datetime Python cannot read is left to the database, hydrated or dehydrated."""
+    key = _month_partitioned(loader)
+    leap = _item(loader, "leap-second", "2016-12-31T23:59:60Z")
+    endless = _item(loader, "endless", "2020-01-01T00:00:00Z")
+    del endless["properties"]["datetime"]
+    endless["properties"]["start_datetime"] = "2020-01-01T00:00:00Z"
+    endless["properties"]["end_datetime"] = "infinity"
+    loose = _item(loader, "loose-range", "2020-01-01T00:00:00Z")
+    del loose["properties"]["datetime"]
+    loose["properties"]["start_datetime"] = "2020-1-5T00:00:00Z"
+    loose["properties"]["end_datetime"] = "2020-1-12T00:00:00Z"
+    loader.load_items(iter([leap, endless, loose]), insert_mode=Methods.insert)
+    assert _partition_of(loader, "leap-second") == f"_items_{key}_201701"
+
+    with open(TEST_DEHYDRATED_ITEMS) as f:
+        fields = f.readline().split("\t")
+    fields[0] = "endless-dehydrated"
+    fields[2] = endless["collection"]
+    fields[3] = "2020-01-02 00:00:00+00"
+    fields[4] = "infinity"
+    file = tmp_path / "endless.pgcopy"
+    file.write_text("\t".join(fields))
+    loader.load_items(str(file), insert_mode=Methods.insert, dehydrated=True)
+
+    for id in ("endless", "endless-dehydrated"):
+        end = loader.db.query_one(
+            "SELECT end_datetime::text FROM items WHERE id = %s;",
+            [id],
+        )
+        assert end == "infinity"
 
 
 def test_load_items_dehydrated_ignore_succeeds(loader: Loader) -> None:

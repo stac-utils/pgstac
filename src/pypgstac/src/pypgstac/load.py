@@ -17,6 +17,7 @@ from typing import (
     Generator,
     Iterable,
     Iterator,
+    List,
     Optional,
     Tuple,
     Union,
@@ -25,6 +26,7 @@ from typing import (
 import orjson
 import psycopg
 from cachetools.func import lru_cache
+from dateutil.parser import isoparse
 from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
@@ -46,19 +48,28 @@ logger = logging.getLogger(__name__)
 DT_MIN = datetime.min.replace(tzinfo=timezone.utc)
 DT_MAX = datetime.max.replace(tzinfo=timezone.utc)
 
+# A partition's lower and upper datetime bounds, and its name.
+PartitionBounds = Tuple[datetime, datetime, str]
 
-def as_utc(value: str) -> Optional[datetime]:
-    """An RFC 3339 timestamp as an aware UTC datetime, or None if unreadable here.
 
-    datetime.fromisoformat is stricter than PostgreSQL's parser before Python
-    3.11, and this package supports 3.8, so a value it cannot read is left to
-    the database rather than refused here.
+def as_utc(value: Union[str, datetime]) -> Optional[datetime]:
+    """Convert a timestamp or ISO 8601 text to UTC, reading no offset as UTC.
+
+    Return None for what Python cannot parse, such as a leap second or infinity.
     """
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (AttributeError, ValueError):
+        dt = isoparse(value) if isinstance(value, str) else value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    return parsed.astimezone(timezone.utc)
+
+
+def utc_text(value: Union[str, datetime]) -> str:
+    """Format a timestamp as fixed-width UTC ISO text, or as given if unreadable."""
+    dt = as_utc(value)
+    return dt.isoformat(timespec="microseconds") if dt else str(value)
 
 
 def _normalize_version_for_parse(version: str) -> str:
@@ -178,10 +189,36 @@ class Loader:
 
     db: PgstacDB
     _partition_cache: Dict[str, Partition]
+    _partition_ranges: Dict[str, List[PartitionBounds]]
 
     def __init__(self, db: PgstacDB):
         self.db = db
         self._partition_cache: Dict[str, Partition] = {}
+        self._partition_ranges: Dict[str, List[PartitionBounds]] = {}
+
+    def partition_for(self, collection: str, dt: str) -> str:
+        """Return the partition_name() partition for a datetime, caching its range."""
+        ranges = self._partition_ranges.setdefault(collection, [])
+        utc = as_utc(dt)
+        if utc:
+            for low, high, name in ranges:
+                if low <= utc < high:
+                    return name
+        # Unbounded, or past what Python's datetime can hold, is NULL.
+        low, high, name = next(self.db.query(
+            """
+            SELECT
+                CASE WHEN lower(partition_range) > '0001-01-02'
+                    THEN lower(partition_range) END,
+                CASE WHEN upper(partition_range) < '9999-12-30'
+                    THEN upper(partition_range) END,
+                partition_name
+            FROM partition_name(%s, %s);
+            """,
+            [collection, dt],
+        ))
+        ranges.append((low or DT_MIN, high or DT_MAX, name))
+        return name
 
     def check_version(self) -> None:
         db_version = self.db.version
@@ -293,6 +330,7 @@ class Loader:
 
         # Cached collection info may now be stale.
         self.collection_json.cache_clear()  # type: ignore[attr-defined]
+        self._partition_ranges = {}
 
     @retry(
         stop=stop_after_attempt(10),
@@ -525,15 +563,7 @@ class Loader:
         """
         p = item.get("partition", None)
         if p is None:
-            _, key, partition_trunc, _ = self.collection_json(item["collection"])
-            if partition_trunc == "year":
-                pd = item["datetime"].replace("-", "")[:4]
-                p = f"_items_{key}_{pd}"
-            elif partition_trunc == "month":
-                pd = item["datetime"].replace("-", "")[:6]
-                p = f"_items_{key}_{pd}"
-            else:
-                p = f"_items_{key}"
+            p = self.partition_for(item["collection"], item["datetime"])
             item["partition"] = p
 
         partition_name: str = p
@@ -568,10 +598,10 @@ class Loader:
                 partition = Partition(
                     name=partition_name,
                     collection=item["collection"],
-                    datetime_range_min=datetime_range_min.isoformat(),
-                    datetime_range_max=datetime_range_max.isoformat(),
-                    end_datetime_range_min=end_datetime_range_min.isoformat(),
-                    end_datetime_range_max=end_datetime_range_max.isoformat(),
+                    datetime_range_min=utc_text(datetime_range_min),
+                    datetime_range_max=utc_text(datetime_range_max),
+                    end_datetime_range_min=utc_text(end_datetime_range_min),
+                    end_datetime_range_max=utc_text(end_datetime_range_max),
                     requires_update=False,
                 )
 
@@ -637,6 +667,8 @@ class Loader:
                             # written on export and causes failures.
                             content_value = content_value.replace(r'\\"', r"\"")
                             item[field] = content_value
+                        elif field in ("datetime", "end_datetime"):
+                            item[field] = utc_text(tab_split[i])
                         else:
                             item[field] = tab_split[i]
                     item["partition"] = self._partition_update(item)
@@ -665,6 +697,7 @@ class Loader:
             file = "stdin"
         t = time.perf_counter()
         self._partition_cache = {}
+        self._partition_ranges = {}
 
         if dehydrated and isinstance(file, str):
             items = self.read_dehydrated(file)
@@ -691,7 +724,7 @@ class Loader:
         else:
             item = _item
 
-        base_item, key, partition_trunc, base_item_id = self.collection_json(
+        base_item, _, _, base_item_id = self.collection_json(
             item["collection"],
         )
 
@@ -704,8 +737,8 @@ class Loader:
         sdt: Optional[str] = properties.get("start_datetime")
 
         if edt is not None and sdt is not None:
-            out["datetime"] = sdt
-            out["end_datetime"] = edt
+            out["datetime"] = utc_text(sdt)
+            out["end_datetime"] = utc_text(edt)
             # The rule stac_daterange enforces on the create_item path, which
             # this path does not take: it writes items.datetime and
             # items.end_datetime directly. A range that runs backwards can never
@@ -716,8 +749,8 @@ class Loader:
             if start is not None and end is not None and start > end:
                 raise Exception("start_datetime must be < end_datetime")
         elif dt is not None:
-            out["datetime"] = dt
-            out["end_datetime"] = dt
+            out["datetime"] = utc_text(dt)
+            out["end_datetime"] = out["datetime"]
         else:
             raise Exception("Invalid datetime encountered")
 
@@ -726,16 +759,7 @@ class Loader:
                 f"Datetime must be set. OUT: {out} Properties: {properties}",
             )
 
-        if partition_trunc == "year":
-            pd = out["datetime"].replace("-", "")[:4]
-            partition = f"_items_{key}_{pd}"
-        elif partition_trunc == "month":
-            pd = out["datetime"].replace("-", "")[:6]
-            partition = f"_items_{key}_{pd}"
-        else:
-            partition = f"_items_{key}"
-
-        out["partition"] = partition
+        out["partition"] = self.partition_for(out["collection"], out["datetime"])
 
         geojson = item.get("geometry")
         if geojson is None:
