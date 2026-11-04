@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [v0.10.1]
+
+### Upgrading
+- From 0.9.x, `pypgstac migrate` goes straight to 0.10.1. Read the 0.10.0 upgrading notes first.
+- An upgrade now stops before changing the schema if a partition has lost its unique id index. See
+  [Unique id indexes](docs/src/pgstac.md).
+- An upgrade from 0.9.x now stops if a queryable's `property_path` cannot be converted, or if
+  merging duplicate queryables would leave a collection without one. The error names the rows.
+
+### Fixed
+- `maintain_partitions(dropindexes => true)` dropped a partition's unique id index when the `id`
+  queryable did not cover its collection, letting in duplicate ids.
+- `maintain_partitions(dropindexes => true, rebuildindexes => true)` failed on an index it keeps
+  when that index's queryable was limited or deleted.
+- The loader picked the wrong partition for a datetime whose UTC offset changed its month or
+  year, and could fail on a batch mixing offsets. Datetimes without an offset are read as UTC.
+- `search()` with `limit` 2147483647, and `collection_search()` with `offset + limit` above it,
+  failed with `integer out of range`.
+- A plain `pg_dump` restore failed on `collection_geom` (#493).
+
 ## [v0.10.0]
 
 ### Upgrading
@@ -897,6 +917,8 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.10.1]: https://github.com/stac-utils/pgstac/compare/v0.10.0...v0.10.1
+[v0.10.0]: https://github.com/stac-utils/pgstac/compare/v0.9.12...v0.10.0
 [v0.9.12]: https://github.com/stac-utils/pgstac/compare/v0.9.11...v0.9.12
 [v0.9.11]: https://github.com/stac-utils/pgstac/compare/v0.9.10...v0.9.11
 [v0.9.10]: https://github.com/stac-utils/pgstac/compare/v0.9.9...v0.9.10

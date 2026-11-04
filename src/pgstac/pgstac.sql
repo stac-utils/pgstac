@@ -1,4 +1,29 @@
 RESET ROLE;
+
+-- A lost unique id index can't be rebuilt here without blocking writes, so stop first.
+DO $check$
+DECLARE
+    _missing text;
+BEGIN
+    IF to_regclass('pgstac.items') IS NULL THEN
+        RETURN;
+    END IF;
+    SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO _missing
+    FROM pg_class c
+    WHERE c.relkind = 'r' AND c.relispartition
+        AND pg_partition_root(c.oid) = to_regclass('pgstac.items')
+        AND NOT EXISTS (
+            SELECT FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+            WHERE i.indrelid = c.oid AND i.indisunique AND i.indisvalid AND i.indnkeyatts = 1
+                AND i.indpred IS NULL AND i.indexprs IS NULL AND a.attname = 'id'
+        );
+    IF _missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Partitions without a unique id index: %', _missing
+            USING HINT = 'For each, remove any duplicate ids, run CREATE UNIQUE INDEX CONCURRENTLY <partition>_pk ON pgstac.<partition> (id), and migrate again. Drop any invalid index a failed build leaves.';
+    END IF;
+END
+$check$;
 DO $$
 DECLARE
 BEGIN
@@ -181,7 +206,7 @@ RETURNS geometry AS $$
             4326
         )
     FROM box;
-$$ LANGUAGE SQL IMMUTABLE STRICT;
+$$ LANGUAGE SQL IMMUTABLE STRICT SET search_path TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION collection_datetime(content jsonb)
 RETURNS timestamptz AS $$
@@ -212,7 +237,7 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- The keys a content->'a'->'b' chain names, in order, NULL for anything else; a doubled quote
 -- stands for one quote in a key. Read by the conversion below and dropped with it, so it never
 -- joins the schema the diff that follows is calculated against. A path this cannot read becomes
--- NULL, and those rows are named in the NOTICE below before anything is converted.
+-- NULL, and the conversion below stops on those rows.
 CREATE OR REPLACE FUNCTION content_keys(_path text) RETURNS text[] AS $fn$
     SELECT array_agg(replace(m[1], '''''', '''') ORDER BY o)
     FROM regexp_matches(_path, $re$->\s*'((?:[^']|'')*)'$re$, 'g') WITH ORDINALITY AS u(m, o)
@@ -221,8 +246,7 @@ $fn$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 
 -- property_path held the SQL path expression a queryable was read through; it now holds the keys
 -- that expression named. The plain cast the migration makes of the column fails on a legacy value,
--- so convert here, before it runs. A value content_keys cannot read names keys that cannot be
--- recovered and becomes NULL, falling the queryable back to those of its name.
+-- so convert here, before it runs.
 DO $conv$
   DECLARE
     _lost text;
@@ -235,14 +259,13 @@ DO $conv$
         AND attname = 'property_path'
         AND atttypid = 'text'::regtype
     ) THEN
-      -- A value this cannot read becomes NULL, which re-points the queryable at the keys of its
-      -- own name -- a different member of the item. Name those rows rather than losing them
-      -- quietly.
+      -- A value this cannot read would re-point the queryable at the keys of its own name.
       SELECT string_agg(format('%s (%s)', name, property_path), ', ' ORDER BY id) INTO _lost
       FROM queryables
       WHERE property_path IS NOT NULL AND content_keys(property_path) IS NULL;
       IF _lost IS NOT NULL THEN
-        RAISE NOTICE 'property_path could not be read for: %. These queryables now read the keys of their own name.', _lost;
+        RAISE EXCEPTION 'Queryable property_path cannot be converted: %', _lost
+          USING HINT = 'Rewrite each as content->''key'' steps, or set it to NULL to use the queryable''s name.';
       END IF;
       ALTER TABLE queryables ALTER COLUMN property_path TYPE text[] USING content_keys(property_path);
     END IF;
@@ -1413,6 +1436,7 @@ $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 CREATE OR REPLACE FUNCTION canonicalize_queryables() RETURNS VOID AS $$
 DECLARE
     r record;
+    _lost text;
 BEGIN
     -- Nothing here may UPDATE a row before the table is canonical: the constraint trigger fires
     -- on every UPDATE and checks the row against rows the rest of this function has not fixed
@@ -1451,6 +1475,20 @@ BEGIN
                   OR canonical_collection_ids(b.collection_ids) IS NULL
                   OR a.collection_ids && b.collection_ids));
     END LOOP;
+
+    -- Stop if the dedupe left a collection, or every collection, without a queryable it had.
+    SELECT string_agg(DISTINCT format('%s (%s)', s.name, coalesce(c.id, 'all collections')), ', ') INTO _lost
+    FROM _canon_snapshot s
+    LEFT JOIN collections c ON c.id = ANY (s.collection_ids)
+    WHERE (canonical_collection_ids(s.collection_ids) IS NULL OR c.id IS NOT NULL)
+        AND NOT EXISTS (
+            SELECT FROM queryables q
+            WHERE strip_properties_prefix(q.name) = strip_properties_prefix(s.name)
+                AND (canonical_collection_ids(q.collection_ids) IS NULL OR c.id = ANY (q.collection_ids)));
+    IF _lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Merging duplicate queryables would leave collections without a queryable: %', _lost
+            USING HINT = 'Delete or narrow one of each duplicate, or give the listed collections their own row.';
+    END IF;
 
     -- What each SURVIVING ROW inherits, field by field, from the removed rows that actually
     -- conflicted with IT. Keyed per row rather than per name: two rows of one name can survive
@@ -1854,8 +1892,8 @@ WITH p AS (
     FROM i FULL JOIN q ON (i.partition = q.partition AND i.iidx = q.qidx)
     WHERE NOT changes
         OR indexname IS NULL
-        -- An unpaired index is only an orphan if it is not one of the structural ones.
-        OR (qid IS NULL AND NOT EXISTS (
+        -- Never an orphan: a structural index, or a unique index, which is what stops duplicate ids.
+        OR (qid IS NULL AND NOT i.iidx ^@ 'CREATE UNIQUE ' AND NOT EXISTS (
                 SELECT FROM structural
                 WHERE structural.sdx = indexdef_unnamed(i.iidx, 'x')));
 $$ LANGUAGE SQL;
@@ -1917,21 +1955,17 @@ BEGIN
         IF _queryable_idx IS NOT NULL THEN
             EXECUTE _queryable_idx;
         END IF;
-    ELSIF _queryable_id IS NULL AND dropindexes THEN
-        -- The caller's word that this index is unpaired is not taken on trust. This function is
-        -- SECURITY DEFINER and pgstac_ingest can execute it, so a caller that simply passed a
-        -- NULL queryable id could drop any index on any partition -- including the unique id
-        -- index, which is what stops duplicate item ids. Asked of the pairing itself instead.
-        IF NOT EXISTS (
-            SELECT FROM queryable_indexes(_partition, true) qi
-            WHERE qi.indexname = _indexname AND qi.queryable_id IS NULL
-        ) THEN
-            RAISE EXCEPTION '% on % is not an unpaired index', _indexname, _partition
-                USING ERRCODE = 'invalid_parameter_value';
-        END IF;
+    -- Drops only what queryable_indexes reports as an orphan; a NULL _queryable_id is not trusted.
+    ELSIF _queryable_id IS NULL AND dropindexes AND EXISTS (
+        SELECT FROM queryable_indexes(_partition, true) qi
+        WHERE qi.indexname = _indexname AND qi.queryable_id IS NULL
+    ) THEN
         EXECUTE format('DROP INDEX IF EXISTS %I;', _indexname);
     ELSIF rebuildindexes THEN
         EXECUTE format('REINDEX INDEX %I;', _indexname);
+    ELSIF _queryable_id IS NULL AND dropindexes THEN
+        RAISE EXCEPTION '% on % is not an unpaired index', _indexname, _partition
+            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
@@ -4903,7 +4937,8 @@ BEGIN
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
     RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
-    _querylimit := _limit + 1;
+    -- One row past the page shows whether there is another page; clamped so it cannot overflow.
+    _querylimit := least(_limit, 2147483646) + 1;
     IF token IS NOT NULL THEN
         token_prev := token.prev;
         token_item := token.item;
@@ -4970,7 +5005,7 @@ BEGIN
         out_keys := out_keys - -1;
     END IF;
 
-    IF jsonb_array_length(out_records) = _limit + 1 THEN
+    IF jsonb_array_length(out_records) = _querylimit THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;
@@ -5174,8 +5209,9 @@ DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
     number_returned bigint;
-    _limit int := search_limit(_search);
-    _offset int := search_offset(_search);
+    -- bigint so _offset + _limit cannot overflow.
+    _limit bigint := search_limit(_search);
+    _offset bigint := search_offset(_search);
     links jsonb := '[]';
     ret jsonb;
     base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
@@ -5724,4 +5760,4 @@ SELECT sync_partition_stats();
 SET pgstac.use_queue TO TRUE;
 SELECT update_partition_stats_q(partition) FROM partitions_view ORDER BY partition;
 RESET pgstac.use_queue;
-SELECT set_version('0.10.0');
+SELECT set_version('0.10.1');
