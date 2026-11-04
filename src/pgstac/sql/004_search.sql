@@ -1029,7 +1029,8 @@ BEGIN
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
     RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
-    _querylimit := _limit + 1;
+    -- One row past the page shows whether there is another page; clamped so it cannot overflow.
+    _querylimit := least(_limit, 2147483646) + 1;
     IF token IS NOT NULL THEN
         token_prev := token.prev;
         token_item := token.item;
@@ -1096,7 +1097,7 @@ BEGIN
         out_keys := out_keys - -1;
     END IF;
 
-    IF jsonb_array_length(out_records) = _limit + 1 THEN
+    IF jsonb_array_length(out_records) = _querylimit THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;

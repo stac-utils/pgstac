@@ -76,8 +76,9 @@ DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
     number_returned bigint;
-    _limit int := search_limit(_search);
-    _offset int := search_offset(_search);
+    -- bigint so _offset + _limit cannot overflow.
+    _limit bigint := search_limit(_search);
+    _offset bigint := search_offset(_search);
     links jsonb := '[]';
     ret jsonb;
     base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
