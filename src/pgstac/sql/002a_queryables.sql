@@ -284,6 +284,7 @@ $$ LANGUAGE PLPGSQL SET SEARCH_PATH TO pgstac,public;
 CREATE OR REPLACE FUNCTION canonicalize_queryables() RETURNS VOID AS $$
 DECLARE
     r record;
+    _lost text;
 BEGIN
     -- Nothing here may UPDATE a row before the table is canonical: the constraint trigger fires
     -- on every UPDATE and checks the row against rows the rest of this function has not fixed
@@ -322,6 +323,20 @@ BEGIN
                   OR canonical_collection_ids(b.collection_ids) IS NULL
                   OR a.collection_ids && b.collection_ids));
     END LOOP;
+
+    -- Stop if the dedupe left a collection, or every collection, without a queryable it had.
+    SELECT string_agg(DISTINCT format('%s (%s)', s.name, coalesce(c.id, 'all collections')), ', ') INTO _lost
+    FROM _canon_snapshot s
+    LEFT JOIN collections c ON c.id = ANY (s.collection_ids)
+    WHERE (canonical_collection_ids(s.collection_ids) IS NULL OR c.id IS NOT NULL)
+        AND NOT EXISTS (
+            SELECT FROM queryables q
+            WHERE strip_properties_prefix(q.name) = strip_properties_prefix(s.name)
+                AND (canonical_collection_ids(q.collection_ids) IS NULL OR c.id = ANY (q.collection_ids)));
+    IF _lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Merging duplicate queryables would leave collections without a queryable: %', _lost
+            USING HINT = 'Delete or narrow one of each duplicate, or give the listed collections their own row.';
+    END IF;
 
     -- What each SURVIVING ROW inherits, field by field, from the removed rows that actually
     -- conflicted with IT. Keyed per row rather than per name: two rows of one name can survive
