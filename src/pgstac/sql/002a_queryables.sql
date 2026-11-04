@@ -725,8 +725,8 @@ WITH p AS (
     FROM i FULL JOIN q ON (i.partition = q.partition AND i.iidx = q.qidx)
     WHERE NOT changes
         OR indexname IS NULL
-        -- An unpaired index is only an orphan if it is not one of the structural ones.
-        OR (qid IS NULL AND NOT EXISTS (
+        -- Never an orphan: a structural index, or a unique index, which is what stops duplicate ids.
+        OR (qid IS NULL AND NOT i.iidx ^@ 'CREATE UNIQUE ' AND NOT EXISTS (
                 SELECT FROM structural
                 WHERE structural.sdx = indexdef_unnamed(i.iidx, 'x')));
 $$ LANGUAGE SQL;
@@ -788,21 +788,17 @@ BEGIN
         IF _queryable_idx IS NOT NULL THEN
             EXECUTE _queryable_idx;
         END IF;
-    ELSIF _queryable_id IS NULL AND dropindexes THEN
-        -- The caller's word that this index is unpaired is not taken on trust. This function is
-        -- SECURITY DEFINER and pgstac_ingest can execute it, so a caller that simply passed a
-        -- NULL queryable id could drop any index on any partition -- including the unique id
-        -- index, which is what stops duplicate item ids. Asked of the pairing itself instead.
-        IF NOT EXISTS (
-            SELECT FROM queryable_indexes(_partition, true) qi
-            WHERE qi.indexname = _indexname AND qi.queryable_id IS NULL
-        ) THEN
-            RAISE EXCEPTION '% on % is not an unpaired index', _indexname, _partition
-                USING ERRCODE = 'invalid_parameter_value';
-        END IF;
+    -- Drops only what queryable_indexes reports as an orphan; a NULL _queryable_id is not trusted.
+    ELSIF _queryable_id IS NULL AND dropindexes AND EXISTS (
+        SELECT FROM queryable_indexes(_partition, true) qi
+        WHERE qi.indexname = _indexname AND qi.queryable_id IS NULL
+    ) THEN
         EXECUTE format('DROP INDEX IF EXISTS %I;', _indexname);
     ELSIF rebuildindexes THEN
         EXECUTE format('REINDEX INDEX %I;', _indexname);
+    ELSIF _queryable_id IS NULL AND dropindexes THEN
+        RAISE EXCEPTION '% on % is not an unpaired index', _indexname, _partition
+            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 END;
 $$ LANGUAGE PLPGSQL SECURITY DEFINER SET SEARCH_PATH TO pgstac, public;
