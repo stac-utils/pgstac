@@ -13,7 +13,7 @@ updates:
           - "*"
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/docker/pypgstac"
     schedule:
       interval: "weekly"
       day: "monday"
