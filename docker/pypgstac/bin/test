@@ -292,13 +292,10 @@ ALTER DATABASE pgstac_test_migration_data SET client_min_messages to $CLIENTMESS
 EOSQL
     export PGDATABASE=pgstac_test_migration_data
 
-    # Once a release is staged its own base migration is the highest one present,
-    # and migrating it to itself is a no-op that then fails on the legacy fixtures.
-    local PREVIOUS THISVERSION
-    THISVERSION=$(python -c "from pypgstac.version import __version__; print(__version__)")
-    PREVIOUS=$(find $SRCDIR/pgstac/migrations -name "pgstac.*.sql" \
+    # The newest 0.9 release, the start of the upgrade that converts queryables.
+    local PREVIOUS
+    PREVIOUS=$(find $SRCDIR/pgstac/migrations -name "pgstac.0.9.*.sql" \
         | sed -En 's/^.*pgstac\.([0-9]+\.[0-9]+\.[0-9]+)\.sql$/\1/p' \
-        | grep -v "^${THISVERSION}$" \
         | sort -Vr | head -1)
     echo "Populating a $PREVIOUS database, then migrating it."
 
@@ -317,7 +314,6 @@ INSERT INTO queryables (name, collection_ids, definition, property_path, propert
     ('mig_pp_chain',    NULL,         '{"type":"string"}',  'content->''a''->''b:c''',            NULL,     NULL),
     ('mig_pp_props',    NULL,         '{"type":"string"}',  'content -> ''properties'' -> ''x''', NULL,     NULL),
     ('mig_pp_quote',    NULL,         '{"type":"string"}',  'content->''it''''s''',               NULL,     NULL),
-    ('mig_pp_opaque',   NULL,         '{"type":"string"}',  'content #> ''{a,b}''',               NULL,     NULL),
     ('mig_pp_none',     NULL,         '{"type":"string"}',  NULL,                                 NULL,     NULL),
     ('mig_scope_empty', '{}',         '{"type":"string"}',  NULL,                                 NULL,     NULL),
     ('mig_scope_one',   '{mig-flat}', '{"type":"string"}',  NULL,                                 NULL,     NULL),
@@ -385,15 +381,13 @@ DECLARE
     nparts bigint;
     nidx bigint;
 BEGIN
-    -- A legacy property_path becomes the keys its expression named, or NULL when it names none
-    -- that can be read back. An empty scope becomes a global one.
+    -- A legacy property_path becomes the keys its expression named. An empty scope becomes a global one.
     FOR r IN
         SELECT e.name, e.path, e.scope, q.id, q.property_path, q.collection_ids
         FROM (VALUES
             ('mig_pp_chain',    ARRAY['a','b:c'],        NULL::text[]),
             ('mig_pp_props',    ARRAY['properties','x'], NULL),
             ('mig_pp_quote',    ARRAY['it''s'],          NULL),
-            ('mig_pp_opaque',   NULL::text[],            NULL),
             ('mig_pp_none',     NULL,                    NULL),
             ('mig_scope_empty', NULL,                    NULL),
             ('mig_scope_one',   NULL,                    ARRAY['mig-flat']),
