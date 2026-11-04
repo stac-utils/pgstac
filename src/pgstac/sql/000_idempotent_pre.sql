@@ -206,7 +206,7 @@ RETURNS geometry AS $$
             4326
         )
     FROM box;
-$$ LANGUAGE SQL IMMUTABLE STRICT;
+$$ LANGUAGE SQL IMMUTABLE STRICT SET search_path TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION collection_datetime(content jsonb)
 RETURNS timestamptz AS $$

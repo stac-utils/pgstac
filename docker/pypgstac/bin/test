@@ -259,8 +259,16 @@ EOSQL
         FAILED=1
     fi
 
+    # A plain restore clears search_path, which pgstac_restore hides.
+    psql -X -q -v ON_ERROR_STOP=1 -c "CREATE DATABASE pgstac_test_dump_plain;"
+    pg_dump pgstac_test_dump_src | psql -X -q -v ON_ERROR_STOP=1 -d pgstac_test_dump_plain >/dev/null || {
+        echo "***FAIL: a plain pg_dump does not restore***"
+        FAILED=1
+    }
+
     # Cleanup
     rm -f "$DUMPFILE"
+    psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_dump_plain WITH (force);"
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_dump_src WITH (force);"
     psql -X -q -c "DROP DATABASE IF EXISTS pgstac_test_dump_dst WITH (force);"
 
