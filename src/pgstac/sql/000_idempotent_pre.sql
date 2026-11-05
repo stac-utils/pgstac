@@ -1,4 +1,29 @@
 RESET ROLE;
+
+-- A lost unique id index can't be rebuilt here without blocking writes, so stop first.
+DO $check$
+DECLARE
+    _missing text;
+BEGIN
+    IF to_regclass('pgstac.items') IS NULL THEN
+        RETURN;
+    END IF;
+    SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO _missing
+    FROM pg_class c
+    WHERE c.relkind = 'r' AND c.relispartition
+        AND pg_partition_root(c.oid) = to_regclass('pgstac.items')
+        AND NOT EXISTS (
+            SELECT FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+            WHERE i.indrelid = c.oid AND i.indisunique AND i.indisvalid AND i.indnkeyatts = 1
+                AND i.indpred IS NULL AND i.indexprs IS NULL AND a.attname = 'id'
+        );
+    IF _missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Partitions without a unique id index: %', _missing
+            USING HINT = 'For each, remove any duplicate ids, run CREATE UNIQUE INDEX CONCURRENTLY <partition>_pk ON pgstac.<partition> (id), and migrate again. Drop any invalid index a failed build leaves.';
+    END IF;
+END
+$check$;
 DO $$
 DECLARE
 BEGIN
@@ -181,7 +206,7 @@ RETURNS geometry AS $$
             4326
         )
     FROM box;
-$$ LANGUAGE SQL IMMUTABLE STRICT;
+$$ LANGUAGE SQL IMMUTABLE STRICT SET search_path TO pgstac, public;
 
 CREATE OR REPLACE FUNCTION collection_datetime(content jsonb)
 RETURNS timestamptz AS $$
@@ -212,7 +237,7 @@ $$ LANGUAGE SQL IMMUTABLE STRICT;
 -- The keys a content->'a'->'b' chain names, in order, NULL for anything else; a doubled quote
 -- stands for one quote in a key. Read by the conversion below and dropped with it, so it never
 -- joins the schema the diff that follows is calculated against. A path this cannot read becomes
--- NULL, and those rows are named in the NOTICE below before anything is converted.
+-- NULL, and the conversion below stops on those rows.
 CREATE OR REPLACE FUNCTION content_keys(_path text) RETURNS text[] AS $fn$
     SELECT array_agg(replace(m[1], '''''', '''') ORDER BY o)
     FROM regexp_matches(_path, $re$->\s*'((?:[^']|'')*)'$re$, 'g') WITH ORDINALITY AS u(m, o)
@@ -221,8 +246,7 @@ $fn$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 
 -- property_path held the SQL path expression a queryable was read through; it now holds the keys
 -- that expression named. The plain cast the migration makes of the column fails on a legacy value,
--- so convert here, before it runs. A value content_keys cannot read names keys that cannot be
--- recovered and becomes NULL, falling the queryable back to those of its name.
+-- so convert here, before it runs.
 DO $conv$
   DECLARE
     _lost text;
@@ -235,14 +259,13 @@ DO $conv$
         AND attname = 'property_path'
         AND atttypid = 'text'::regtype
     ) THEN
-      -- A value this cannot read becomes NULL, which re-points the queryable at the keys of its
-      -- own name -- a different member of the item. Name those rows rather than losing them
-      -- quietly.
+      -- A value this cannot read would re-point the queryable at the keys of its own name.
       SELECT string_agg(format('%s (%s)', name, property_path), ', ' ORDER BY id) INTO _lost
       FROM queryables
       WHERE property_path IS NOT NULL AND content_keys(property_path) IS NULL;
       IF _lost IS NOT NULL THEN
-        RAISE NOTICE 'property_path could not be read for: %. These queryables now read the keys of their own name.', _lost;
+        RAISE EXCEPTION 'Queryable property_path cannot be converted: %', _lost
+          USING HINT = 'Rewrite each as content->''key'' steps, or set it to NULL to use the queryable''s name.';
       END IF;
       ALTER TABLE queryables ALTER COLUMN property_path TYPE text[] USING content_keys(property_path);
     END IF;

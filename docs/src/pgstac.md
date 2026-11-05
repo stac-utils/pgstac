@@ -267,6 +267,16 @@ ORDER BY idx_scan ASC
 ;
 ```
 
+#### Unique id indexes
+
+Each item partition has a unique index on `id`, which is what stops duplicate item ids. `pypgstac migrate` stops before changing the schema if a partition has lost it, and names the partition. Remove any duplicate ids from that partition, then build the index without blocking writes:
+
+```sql
+CREATE UNIQUE INDEX CONCURRENTLY <partition>_pk ON pgstac.<partition> (id);
+```
+
+If the build fails it leaves an invalid index. Drop that before trying again.
+
 ### Backup and Restore (pg_dump / pg_restore)
 
 PgSTAC databases can be backed up and restored using standard PostgreSQL `pg_dump` and `pg_restore` tools. The custom format (`-Fc`) is recommended for flexibility and compression.
