@@ -420,6 +420,26 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION pgstac.check_int(_value jsonb, _name text)
+ RETURNS integer
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+DECLARE
+    v text := btrim(_value#>>'{}');
+BEGIN
+    IF v IS NULL THEN
+        RETURN NULL;
+    END IF;
+    -- search() reads one row past its limit, so the largest int is out of range.
+    IF v !~ '^\d+$' OR v::numeric >= 2147483647 THEN
+        RAISE EXCEPTION 'Invalid % %: must be a non-negative integer', _name, _value;
+    END IF;
+    RETURN v::int;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION pgstac.collection_search(_search jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -429,9 +449,8 @@ DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
     number_returned bigint;
-    -- bigint so _offset + _limit cannot overflow.
-    _limit bigint := search_limit(_search);
-    _offset bigint := search_offset(_search);
+    _limit int := search_limit(_search);
+    _offset int := search_offset(_search);
     links jsonb := '[]';
     ret jsonb;
     base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
@@ -464,7 +483,7 @@ BEGIN
             );
     END IF;
 
-    IF _limit > 0 AND _offset + _limit < number_matched THEN
+    IF _limit > 0 AND _offset < number_matched - _limit THEN
         nextoffset := _offset + _limit;
         links := links || jsonb_build_object(
                 'rel', 'next',
@@ -599,206 +618,6 @@ WITH p AS (
         OR (qid IS NULL AND NOT i.iidx ^@ 'CREATE UNIQUE ' AND NOT EXISTS (
                 SELECT FROM structural
                 WHERE structural.sdx = indexdef_unnamed(i.iidx, 'x')));
-$function$
-;
-
-CREATE OR REPLACE FUNCTION pgstac.search(_search jsonb DEFAULT '{}'::jsonb)
- RETURNS jsonb
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-    searches searches%ROWTYPE;
-    _where text;
-    orderby text;
-    search_where search_wheres%ROWTYPE;
-    total_count bigint;
-    token record;
-    token_prev boolean;
-    token_item items%ROWTYPE;
-    token_where text;
-    full_where text;
-    init_ts timestamptz := clock_timestamp();
-    timer timestamptz := clock_timestamp();
-    hydrate bool := NOT (_search->'conf'->>'nohydrate' IS NOT NULL AND (_search->'conf'->>'nohydrate')::boolean = true);
-    prev text;
-    next text;
-    collection jsonb;
-    out_records jsonb;
-    -- The (collection, id) of each row in out_records, in the same order. The tokens are
-    -- built from these rather than from the formatted features, which fields.exclude can
-    -- strip of exactly the two members a token needs.
-    out_keys jsonb;
-    out_len int;
-    _limit int := search_limit(_search);
-    _querylimit int;
-    _fields jsonb := coalesce(_search->'fields', '{}'::jsonb);
-    has_prev boolean := FALSE;
-    has_next boolean := FALSE;
-    links jsonb := '[]'::jsonb;
-    base_url text:= concat(rtrim(base_url(_search->'conf'),'/'));
-BEGIN
-    searches := search_query(_search);
-    _where := searches._where;
-    orderby := searches.orderby;
-    search_where := where_stats(_where, false, _search->'conf');
-    total_count := coalesce(search_where.total_count, search_where.estimated_count);
-    RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
-    token := get_token_record(_search->>'token');
-    -- One row past the page shows whether there is another page; clamped so it cannot overflow.
-    _querylimit := least(_limit, 2147483646) + 1;
-    IF token IS NOT NULL THEN
-        token_prev := token.prev;
-        token_item := token.item;
-        token_where := get_token_filter(_search->'sortby', token_item, token_prev, FALSE, to_text_array(_search->'collections'));
-        RAISE DEBUG 'TOKEN_WHERE: % (%ms from search start)', token_where, age_ms(timer);
-        IF token_prev THEN -- if we are using a prev token, we know has_next is true
-            RAISE DEBUG 'There is a previous token, so automatically setting has_next to true';
-            has_next := TRUE;
-            orderby := sort_sqlorderby(_search, TRUE, '{collection,id}', to_text_array(_search->'collections'));
-        ELSE
-            RAISE DEBUG 'There is a next token, so automatically setting has_prev to true';
-            has_prev := TRUE;
-
-        END IF;
-    ELSE -- if there was no token, we know there is no prev
-        RAISE DEBUG 'There is no token, so we know there is no prev. setting has_prev to false';
-        has_prev := FALSE;
-    END IF;
-
-    full_where := concat_ws(' AND ', _where, token_where);
-    RAISE DEBUG 'FULL WHERE CLAUSE: %', full_where;
-    RAISE DEBUG 'Time to get counts and build query %', age_ms(timer);
-    timer := clock_timestamp();
-
-    IF hydrate THEN
-        RAISE DEBUG 'Getting hydrated data.';
-    ELSE
-        RAISE DEBUG 'Getting non-hydrated data.';
-    END IF;
-    RAISE DEBUG 'CACHE SET TO %', get_setting_bool('format_cache');
-    RAISE DEBUG 'Time to set hydration/formatting %', age_ms(timer);
-    timer := clock_timestamp();
-    SELECT
-        jsonb_agg(format_item(i, _fields, hydrate)),
-        jsonb_agg(jsonb_build_array(i.collection, i.id))
-    INTO out_records, out_keys
-    FROM search_rows(
-        full_where,
-        orderby,
-        search_where.partitions,
-        _querylimit
-    ) as i;
-
-    RAISE DEBUG 'Time to fetch rows %', age_ms(timer);
-    timer := clock_timestamp();
-
-
-    IF token_prev THEN
-        out_records := flip_jsonb_array(out_records);
-        out_keys := flip_jsonb_array(out_keys);
-    END IF;
-
-    RAISE DEBUG 'Query returned % records.', jsonb_array_length(out_records);
-    RAISE DEBUG 'TOKEN:   % %', token_item.id, token_item.collection;
-    RAISE DEBUG 'RECORD_1: % %', out_keys->0->>1, out_keys->0->>0;
-    RAISE DEBUG 'RECORD-1: % %', out_keys->-1->>1, out_keys->-1->>0;
-
-    -- REMOVE records that were from our token
-    IF out_keys->0->>0 = token_item.collection AND out_keys->0->>1 = token_item.id THEN
-        out_records := out_records - 0;
-        out_keys := out_keys - 0;
-    ELSIF out_keys->-1->>0 = token_item.collection AND out_keys->-1->>1 = token_item.id THEN
-        out_records := out_records - -1;
-        out_keys := out_keys - -1;
-    END IF;
-
-    IF jsonb_array_length(out_records) = _querylimit THEN
-        IF token_prev THEN
-            has_prev := TRUE;
-            out_records := out_records - 0;
-            out_keys := out_keys - 0;
-        ELSE
-            has_next := TRUE;
-            out_records := out_records - -1;
-            out_keys := out_keys - -1;
-        END IF;
-    END IF;
-    out_len := coalesce(jsonb_array_length(out_records), 0);
-
-    links := links || jsonb_build_object(
-        'rel', 'root',
-        'type', 'application/json',
-        'href', base_url
-    ) || jsonb_build_object(
-        'rel', 'self',
-        'type', 'application/json',
-        'href', concat(base_url, '/search')
-    );
-
-    -- An empty page still anchors on the token that produced it, so the caller has a way back
-    -- instead of a dead end. A link identical to the incoming token is dropped: following it
-    -- would return this same page forever.
-    IF has_next AND out_len > 0 THEN
-        next := page_token(out_keys->-1->>0, out_keys->-1->>1);
-        RAISE DEBUG 'HAS NEXT | %', next;
-        links := links || jsonb_build_object(
-            'rel', 'next',
-            'type', 'application/geo+json',
-            'method', 'GET',
-            'href', concat(base_url, '/search?token=next:', next)
-        );
-    END IF;
-
-    IF has_prev AND (out_len > 0 OR _limit = 0) THEN
-        prev := CASE WHEN out_len > 0
-            THEN page_token(out_keys->0->>0, out_keys->0->>1)
-            ELSE page_token(token_item.collection, token_item.id)
-        END;
-        -- Never hand back the token that produced this page: limit 0 reached by a prev token
-        -- anchored the prev link on that same token, so a client following it never advanced.
-        -- Compared lowered, as get_token_record reads the token, so PREV: cannot reopen the
-        -- loop this guard closes.
-        IF lower(concat('prev:', prev)) IS DISTINCT FROM lower(_search->>'token') THEN
-            RAISE DEBUG 'HAS PREV | %', prev;
-            links := links || jsonb_build_object(
-                'rel', 'prev',
-                'type', 'application/geo+json',
-                'method', 'GET',
-                'href', concat(base_url, '/search?token=prev:', prev)
-            );
-        ELSE
-            prev := NULL;
-        END IF;
-    END IF;
-
-    RAISE DEBUG 'Time to get prev/next %', age_ms(timer);
-    timer := clock_timestamp();
-
-
-    collection := jsonb_build_object(
-        'type', 'FeatureCollection',
-        'features', coalesce(out_records, '[]'::jsonb),
-        'links', links
-    );
-
-
-
-    collection := collection || jsonb_build_object('numberReturned', out_len);
-    IF context(_search->'conf') != 'off' THEN
-        collection := collection || jsonb_strip_nulls(jsonb_build_object('numberMatched', total_count));
-    END IF;
-
-    IF get_setting_bool('timing', _search->'conf') THEN
-        collection = collection || jsonb_build_object('timing', age_ms(init_ts));
-    END IF;
-
-    RAISE DEBUG 'Time to build final json %', age_ms(timer);
-    timer := clock_timestamp();
-
-    RAISE DEBUG 'Total Time: %', age_ms(current_timestamp);
-    RAISE DEBUG 'RETURNING % records. NEXT: %. PREV: %', collection->>'numberReturned', collection->>'next', collection->>'prev';
-    RETURN collection;
-END;
 $function$
 ;
 

@@ -4881,7 +4881,8 @@ BEGIN
     IF v IS NULL THEN
         RETURN NULL;
     END IF;
-    IF v !~ '^\d+$' OR v::numeric > 2147483647 THEN
+    -- search() reads one row past its limit, so the largest int is out of range.
+    IF v !~ '^\d+$' OR v::numeric >= 2147483647 THEN
         RAISE EXCEPTION 'Invalid % %: must be a non-negative integer', _name, _value;
     END IF;
     RETURN v::int;
@@ -4937,8 +4938,7 @@ BEGIN
     total_count := coalesce(search_where.total_count, search_where.estimated_count);
     RAISE DEBUG 'SEARCH:TOKEN: %', _search->>'token';
     token := get_token_record(_search->>'token');
-    -- One row past the page shows whether there is another page; clamped so it cannot overflow.
-    _querylimit := least(_limit, 2147483646) + 1;
+    _querylimit := _limit + 1;
     IF token IS NOT NULL THEN
         token_prev := token.prev;
         token_item := token.item;
@@ -5005,7 +5005,7 @@ BEGIN
         out_keys := out_keys - -1;
     END IF;
 
-    IF jsonb_array_length(out_records) = _querylimit THEN
+    IF jsonb_array_length(out_records) = _limit + 1 THEN
         IF token_prev THEN
             has_prev := TRUE;
             out_records := out_records - 0;
@@ -5209,9 +5209,8 @@ DECLARE
     out_records jsonb;
     number_matched bigint := collection_search_matched(_search);
     number_returned bigint;
-    -- bigint so _offset + _limit cannot overflow.
-    _limit bigint := search_limit(_search);
-    _offset bigint := search_offset(_search);
+    _limit int := search_limit(_search);
+    _offset int := search_offset(_search);
     links jsonb := '[]';
     ret jsonb;
     base_url text:= concat(rtrim(base_url(_search->'conf'),'/'), '/collections');
@@ -5244,7 +5243,7 @@ BEGIN
             );
     END IF;
 
-    IF _limit > 0 AND _offset + _limit < number_matched THEN
+    IF _limit > 0 AND _offset < number_matched - _limit THEN
         nextoffset := _offset + _limit;
         links := links || jsonb_build_object(
                 'rel', 'next',

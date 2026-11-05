@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   when that index's queryable was limited or deleted.
 - The loader picked the wrong partition for a datetime whose UTC offset changed its month or
   year, and could fail on a batch mixing offsets. Datetimes without an offset are read as UTC.
-- `search()` with `limit` 2147483647, and `collection_search()` with `offset + limit` above it,
-  failed with `integer out of range`.
+- `search()` with `limit` 2147483647 failed with `integer out of range`. A `limit` or `offset` of
+  2147483647 now raises the same error as a larger value.
+- `collection_search()` with `offset + limit` above 2147483647 failed with `integer out of range`.
+  It now returns the rows at that offset, if any.
 - A plain `pg_dump` restore failed on `collection_geom` (#493).
 
 ## [v0.10.0]

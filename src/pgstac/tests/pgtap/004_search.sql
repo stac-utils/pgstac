@@ -1715,8 +1715,8 @@ SELECT throws_ok($$ SELECT search('{"limit": -1}') $$, 'P0001', 'Invalid limit -
 SELECT throws_ok($$ SELECT search('{"limit": "ten"}') $$, 'P0001', 'Invalid limit "ten": must be a non-negative integer', 'search: a non-numeric limit raises.');
 SELECT throws_ok($$ SELECT collection_search('{"limit": 1.5}') $$, 'P0001', 'Invalid limit 1.5: must be a non-negative integer', 'collection_search: a non-integer limit raises.');
 SELECT throws_ok($$ SELECT collection_search('{"limit": -1}') $$, 'P0001', 'Invalid limit -1: must be a non-negative integer', 'collection_search: a negative limit raises.');
-SELECT lives_ok($$ SELECT search('{"collections": ["pgstac-test-collection"], "limit": 2147483647}') $$, 'search: the largest integer limit is accepted.');
-SELECT lives_ok($$ SELECT collection_search('{"offset": 2147483647, "limit": 1}') $$, 'collection_search: the largest integer offset is accepted.');
+SELECT throws_ok($$ SELECT search('{"limit": 2147483647}') $$, 'P0001', 'Invalid limit 2147483647: must be a non-negative integer', 'search: a limit too large to page raises.');
+SELECT is(collection_search('{"offset": 2147483646, "limit": 2}')->'collections', '[]'::jsonb, 'collection_search: an offset plus limit past the largest integer returns an empty page.');
 
 SELECT is(
     search('{"collections": ["pgstac-test-collection"], "limit": 0}') - 'links' - 'numberMatched',
