@@ -26,7 +26,7 @@ from typing import (
 import orjson
 import psycopg
 from cachetools.func import lru_cache
-from dateutil.parser import isoparse
+from dateutil.parser import isoparse  # type: ignore[import-untyped]
 from orjson import JSONDecodeError
 from plpygis.geometry import Geometry
 from psycopg import sql
