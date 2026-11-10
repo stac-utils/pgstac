@@ -110,7 +110,7 @@ BEGIN
             );
     END IF;
 
-    IF _limit > 0 AND _offset + _limit < number_matched THEN
+    IF _limit > 0 AND _offset < number_matched - _limit THEN
         nextoffset := _offset + _limit;
         links := links || jsonb_build_object(
                 'rel', 'next',

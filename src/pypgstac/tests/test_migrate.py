@@ -3,7 +3,11 @@
 import re
 from pathlib import Path
 
-from pypgstac.migrate import get_sql, migrations_dir
+import psycopg
+import pytest
+
+from pypgstac.db import PgstacDB
+from pypgstac.migrate import Migrate, get_sql, migrations_dir
 
 
 def _wrapped_files() -> list:
@@ -64,3 +68,66 @@ def test_a_commit_inside_a_body_is_left_alone() -> None:
                 )
                 == inner
             ), name
+
+
+TESTDATA = Path(__file__).parent.parent.parent / "pgstac" / "tests" / "testdata"
+
+
+def _install(db: PgstacDB, version: str) -> None:
+    """Replace the test database's schema with a release and the test collections."""
+    db.connect().execute("DROP SCHEMA pgstac CASCADE;")
+    Migrate(db).run_migration(version)
+    conn = db.connect()
+    conn.execute("RESET ROLE;")
+    for line in (TESTDATA / "collections.ndjson").read_text().splitlines():
+        conn.execute("INSERT INTO pgstac.collections (content) VALUES (%s);", [line])
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        """INSERT INTO pgstac.queryables (name, definition, property_path)
+           VALUES ('unreadable', '{"type":"string"}', 'content #> ''{a,b}''');""",
+        """INSERT INTO pgstac.queryables (name, collection_ids, definition) VALUES
+           ('quality', '{pgstac-test-collection}', '{"type":"string"}'),
+           ('properties.quality', '{pgstac-test-collection,pgstac-test-collection2}',
+            '{"type":"string"}');""",
+        """INSERT INTO pgstac.queryables (name, collection_ids, definition) VALUES
+           ('quality', '{pgstac-test-collection,pgstac-test-collection2}',
+            '{"type":"string"}'),
+           ('properties.quality', NULL, '{"type":"string"}');""",
+    ],
+    ids=["unreadable-path", "lost-collection", "lost-global"],
+)
+def test_upgrade_stops_on_queryables_it_would_change(db: PgstacDB, rows: str) -> None:
+    """An upgrade from 0.9 stops, changing nothing, rather than lose a queryable."""
+    _install(db, "0.9.12")
+    db.connect().execute(rows)
+    with pytest.raises(psycopg.errors.RaiseException):
+        Migrate(db).run_migration()
+    db.connect().rollback()
+    assert db.version == "0.9.12"
+
+
+def test_upgrade_waits_for_a_lost_unique_id_index(db: PgstacDB) -> None:
+    """An upgrade stops until a partition's lost unique id index is rebuilt."""
+    _install(db, "0.10.0")
+    conn = db.connect()
+    item = (TESTDATA / "items.ndjson").read_text().splitlines()[0]
+    conn.execute("INSERT INTO pgstac.items_staging (content) VALUES (%s);", [item])
+    unique = """SELECT i.indexrelid::regclass::text FROM pg_index i
+                JOIN pg_partition_tree('pgstac.items') t ON t.relid = i.indrelid
+                WHERE t.isleaf AND i.indisunique;"""
+    index = db.query_one(unique)
+    conn.execute(f"DROP INDEX {index};")
+    with pytest.raises(psycopg.errors.RaiseException, match="unique id index"):
+        Migrate(db).run_migration()
+    conn.rollback()
+    conn.autocommit = True
+    assert db.version == "0.10.0"
+
+    partition = db.query_one(
+        "SELECT relname FROM pg_class WHERE relname ~ '^_items_' AND relkind = 'r';",
+    )
+    conn.execute(f"CREATE UNIQUE INDEX {index} ON pgstac.{partition} (id);")
+    assert Migrate(db).run_migration() == db.version != "0.10.0"

@@ -973,7 +973,8 @@ BEGIN
     IF v IS NULL THEN
         RETURN NULL;
     END IF;
-    IF v !~ '^\d+$' OR v::numeric > 2147483647 THEN
+    -- search() reads one row past its limit, so the largest int is out of range.
+    IF v !~ '^\d+$' OR v::numeric >= 2147483647 THEN
         RAISE EXCEPTION 'Invalid % %: must be a non-negative integer', _name, _value;
     END IF;
     RETURN v::int;

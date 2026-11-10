@@ -748,8 +748,11 @@ SELECT is_empty(
 -- The indexes items itself carries belong to every partition and are not derived from any
 -- queryables row. Narrowing the id queryable to one collection must not make the unique id
 -- index of every other partition an orphan -- dropping it would admit duplicate item ids.
-SELECT upsert_queryable('id', definition => (SELECT definition FROM queryables WHERE name = 'id'),
-                        collection_ids => '{pgstac-test-collection}');
+-- pgstac-test-uniqueid is outside the collections the id queryable is narrowed to.
+SELECT create_collection('{"id": "pgstac-test-uniqueid", "type": "Collection", "stac_version": "1.0.0", "description": "unique id index", "license": "proprietary", "extent": {"spatial": {"bbox": [[0, 0, 1, 1]]}, "temporal": {"interval": [["2011-01-01T00:00:00Z", null]]}}, "links": []}');
+SELECT create_item('{"id": "pgstac-test-uniqueid-item", "type": "Feature", "stac_version": "1.0.0", "collection": "pgstac-test-uniqueid", "bbox": [0, 0, 1, 1], "links": [], "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]}, "assets": {}, "properties": {"datetime": "2011-06-01T00:00:00Z"}, "stac_extensions": []}');
+SELECT definition AS id_definition FROM queryables WHERE name = 'id' \gset
+SELECT upsert_queryable('id', definition => :'id_definition'::jsonb, collection_ids => '{pgstac-test-collection}');
 SELECT is_empty(
     $$ SELECT * FROM queryable_indexes('items', true); $$,
     'narrowing the id queryable leaves no partition index unpaired'
@@ -761,7 +764,34 @@ SELECT is(
     (SELECT count(*)::int FROM pg_partition_tree('items') WHERE isleaf),
     'every partition still has its unique id index after dropindexes'
 );
-SELECT upsert_queryable('id', definition => (SELECT definition FROM queryables WHERE name = 'id'));
+SELECT lives_ok(
+    $$ SELECT maintain_partitions(dropindexes => true, rebuildindexes => true); $$,
+    'dropindexes with rebuildindexes rebuilds an index it does not drop'
+);
+
+-- Raises after the insert, so a duplicate that gets in is undone.
+CREATE FUNCTION pg_temp.insert_duplicate_id() RETURNS void AS $$
+BEGIN
+    INSERT INTO items SELECT * FROM items WHERE collection = 'pgstac-test-uniqueid';
+    RAISE EXCEPTION 'duplicate id accepted';
+END;
+$$ LANGUAGE PLPGSQL;
+SELECT throws_ok(
+    'SELECT pg_temp.insert_duplicate_id()',
+    '23505',
+    NULL,
+    'a duplicate id is rejected after dropindexes with the id queryable narrowed'
+);
+DELETE FROM queryables WHERE name = 'id';
+SELECT maintain_partitions(dropindexes => true);
+SELECT throws_ok(
+    'SELECT pg_temp.insert_duplicate_id()',
+    '23505',
+    NULL,
+    'a duplicate id is rejected after dropindexes with the id queryable deleted'
+);
+SELECT delete_collection('pgstac-test-uniqueid');
+SELECT upsert_queryable('id', definition => :'id_definition'::jsonb);
 
 -- Two queryables that resolve to the same index -- same keys, same wrapper -- must not produce
 -- byte-identical duplicates, which pair with one another and never read as orphans.
