@@ -19,7 +19,7 @@ RUN \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-client-${PG_MAJOR} \
-        python3 python-is-python3 python3-pip python3-venv \
+        python3 python-is-python3 python3-pip python3-venv libpython3-dev libpq-dev \
         build-essential clang gcc git libssl-dev llvm make pkg-config \
     && python3 -m pip install --ignore-installed --upgrade pip uv wheel setuptools \
     && apt-get remove -y apt-transport-https \
@@ -29,9 +29,16 @@ RUN \
 FROM pyrustbase AS pypgstac
 COPY ./src/pypgstac/pyproject.toml /tmp/pyproject.toml
 WORKDIR /tmp
+# Build psycopg and psycopg2 against the system libpq and OpenSSL rather than the copies bundled
+# in the -binary wheels, so OS updates patch them and image scanners list them. The extras keep [binary].
 RUN \
-    uv pip compile --all-extras /tmp/pyproject.toml >/tmp/requirements.txt \
-    && uv pip install --system -r /tmp/requirements.txt
+    uv pip compile --all-extras /tmp/pyproject.toml \
+       | sed -e 's/^psycopg-binary==/psycopg-c==/' -e 's/^psycopg2-binary==/psycopg2==/' \
+       >/tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt \
+    && python -c "import psycopg, psycopg2; assert psycopg.pq.__impl__ == 'c', psycopg.pq.__impl__" \
+    && uv pip freeze --system >/tmp/freeze.txt \
+    && ! grep -E '^psycopg2?-binary==' /tmp/freeze.txt
 COPY docker/pypgstac/bin /opt/docker/pypgstac/bin
 COPY src/pypgstac /opt/src/pypgstac
 COPY src/pgstac /opt/src/pgstac
