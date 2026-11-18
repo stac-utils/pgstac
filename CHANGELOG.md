@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [UNRELEASED]
+
+### Changed
+- The `pypgstac` Docker image builds psycopg and psycopg2 against the system libpq and OpenSSL instead of installing `psycopg-binary` and `psycopg2-binary`, whose bundled copies OS updates do not patch and image scanners do not fully list. The `psycopg` and `migrations` extras are unchanged.
+
 ## [v0.10.1]
 
 ### Upgrading
