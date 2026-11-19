@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
+## [v0.10.2]
+
+### Fixed
+- Paging with a `next` or `prev` token could not prune partitions or use the id index since 0.10.0; it now reads only the token's collection, by the id index (src/pgstac/sql/004_search.sql).
+
 ## [v0.10.1]
 
 ### Upgrading
@@ -919,6 +924,7 @@ _TODO_
 
 - Fixed issue with pypgstac loads which caused some writes to fail ([#18](https://github.com/stac-utils/pgstac/pull/18))
 
+[v0.10.2]: https://github.com/stac-utils/pgstac/compare/v0.10.1...v0.10.2
 [v0.10.1]: https://github.com/stac-utils/pgstac/compare/v0.10.0...v0.10.1
 [v0.10.0]: https://github.com/stac-utils/pgstac/compare/v0.9.12...v0.10.0
 [v0.9.12]: https://github.com/stac-utils/pgstac/compare/v0.9.11...v0.9.12

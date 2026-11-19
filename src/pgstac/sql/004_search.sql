@@ -414,6 +414,8 @@ $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_token_record(IN _token text, OUT prev BOOLEAN, OUT item items) RETURNS RECORD AS $$
 DECLARE
     _parts text[];
+    _collection text;
+    _id text;
 BEGIN
     RAISE DEBUG 'Looking for token: %', _token;
 
@@ -431,10 +433,12 @@ BEGIN
         RAISE EXCEPTION 'Invalid paging token: %', _token;
     END IF;
     prev := _parts[1] = 'prev';
+    -- Decoded into text variables so the lookup uses the columns' collation and can prune.
+    _collection := convert_from(decode(_parts[2], 'hex'), 'UTF8');
+    _id := convert_from(decode(_parts[3], 'hex'), 'UTF8');
 
     SELECT * INTO item FROM items
-        WHERE collection = convert_from(decode(_parts[2], 'hex'), 'UTF8')
-          AND id = convert_from(decode(_parts[3], 'hex'), 'UTF8');
+        WHERE collection = _collection AND id = _id;
 
     IF item IS NULL THEN
         RAISE EXCEPTION 'Could not find item using token: %', _token;
