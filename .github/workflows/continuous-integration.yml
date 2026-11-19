@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'release_v0.9.*'
+      - 'maint/*'
   pull_request:
 
 env:
@@ -14,9 +15,9 @@ env:
   PIP_BREAK_SYSTEM_PACKAGES: 1
 
 jobs:
-  # This is the 0.9 maintenance line, whose Dockerfiles have diverged from main's.
+  # This is the 0.9/0.10 table-layout maintenance line, whose Dockerfiles have diverged from main's.
   # Base images are always built from the branch under test and tagged "0.9-<branch>":
-  # reading main's tag would test against 0.10 images, writing it would replace them.
+  # reading main's tag would test against main's images, writing it would replace them.
   images:
     runs-on: ubuntu-latest
     outputs:
